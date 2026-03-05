@@ -1,10 +1,12 @@
 {
   "name": "@park-u/source",
   "version": "0.0.0",
+  "main": "apps/mobile/index.js",
   "license": "MIT",
   "scripts": {
-    "android": "expo run:android",
-    "ios": "expo run:ios"
+    "start": "nx start mobile",
+    "android": "nx run-android mobile",
+    "ios": "nx run-ios mobile"
   },
   "private": true,
   "devDependencies": {
