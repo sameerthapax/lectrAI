@@ -9,6 +9,8 @@ out-tsc
 node_modules
 ios
 android
+
+agents.md
 # IDEs and editors
 /.idea
 .project
