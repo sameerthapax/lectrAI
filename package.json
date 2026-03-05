@@ -2,7 +2,10 @@
   "name": "@park-u/source",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {},
+  "scripts": {
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
   "private": true,
   "devDependencies": {
     "@eslint/js": "^9.8.0",
