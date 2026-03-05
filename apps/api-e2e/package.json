@@ -4,7 +4,7 @@
   "private": true,
   "nx": {
     "implicitDependencies": [
-      "@park-u/api"
+      "api"
     ],
     "targets": {
       "e2e": {
@@ -17,8 +17,8 @@
           "passWithNoTests": true
         },
         "dependsOn": [
-          "@park-u/api:build",
-          "@park-u/api:serve"
+          "api:build",
+          "api:serve"
         ]
       }
     }

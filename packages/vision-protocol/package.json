@@ -1,5 +1,5 @@
 {
-  "name": "@parku/shared-types",
+  "name": "@park-u/vision-protocol",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -15,5 +15,7 @@
       "default": "./dist/index.js"
     }
   },
-  "dependencies": {}
+  "dependencies": {
+    "tslib": "^2.3.0"
+  }
 }

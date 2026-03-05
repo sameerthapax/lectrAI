@@ -1,5 +1,5 @@
 {
-  "name": "@park-u/mobile",
+  "name": "mobile",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -35,5 +35,12 @@
     "@nx/detox": "*",
     "@nx/rollup": "*"
   },
-  "devDependencies": {}
+  "devDependencies": {},
+  "nx": {
+    "implicitDependencies": [
+      "shared-types",
+      "shared-utils",
+      "vision-protocol"
+    ]
+  }
 }

@@ -59,9 +59,8 @@
     "vitest": "^4.0.0"
   },
   "workspaces": [
-    "packages/*",
     "apps/*",
-    "libs/*"
+    "packages/*"
   ],
   "dependencies": {
     "@expo/metro-config": "~54.0.9",

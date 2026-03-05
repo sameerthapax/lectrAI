@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "name": "pi-detector",
+  "root": "edge/pi/detector",
+  "targets": {
+    "run": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "python3 edge/pi/detector/main.py"
+      }
+    }
+  }
+}

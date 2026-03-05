@@ -13,7 +13,13 @@
       "path": "./apps/api"
     },
     {
-      "path": "./libs/shared-types"
+      "path": "./packages/shared-types"
+    },
+    {
+      "path": "./packages/shared-utils"
+    },
+    {
+      "path": "./packages/vision-protocol"
     }
   ]
 }

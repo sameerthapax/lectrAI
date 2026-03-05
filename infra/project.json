@@ -1,0 +1,25 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "infra",
+  "root": "infra",
+  "targets": {
+    "fmt": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash -c 'if command -v terraform >/dev/null 2>&1; then terraform -chdir=infra/terraform fmt -recursive; else echo \"terraform not installed; skipped fmt\"; fi'"
+      }
+    },
+    "validate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash -c 'if command -v terraform >/dev/null 2>&1; then terraform -chdir=infra/terraform/environments/dev init -backend=false >/dev/null && terraform -chdir=infra/terraform/environments/dev validate; else echo \"terraform not installed; skipped validate\"; fi'"
+      }
+    },
+    "plan": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash -c 'if command -v terraform >/dev/null 2>&1; then terraform -chdir=infra/terraform/environments/dev plan -input=false; else echo \"terraform not installed; skipped plan\"; fi'"
+      }
+    }
+  }
+}

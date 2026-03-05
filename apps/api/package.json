@@ -1,5 +1,5 @@
 {
-  "name": "@park-u/api",
+  "name": "api",
   "version": "0.0.1",
   "private": true,
   "nx": {
@@ -83,19 +83,24 @@
           "build"
         ],
         "options": {
-          "buildTarget": "@park-u/api:build",
+          "buildTarget": "api:build",
           "runBuildTargetDependencies": false
         },
         "configurations": {
           "development": {
-            "buildTarget": "@park-u/api:build:development"
+            "buildTarget": "api:build:development"
           },
           "production": {
-            "buildTarget": "@park-u/api:build:production"
+            "buildTarget": "api:build:production"
           }
         }
       }
-    }
+    },
+    "implicitDependencies": [
+      "shared-types",
+      "shared-utils",
+      "vision-protocol"
+    ]
   },
   "dependencies": {
     "express": "^4.21.2"

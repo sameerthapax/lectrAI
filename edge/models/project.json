@@ -1,0 +1,13 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "edge-models",
+  "root": "edge/models",
+  "targets": {
+    "list": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "ls -1 edge/models/yolo"
+      }
+    }
+  }
+}
