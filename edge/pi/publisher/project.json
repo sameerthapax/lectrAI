@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "name": "pi-publisher",
+  "root": "edge/pi/publisher",
+  "targets": {
+    "run": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "python3 edge/pi/publisher/main.py"
+      }
+    }
+  }
+}
