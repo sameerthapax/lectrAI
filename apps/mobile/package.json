@@ -3,7 +3,9 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "eas-build-post-install": "cd ../../ && node tools/scripts/eas-build-post-install.mjs . apps/mobile"
+    "eas-build-post-install": "cd ../../ && node tools/scripts/eas-build-post-install.mjs . apps/mobile",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@expo/metro-config": "*",
@@ -19,6 +21,19 @@
     "react-native": "*",
     "react-native-svg": "*",
     "react-native-svg-transformer": "*",
-    "react-native-web": "*"
-  }
+    "react-native-web": "*",
+    "@nx/eslint-plugin": "*",
+    "@nx/devkit": "*",
+    "@nx/eslint": "*",
+    "@nx/js": "*",
+    "@nx/react": "*",
+    "enhanced-resolve": "*",
+    "picocolors": "*",
+    "semver": "*",
+    "tsconfig-paths": "*",
+    "tslib": "*",
+    "@nx/detox": "*",
+    "@nx/rollup": "*"
+  },
+  "devDependencies": {}
 }
