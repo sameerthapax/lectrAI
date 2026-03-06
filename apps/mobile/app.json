@@ -7,10 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "parku",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
-    "experiments": {
-      "reactCompiler": true
-    },
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sameerthapa.parkumobile"

@@ -67,22 +67,7 @@
     "apps/*",
     "packages/*"
   ],
-  "dependencies": {
-    "@expo/metro-config": "~54.0.9",
-    "@expo/metro-runtime": "~6.1.2",
-    "axios": "^1.6.0",
-    "expo": "~54.0.0",
-    "expo-splash-screen": "~31.0.11",
-    "expo-status-bar": "~3.0.8",
-    "expo-system-ui": "~6.0.8",
-    "express": "^4.21.2",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "react-native": "0.81.5",
-    "react-native-svg": "15.12.1",
-    "react-native-svg-transformer": "~1.5.1",
-    "react-native-web": "~0.21.0"
-  },
+  "dependencies": {},
   "overrides": {
     "react": "19.1.0",
     "react-dom": "19.1.0",

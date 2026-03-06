@@ -8,7 +8,9 @@
     "moduleResolution": "bundler",
     "noUnusedLocals": false
   },
-  "files": ["src/test-setup.ts"],
+  "files": [
+    "test-setup.ts"
+  ],
   "include": [
     "jest.config.ts",
     "jest.config.cts",
