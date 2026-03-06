@@ -3,7 +3,7 @@
   "compilerOptions": {
     "outDir": "dist",
     "types": ["node"],
-    "rootDir": "src",
+    "rootDir": "./",
     "jsx": "react-jsx",
     "module": "esnext",
     "moduleResolution": "bundler",

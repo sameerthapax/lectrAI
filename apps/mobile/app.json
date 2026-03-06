@@ -6,6 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "parku",
+    "extra": {
+      "router": {
+        "origin": false
+      }
+    },
     "userInterfaceStyle": "automatic",
     "newArchEnabled": false,
     "ios": {
@@ -33,7 +38,9 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-router",
+      "expo-image"
     ]
   }
 }
