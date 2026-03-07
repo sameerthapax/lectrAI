@@ -153,7 +153,7 @@ jobs:
 
       - name: Terraform plan
         if: ${{ github.event_name == 'pull_request' }}
-        id: tf-plan
+        id: tf_plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
@@ -167,22 +167,25 @@ jobs:
           set -e
 
           if [[ "$PLAN_EXIT_CODE" == "0" ]]; then
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "has_diff=false" >> "$GITHUB_OUTPUT"
           elif [[ "$PLAN_EXIT_CODE" == "2" ]]; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            # Terraform detailed exit code 2 means the plan has at least one action:
+            # add, change, and/or destroy.
+            echo "has_diff=true" >> "$GITHUB_OUTPUT"
           else
             echo "Terraform plan failed with exit code $PLAN_EXIT_CODE"
             exit "$PLAN_EXIT_CODE"
           fi
+          echo "Terraform has_diff=$(cat "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2)"
 
       - name: Terraform apply
-        if: ${{ github.event_name == 'pull_request' && steps.tf-plan.outputs.has_changes == 'true' }}
+        if: ${{ github.event_name == 'pull_request' && steps.tf_plan.outputs.has_diff == 'true' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
         run: terraform apply -auto-approve -input=false tfplan
 
-      - name: Terraform apply skipped (no changes)
-        if: ${{ github.event_name == 'pull_request' && steps.tf-plan.outputs.has_changes == 'false' }}
-        run: echo "Terraform plan has no changes. Skipping apply."
+      - name: Terraform apply skipped (no diff)
+        if: ${{ github.event_name == 'pull_request' && steps.tf_plan.outputs.has_diff == 'false' }}
+        run: echo "Terraform plan has no add/change/destroy actions. Skipping apply."

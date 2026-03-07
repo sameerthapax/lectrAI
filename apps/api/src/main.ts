@@ -9,7 +9,6 @@ const app = express();
 app.get('/', (req, res) => {
   res.send({ message: 'Hello API' });
 });
-//change
 async function bootstrap() {
   const db = getDb();
   const firestoreConfig = getFirestoreConfig();
