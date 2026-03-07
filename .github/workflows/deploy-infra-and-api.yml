@@ -15,7 +15,7 @@ permissions:
 
 env:
   AR_REGION: us-central1
-  AR_REPOSITORY: parku
+  AR_REPOSITORY: park-u
   API_IMAGE_NAME: api
   TF_WORKING_DIR: infra/terraform/environments/dev
 
