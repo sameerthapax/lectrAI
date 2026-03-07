@@ -2,7 +2,6 @@ FROM node:20-bookworm-slim
 
 WORKDIR /workspace
 
-ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3000
 
@@ -14,6 +13,8 @@ COPY tools ./tools
 
 RUN npm ci
 RUN npx nx run api:build:production
+
+ENV NODE_ENV=production
 
 EXPOSE 3000
 
