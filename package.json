@@ -68,6 +68,7 @@
     "packages/*"
   ],
   "dependencies": {
-    "expo": "^55.0.5"
+    "expo": "^55.0.5",
+    "firebase-admin": "^13.7.0"
   }
 }

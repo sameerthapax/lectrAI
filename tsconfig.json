@@ -16,6 +16,9 @@
       "path": "./packages/shared-types"
     },
     {
+      "path": "./packages/db"
+    },
+    {
       "path": "./packages/shared-utils"
     },
     {
