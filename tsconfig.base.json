@@ -19,6 +19,7 @@
     "customConditions": ["@park-u/source"],
     "baseUrl": ".",
     "paths": {
+      "@park-u/db": ["packages/db/src/index.ts"],
       "@park-u/shared-types": ["packages/shared-types/src/index.ts"],
       "@park-u/shared-utils": ["packages/shared-utils/src/index.ts"],
       "@park-u/vision-protocol": ["packages/vision-protocol/src/index.ts"]
