@@ -1,5 +1,3 @@
-/// <reference types="jest" />
-/// <reference types="node" />
 module.exports = {
   displayName: '@park-u/mobile',
   preset: 'jest-expo',
