@@ -133,39 +133,56 @@ jobs:
             ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:develop
 
       - name: Setup Terraform
-        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        if: ${{ github.event_name == 'pull_request' }}
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform init
-        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        if: ${{ github.event_name == 'pull_request' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -input=false
 
+      - name: Terraform fmt (check)
+        if: ${{ github.event_name == 'pull_request' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive
+
       - name: Terraform validate
-        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        if: ${{ github.event_name == 'pull_request' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
-      - name: Terraform plan for PR
-        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.infra_affected == 'true' }}
+      - name: Terraform plan
+        if: ${{ github.event_name == 'pull_request' }}
+        id: tf-plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
-        run: terraform plan -input=false
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          terraform plan -input=false -detailed-exitcode -out=tfplan
+          PLAN_EXIT_CODE=$?
+          set -e
 
-      - name: Terraform plan for PR to develop (temporary)
-        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.infra_affected == 'true' }}
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        env:
-          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
-          TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
-        run: terraform plan -input=false
+          if [[ "$PLAN_EXIT_CODE" == "0" ]]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$PLAN_EXIT_CODE" == "2" ]]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Terraform plan failed with exit code $PLAN_EXIT_CODE"
+            exit "$PLAN_EXIT_CODE"
+          fi
 
-      - name: Terraform apply on PR to develop (temporary)
-        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.infra_affected == 'true' }}
+      - name: Terraform apply
+        if: ${{ github.event_name == 'pull_request' && steps.tf-plan.outputs.has_changes == 'true' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
-        run: terraform apply -auto-approve -input=false
+        run: terraform apply -auto-approve -input=false tfplan
+
+      - name: Terraform apply skipped (no changes)
+        if: ${{ github.event_name == 'pull_request' && steps.tf-plan.outputs.has_changes == 'false' }}
+        run: echo "Terraform plan has no changes. Skipping apply."
