@@ -1,0 +1,139 @@
+name: Deploy Infra and API
+
+on:
+  pull_request:
+    branches:
+      - develop
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AR_REGION: us-central1
+  AR_REPOSITORY: parku
+  API_IMAGE_NAME: api
+  TF_WORKING_DIR: infra/terraform/environments/dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set Nx base/head
+        uses: nrwl/nx-set-shas@v4
+
+      - name: Compute affected projects
+        id: affected
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AFFECTED_JSON=$(npx nx show projects --affected --base="$NX_BASE" --head="$NX_HEAD" --json)
+          echo "Affected projects: $AFFECTED_JSON"
+
+          API_AFFECTED=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.includes("api") ? "true" : "false")' "$AFFECTED_JSON")
+          INFRA_AFFECTED=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.includes("infra") ? "true" : "false")' "$AFFECTED_JSON")
+
+          echo "api_affected=$API_AFFECTED" >> "$GITHUB_OUTPUT"
+          echo "infra_affected=$INFRA_AFFECTED" >> "$GITHUB_OUTPUT"
+
+      - name: Show skipped deployment reason
+        if: ${{ steps.affected.outputs.api_affected != 'true' && steps.affected.outputs.infra_affected != 'true' }}
+        run: echo "Neither api nor infra is affected. Skipping deploy tasks."
+
+      - name: Authenticate to Google Cloud
+        if: ${{ steps.affected.outputs.api_affected == 'true' || steps.affected.outputs.infra_affected == 'true' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        if: ${{ steps.affected.outputs.api_affected == 'true' || steps.affected.outputs.infra_affected == 'true' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        if: ${{ steps.affected.outputs.api_affected == 'true' }}
+        run: gcloud auth configure-docker "${{ env.AR_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Setup Docker Buildx
+        if: ${{ steps.affected.outputs.api_affected == 'true' }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image for PR validation
+        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.api_affected == 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: false
+          tags: |
+            ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Build and push API image on develop
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.api_affected == 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:develop
+
+      - name: Setup Terraform
+        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      - name: Terraform plan for PR
+        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.infra_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+        run: terraform plan -input=false
+
+      - name: Terraform plan for develop
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.infra_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+        run: terraform plan -input=false
+
+      - name: Terraform apply on develop
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.infra_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+        run: terraform apply -auto-approve -input=false

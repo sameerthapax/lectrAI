@@ -1,5 +1,5 @@
 import express from 'express';
-import { db, firestoreConfig } from '@park-u/db';
+import { getDb, getFirestoreConfig } from '@park-u/db';
 
 const host = process.env.HOST ?? 'localhost';
 const port = process.env.PORT ? Number(process.env.PORT) : 3000;
@@ -11,6 +11,9 @@ app.get('/', (req, res) => {
 });
 
 async function bootstrap() {
+  const db = getDb();
+  const firestoreConfig = getFirestoreConfig();
+
   try {
     const lotsSnapshot = await db.collection('lots').limit(1).get();
     console.log(
@@ -27,7 +30,7 @@ async function bootstrap() {
     );
     if (grpcCode === 5) {
       console.error(
-        '[ db ] gRPC NOT_FOUND usually means wrong FIREBASE project_id or missing Firestore database. Check Firebase Console > Firestore Database and verify FIRESTORE_DATABASE_ID.'
+        '[ db ] gRPC NOT_FOUND usually means wrong GCP project identity or missing Firestore database. Check Firebase Console > Firestore Database and verify FIRESTORE_DATABASE_ID.'
       );
     }
     process.exit(1);

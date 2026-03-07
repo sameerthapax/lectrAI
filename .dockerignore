@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.nx
+.vscode
+node_modules
+coverage
+tmp
+out-tsc
+**/.DS_Store
+**/dist
+apps/mobile/.expo
+infra/terraform/**/.terraform
+infra/terraform/**/*.tfstate*

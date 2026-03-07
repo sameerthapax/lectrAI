@@ -1,23 +1,38 @@
 # db
 
-Shared Firestore environment/config utilities for this Nx monorepo.
+Shared Firebase Admin / Firestore access for this Nx monorepo.
 
 ## Targets
 
 Because this package follows the same Nx layout as other `packages/*` libs,
 Nx manages it with inferred targets (`build`, `lint`, `typecheck`).
 
+## Runtime Model
+
+- Uses lazy singleton initialization (`getFirebaseAdminApp`, `getDb`).
+- Uses Application Default Credentials (ADC) by default.
+- Designed for Cloud Run with attached IAM service account.
+- Does not require Firebase private key env vars.
+
 ## Environment Variables
 
-Use one of these patterns for server-side Firestore auth:
+- `FIRESTORE_DATABASE_ID` (optional, defaults to `(default)`)
+- `GOOGLE_APPLICATION_CREDENTIALS` (optional for local key-file based ADC)
+- `GOOGLE_CLOUD_PROJECT`/`GCLOUD_PROJECT` (optional, improves diagnostics)
 
-1. `FIREBASE_SERVICE_ACCOUNT_PATH` (local file path, e.g. `secrets/service_account.json`)
-2. `FIREBASE_SERVICE_ACCOUNT_JSON` (full JSON as a single secret)
-3. Split fields:
-   - `FIREBASE_PROJECT_ID`
-   - `FIREBASE_CLIENT_EMAIL`
-   - `FIREBASE_PRIVATE_KEY`
+For local dev, ADC is recommended:
 
-`FIREBASE_PRIVATE_KEY` may include escaped newlines (`\\n`); the helper normalizes them.
+```bash
+gcloud auth application-default login
+```
 
-Do not expose these values in mobile client bundles.
+## Usage
+
+```ts
+import { getDb, getFirestoreConfig } from '@park-u/db';
+
+const db = getDb();
+const cfg = getFirestoreConfig();
+```
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for details.
