@@ -102,18 +102,14 @@ jobs:
         if: ${{ steps.affected.outputs.api_affected == 'true' }}
         uses: docker/setup-buildx-action@v3
 
-      - name: Ensure Artifact Registry repository exists
+      - name: Verify Artifact Registry repository exists
         if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.api_affected == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
-          if ! gcloud artifacts repositories describe "${{ env.AR_REPOSITORY }}" --location="${{ env.AR_REGION }}" --project="${{ secrets.GCP_PROJECT_ID }}" >/dev/null 2>&1; then
-            gcloud artifacts repositories create "${{ env.AR_REPOSITORY }}" \
-              --repository-format=docker \
-              --location="${{ env.AR_REGION }}" \
-              --project="${{ secrets.GCP_PROJECT_ID }}" \
-              --description="ParkU Docker images"
-          fi
+          gcloud artifacts repositories describe "${{ env.AR_REPOSITORY }}" \
+            --location="${{ env.AR_REGION }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" >/dev/null
 
       - name: Build API image for PR validation
         if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.api_affected == 'true' }}
