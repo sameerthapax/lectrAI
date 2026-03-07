@@ -1,0 +1,8 @@
+project_id                     = "your-gcp-project-id"
+region                         = "us-central1"
+environment                    = "prod"
+cloud_run_service_name         = "parku-worker-prod"
+cloud_run_image                = "us-central1-docker.pkg.dev/your-gcp-project-id/parku/worker:latest"
+cloud_run_deletion_protection  = true
+pubsub_topic_name              = "parku-events-prod"
+pubsub_subscription_name       = "parku-events-worker-prod"

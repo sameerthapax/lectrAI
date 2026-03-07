@@ -82,3 +82,7 @@ variable "secret_environment_variables" {
   description = "Secret Manager-backed environment variables"
   default     = []
 }
+variable "deletion_protection" {
+  type    = bool
+  default = false
+}
