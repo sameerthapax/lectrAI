@@ -15,7 +15,7 @@ permissions:
 
 env:
   AR_REGION: us-central1
-  AR_REPOSITORY: park-u
+  AR_REPOSITORY: parku
   API_IMAGE_NAME: api
   TF_WORKING_DIR: infra/terraform/environments/dev
 
@@ -102,6 +102,19 @@ jobs:
         if: ${{ steps.affected.outputs.api_affected == 'true' }}
         uses: docker/setup-buildx-action@v3
 
+      - name: Ensure Artifact Registry repository exists
+        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.api_affected == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gcloud artifacts repositories describe "${{ env.AR_REPOSITORY }}" --location="${{ env.AR_REGION }}" --project="${{ secrets.GCP_PROJECT_ID }}" >/dev/null 2>&1; then
+            gcloud artifacts repositories create "${{ env.AR_REPOSITORY }}" \
+              --repository-format=docker \
+              --location="${{ env.AR_REGION }}" \
+              --project="${{ secrets.GCP_PROJECT_ID }}" \
+              --description="ParkU Docker images"
+          fi
+
       - name: Build API image for PR validation
         if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.api_affected == 'true' }}
         uses: docker/build-push-action@v6
@@ -112,8 +125,8 @@ jobs:
           tags: |
             ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
 
-      - name: Build and push API image on develop
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.api_affected == 'true' }}
+      - name: Build and push API image on PR to develop (temporary)
+        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.api_affected == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -145,16 +158,16 @@ jobs:
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
         run: terraform plan -input=false
 
-      - name: Terraform plan for develop
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.infra_affected == 'true' }}
+      - name: Terraform plan for PR to develop (temporary)
+        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.infra_affected == 'true' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
         run: terraform plan -input=false
 
-      - name: Terraform apply on develop
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.infra_affected == 'true' }}
+      - name: Terraform apply on PR to develop (temporary)
+        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.infra_affected == 'true' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
