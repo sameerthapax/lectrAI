@@ -6,11 +6,13 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "parku",
-    "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
-    "experiments": {
-      "reactCompiler": true
+    "extra": {
+      "router": {
+        "origin": false
+      }
     },
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sameerthapa.parkumobile"
@@ -36,7 +38,9 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-router",
+      "expo-image"
     ]
   }
 }
