@@ -18,7 +18,6 @@ variable "environment" {
 variable "cloud_run_service_name" {
   type        = string
   description = "Cloud Run service name"
-  default     = "parku-worker-dev"
 }
 
 variable "cloud_run_image" {
@@ -29,13 +28,11 @@ variable "cloud_run_image" {
 variable "pubsub_topic_name" {
   type        = string
   description = "Pub/Sub topic name"
-  default     = "parku-events-dev"
 }
 
 variable "pubsub_subscription_name" {
   type        = string
   description = "Pub/Sub subscription name"
-  default     = "parku-events-worker-dev"
 }
 
 variable "cloud_run_deletion_protection" {
