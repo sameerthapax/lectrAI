@@ -4,9 +4,6 @@ on:
   pull_request:
     branches:
       - develop
-  push:
-    branches:
-      - develop
   workflow_dispatch:
 
 permissions:
@@ -15,12 +12,13 @@ permissions:
 
 env:
   AR_REGION: us-central1
-  AR_REPOSITORY: park-u
+  AR_REPOSITORY: parku
   API_IMAGE_NAME: api
   TF_WORKING_DIR: infra/terraform/environments/dev
 
 jobs:
   deploy:
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'develop' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -50,7 +48,6 @@ jobs:
             BASE_SHA="${{ github.event.before }}"
             HEAD_SHA="${{ github.sha }}"
 
-            # Fallback for first push on a branch where "before" is all zeros.
             if [[ "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
               BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
             fi
@@ -58,7 +55,6 @@ jobs:
 
           echo "NX_BASE=$BASE_SHA" >> "$GITHUB_ENV"
           echo "NX_HEAD=$HEAD_SHA" >> "$GITHUB_ENV"
-          echo "Using NX_BASE=$BASE_SHA NX_HEAD=$HEAD_SHA"
 
       - name: Compute affected projects
         id: affected
@@ -112,8 +108,8 @@ jobs:
           tags: |
             ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
 
-      - name: Build and push API image on develop
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.api_affected == 'true' }}
+      - name: Build and push API image on PR to develop (temporary)
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'develop' && steps.affected.outputs.api_affected == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -124,39 +120,68 @@ jobs:
             ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:develop
 
       - name: Setup Terraform
-        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
 
       - name: Terraform init
-        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -input=false
 
+      - name: Terraform fmt (check)
+        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.infra_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive
+
       - name: Terraform validate
-        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
-      - name: Terraform plan for PR
-        if: ${{ github.event_name == 'pull_request' && steps.affected.outputs.infra_affected == 'true' }}
+      - name: Terraform plan
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
+        id: tf_plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_region: us-central1
+          TF_VAR_environment: dev
+          TF_VAR_cloud_run_service_name: parku-api-dev
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
-        run: terraform plan -input=false
+          TF_VAR_pubsub_topic_name: parku-events-dev
+          TF_VAR_pubsub_subscription_name: parku-events-worker-dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          terraform plan -input=false -detailed-exitcode -out=tfplan
+          PLAN_EXIT_CODE=$?
+          set -e
 
-      - name: Terraform plan for develop
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.infra_affected == 'true' }}
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        env:
-          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
-          TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
-        run: terraform plan -input=false
+          if [[ "$PLAN_EXIT_CODE" == "0" ]]; then
+            echo "has_diff=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$PLAN_EXIT_CODE" == "2" ]]; then
+            echo "has_diff=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Terraform plan failed with exit code $PLAN_EXIT_CODE"
+            exit "$PLAN_EXIT_CODE"
+          fi
 
-      - name: Terraform apply on develop
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.infra_affected == 'true' }}
+      - name: Terraform apply on PR to develop (temporary)
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'develop' && steps.tf_plan.outputs.has_diff == 'true' && (steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true') }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_region: us-central1
+          TF_VAR_environment: dev
+          TF_VAR_cloud_run_service_name: parku-api-dev
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
-        run: terraform apply -auto-approve -input=false
+          TF_VAR_pubsub_topic_name: parku-events-dev
+          TF_VAR_pubsub_subscription_name: parku-events-worker-dev
+        run: terraform apply -auto-approve -input=false tfplan
+
+      - name: Terraform apply skipped
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'develop' && steps.tf_plan.outputs.has_diff == 'false' }}
+        run: echo "Terraform plan has no add/change/destroy actions. Skipping apply."

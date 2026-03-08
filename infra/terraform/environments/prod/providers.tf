@@ -1,11 +1,6 @@
 terraform {
   required_version = ">= 1.6.0"
 
-  backend "gcs" {
-    bucket = "park-u-terraform-state"
-    prefix = "envs/dev"
-  }
-
   required_providers {
     google = {
       source  = "hashicorp/google"

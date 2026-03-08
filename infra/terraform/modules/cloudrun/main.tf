@@ -1,14 +1,20 @@
+locals {
+  runtime_service_account_id = substr(replace(lower("${var.service_name}-sa"), "/[^a-z0-9-]/", "-"), 0, 30)
+  invoker_members            = var.allow_unauthenticated ? concat(var.invoker_members, ["allUsers"]) : var.invoker_members
+}
+
 resource "google_service_account" "runtime" {
   project      = var.project_id
-  account_id   = "${var.service_name}-sa"
-  display_name = "Cloud Run runtime SA for ${var.service_name}"
+  account_id   = trimsuffix(local.runtime_service_account_id, "-")
+  display_name = "${var.service_name} runtime"
 }
 
 resource "google_cloud_run_v2_service" "service" {
-  project  = var.project_id
-  location = var.region
-  name     = var.service_name
-  ingress  = var.ingress
+  project             = var.project_id
+  location            = var.region
+  name                = var.service_name
+  ingress             = var.ingress
+  deletion_protection = var.deletion_protection
 
   template {
     service_account = google_service_account.runtime.email
@@ -56,17 +62,8 @@ resource "google_cloud_run_v2_service" "service" {
   }
 }
 
-resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
-  count    = var.allow_unauthenticated ? 1 : 0
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.service.name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
-resource "google_cloud_run_v2_service_iam_member" "additional_invokers" {
-  for_each = toset(var.invoker_members)
+resource "google_cloud_run_v2_service_iam_member" "invoker" {
+  for_each = toset(local.invoker_members)
 
   project  = var.project_id
   location = var.region
