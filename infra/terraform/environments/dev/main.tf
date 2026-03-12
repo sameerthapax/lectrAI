@@ -27,8 +27,8 @@ module "cloudrun" {
   allow_unauthenticated = false
 
   environment_variables = {
-    NODE_ENV             = var.environment
-    GOOGLE_CLOUD_PROJECT = var.google_cloud_project
+    NODE_ENV              = var.environment
+    GOOGLE_CLOUD_PROJECT  = var.google_cloud_project
     FIRESTORE_DATABASE_ID = var.firestore_database_id
   }
 
