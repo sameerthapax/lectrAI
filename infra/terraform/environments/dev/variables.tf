@@ -46,7 +46,24 @@ variable "google_cloud_project" {
   description = "GOOGLE_CLOUD_PROJECT value exposed to the Cloud Run container"
 }
 
-variable "firestore_database_id" {
+variable "supabase_url" {
   type        = string
-  description = "FIRESTORE_DATABASE_ID value exposed to the Cloud Run container"
+  description = "SUPABASE_URL value exposed to the Cloud Run container"
+}
+
+variable "supabase_anon_key" {
+  type        = string
+  description = "SUPABASE_ANON_KEY value exposed to the Cloud Run container"
+}
+
+variable "supabase_service_role_key" {
+  type        = string
+  description = "SUPABASE_SERVICE_ROLE_KEY value exposed to the Cloud Run container"
+  sensitive   = true
+}
+
+variable "database_url" {
+  type        = string
+  description = "DATABASE_URL value exposed to the Cloud Run container"
+  sensitive   = true
 }

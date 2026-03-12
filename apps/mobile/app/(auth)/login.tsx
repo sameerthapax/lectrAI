@@ -3,9 +3,10 @@ import { useState } from 'react';
 import { Alert } from 'react-native';
 
 import { AuthScreen } from '../../components/auth/auth-screen';
-import { signInWithEmailAndPassword, signInWithGoogle } from '../../services/auth-api';
+import { useAuth } from '../../providers/auth-provider';
 
 export default function LoginRoute() {
+  const auth = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,7 +21,7 @@ export default function LoginRoute() {
     try {
       setLoading(true);
       setError(null);
-      await signInWithEmailAndPassword(email.trim(), password);
+      await auth.signIn(email.trim(), password);
       Alert.alert('Signed in', 'Your account has been signed in successfully.');
       router.replace('/(tabs)/home');
     } catch (submissionError) {
@@ -34,35 +35,25 @@ export default function LoginRoute() {
     }
   };
 
-  const onGooglePress = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      await signInWithGoogle();
-    } catch (googleError) {
-      setError(
-        googleError instanceof Error
-          ? googleError.message
-          : 'Google sign-in is currently unavailable.'
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <AuthScreen
       mode="login"
       email={email}
       password={password}
       confirmPassword=""
+      fullName=""
+      universityName=""
+      major=""
+      timezone=""
       loading={loading}
       error={error}
       onEmailChange={setEmail}
       onPasswordChange={setPassword}
+      onFullNameChange={undefined}
+      onUniversityNameChange={undefined}
+      onMajorChange={undefined}
+      onTimezoneChange={undefined}
       onSubmit={onSubmit}
-      onGooglePress={onGooglePress}
-      onBypassPress={() => router.replace('/(tabs)/home')}
     />
   );
 }

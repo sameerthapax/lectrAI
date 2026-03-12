@@ -1,0 +1,11 @@
+{
+  "targets": {
+    "start-clear": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "expo start -c",
+        "cwd": "apps/mobile"
+      }
+    }
+  }
+}

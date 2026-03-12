@@ -69,7 +69,9 @@
     "packages/*"
   ],
   "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
     "expo": "^55.0.5",
-    "firebase-admin": "^13.7.0"
+    "expo-secure-store": "~55.0.8",
+    "postgres": "^3.4.7"
   }
 }

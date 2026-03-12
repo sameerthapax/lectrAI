@@ -1,9 +1,38 @@
-export type AuthResult = {
-  token: string;
-  user: {
-    id: string;
-    email: string;
-  };
+export type AuthSession = {
+  accessToken: string;
+  refreshToken: string;
+  tokenType: string;
+  expiresIn: number;
+  expiresAt: number | null;
+};
+
+export type AuthUser = {
+  id: string;
+  email: string | null;
+  fullName: string | null;
+  role: 'student' | 'instructor' | 'admin';
+  universityName: string | null;
+  major: string | null;
+  timezone: string | null;
+  isActive: boolean;
+  lastLoginAt: string | null;
+  emailConfirmedAt: string | null;
+};
+
+export type AuthResponse = {
+  message: string;
+  user: AuthUser;
+  session: AuthSession | null;
+  emailVerificationRequired: boolean;
+};
+
+type LogoutResponse = {
+  message: string;
+  scope: 'global' | 'local' | 'others';
+};
+
+type RequestOptions = {
+  accessToken?: string;
 };
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
@@ -16,39 +45,93 @@ function requireApiBaseUrl() {
   return API_BASE_URL;
 }
 
-async function post<TResponse>(path: string, body: Record<string, string>) {
+async function request<TResponse>(
+  path: string,
+  init: RequestInit,
+  options?: RequestOptions
+): Promise<TResponse> {
+  const headers = new Headers(init.headers);
+
+  if (!headers.has('Content-Type') && init.body) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  if (options?.accessToken) {
+    headers.set('Authorization', `Bearer ${options.accessToken}`);
+  }
+
   const response = await fetch(`${requireApiBaseUrl()}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    ...init,
+    headers,
   });
 
   if (!response.ok) {
-    let message = 'Authentication failed. Please try again.';
+    let message = 'Request failed. Please try again.';
 
     try {
-      const data = (await response.json()) as { message?: string };
-      if (data.message) {
-        message = data.message;
-      }
+      const data = (await response.json()) as { error?: string; message?: string };
+      message = data.error ?? data.message ?? message;
     } catch {
-      // Keep default message if backend body is not JSON.
+      // Ignore non-JSON error bodies.
     }
 
     throw new Error(message);
+  }
+
+  if (response.status === 204) {
+    return undefined as TResponse;
   }
 
   return (await response.json()) as TResponse;
 }
 
 export function signInWithEmailAndPassword(email: string, password: string) {
-  return post<AuthResult>('/auth/login', { email, password });
+  return request<AuthResponse>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
 }
 
-export function signUpWithEmailAndPassword(email: string, password: string) {
-  return post<AuthResult>('/auth/sign-up', { email, password });
+export function signUpWithEmailAndPassword(input: {
+  email: string;
+  password: string;
+  fullName: string;
+  universityName: string;
+  major: string;
+  timezone: string;
+  role?: 'student' | 'instructor' | 'admin';
+}) {
+  return request<AuthResponse>('/auth/sign-up', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
-export function signInWithGoogle() {
-  throw new Error('Google sign-in will be handled via backend OAuth endpoints.');
+export function refreshAuthSession(refreshToken: string) {
+  return request<AuthResponse>('/auth/refresh', {
+    method: 'POST',
+    body: JSON.stringify({ refreshToken }),
+  });
+}
+
+export function logoutAuthSession(
+  accessToken: string,
+  scope: 'global' | 'local' | 'others' = 'global'
+) {
+  return request<LogoutResponse>(
+    '/auth/logout',
+    {
+      method: 'POST',
+      body: JSON.stringify({ scope }),
+    },
+    { accessToken }
+  );
+}
+
+export async function authorizedRequest<TResponse>(
+  path: string,
+  init: RequestInit,
+  accessToken: string
+) {
+  return request<TResponse>(path, init, { accessToken });
 }

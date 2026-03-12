@@ -1,31 +1,29 @@
-# Firestore Runtime Architecture
+# Supabase Runtime Architecture
 
-This package supports the LectrAI backend runtime by providing shared Firestore initialization for the mobile app and cloud services.
+This package supports the LectrAI backend runtime by providing shared Postgres and Supabase initialization for the mobile app and cloud services.
 
 ## Why lazy initialization
 
 Import-time initialization is brittle because it forces credentials/config to be valid at module load.
-That breaks CLI tools, tests, and scripts that import code paths without actually needing Firestore.
+That breaks CLI tools, tests, and scripts that import code paths without actually needing the database.
 
-This package now uses lazy singletons:
+This package uses lazy singletons:
 
-- `getFirebaseAdminApp()` initializes Firebase Admin on first call.
-- `getDb()` initializes Firestore on first call.
+- `getDb()` initializes the Postgres client on first call.
+- `getSupabaseAdminClient()` initializes the Supabase admin client on first call.
 - Both cache instances for process lifetime.
 
-## Why Cloud Run should use ADC + attached IAM service account
+## Why Postgres is the primary backend
 
-On Cloud Run, the runtime identity should come from the service account attached to the service.
-This avoids shipping static private keys as environment variables or build args.
+LectrAI needs relational data, transactional workflows, and vector search for retrieval-augmented generation.
+Supabase provides managed Postgres plus the `pgvector` extension, which is a better fit than Firestore for:
 
-Firebase Admin uses Google Application Default Credentials (ADC), which work with:
-
-- Cloud Run attached identity (production)
-- `gcloud auth application-default login` (local dev)
-- `GOOGLE_APPLICATION_CREDENTIALS` path (local/service environments)
+- lecture, quiz, and chat data with joins and transactional writes
+- embeddings storage and similarity search
+- SQL migrations and schema evolution
+- direct integration with Postgres tooling
 
 ## Security model reminder
 
-Firestore Security Rules are for client SDK access.
-Firebase Admin SDK bypasses Firestore Security Rules and is fully privileged based on IAM.
-Use IAM + backend authorization controls for server-side writes.
+Server-side code should use the direct Postgres connection string and Supabase service-role key only in trusted runtimes such as Cloud Run and local backend tooling.
+Client applications should use the anon key and row-level security policies instead of service-role credentials.

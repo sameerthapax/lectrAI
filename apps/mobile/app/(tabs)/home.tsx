@@ -1,7 +1,9 @@
-import { Link } from 'expo-router';
 import { ScrollView, Text, View } from 'react-native';
+import { useAuth } from '../../providers/auth-provider';
 
 export default function HomeRoute() {
+  const auth = useAuth();
+
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
@@ -21,41 +23,14 @@ export default function HomeRoute() {
         }}
       >
         <Text selectable style={{ fontSize: 13, color: 'rgba(255, 255, 255, 0.78)', fontWeight: '600' }}>
-          Auth
+          Welcome
         </Text>
         <Text selectable style={{ fontSize: 24, lineHeight: 30, color: '#ffffff', fontWeight: '800' }}>
-          Sign in or create your LectrAI account
+          {auth.user?.fullName ?? 'LectrAI'}
         </Text>
-        <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Link
-            href="/login"
-            style={{
-              backgroundColor: '#ff6a00',
-              color: '#ffffff',
-              paddingVertical: 10,
-              paddingHorizontal: 16,
-              borderRadius: 12,
-              overflow: 'hidden',
-              fontWeight: '700',
-            }}
-          >
-            Login
-          </Link>
-          <Link
-            href="/sign-up"
-            style={{
-              backgroundColor: '#ffffff',
-              color: '#0b0b0b',
-              paddingVertical: 10,
-              paddingHorizontal: 16,
-              borderRadius: 12,
-              overflow: 'hidden',
-              fontWeight: '700',
-            }}
-          >
-            Sign Up
-          </Link>
-        </View>
+        <Text selectable style={{ fontSize: 15, color: 'rgba(255, 255, 255, 0.78)', lineHeight: 22 }}>
+          Signed in as {auth.user?.email ?? 'unknown user'}
+        </Text>
       </View>
 
       <View
@@ -74,7 +49,8 @@ export default function HomeRoute() {
           selectable
           style={{ paddingTop: 8, fontSize: 16, color: '#344155', lineHeight: 22 }}
         >
-          This is the Home page with native tabs navigation.
+          Your session is now protected by the app auth gate. Unauthenticated users are redirected
+          to login before they can reach this screen.
         </Text>
       </View>
     </ScrollView>

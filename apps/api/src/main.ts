@@ -1,43 +1,22 @@
-import express from 'express';
-import { getDb, getFirestoreConfig } from '@lectrai/db';
+import { env } from './config/env.js';
+import { createApp } from './app.js';
+import { getDatabaseHealth } from './services/db-health.service.js';
 
-const host = process.env.HOST ?? 'localhost';
-const port = process.env.PORT ? Number(process.env.PORT) : 3000;
-
-const app = express();
-
-app.get('/', (req, res) => {
-  res.send({ message: 'Hello API' });
-});
-///\\\
 async function bootstrap() {
-  const db = getDb();
-  const firestoreConfig = getFirestoreConfig();
+  const app = createApp();
 
   try {
-    const lotsSnapshot = await db.collection('lots').limit(1).get();
+    const database = await getDatabaseHealth();
     console.log(
-      `[ db ] Firestore connection OK (project=${firestoreConfig.projectId}, database=${firestoreConfig.databaseId}). lots query succeeded (docs: ${lotsSnapshot.size}).`
+      `[ db ] Database connection OK (source=${database.source}, supabaseUrl=${database.supabaseUrl ?? 'unset'}). schema check succeeded (key tables found: ${database.keyTablesFound}/${database.keyTablesExpected}).`
     );
   } catch (error) {
-    const grpcCode = typeof error === 'object' && error && 'code' in error
-      ? (error as { code?: number }).code
-      : undefined;
-
-    console.error(
-      `[ db ] Firestore connection failed (project=${firestoreConfig.projectId}, database=${firestoreConfig.databaseId}).`,
-      error
-    );
-    if (grpcCode === 5) {
-      console.error(
-        '[ db ] gRPC NOT_FOUND usually means wrong GCP project identity or missing Firestore database. Check Firebase Console > Firestore Database and verify FIRESTORE_DATABASE_ID.'
-      );
-    }
+    console.error('[ db ] Database connection failed.', error);
     process.exit(1);
   }
 
-  app.listen(port, host, () => {
-    console.log(`[ ready ] http://${host}:${port}`);
+  app.listen(env.port, env.host, () => {
+    console.log(`[ ready ] http://${env.host}:${env.port}`);
   });
 }
 
