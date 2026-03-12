@@ -43,3 +43,13 @@ variable "pubsub_subscription_name" {
   description = "Pub/Sub subscription name"
   default     = "lectrai-events-worker-prod"
 }
+
+variable "google_cloud_project" {
+  type        = string
+  description = "GOOGLE_CLOUD_PROJECT value exposed to the Cloud Run container"
+}
+
+variable "firestore_database_id" {
+  type        = string
+  description = "FIRESTORE_DATABASE_ID value exposed to the Cloud Run container"
+}

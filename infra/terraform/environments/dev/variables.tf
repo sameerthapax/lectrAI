@@ -40,3 +40,13 @@ variable "cloud_run_deletion_protection" {
   description = "Whether Cloud Run deletion protection is enabled"
   default     = false
 }
+
+variable "google_cloud_project" {
+  type        = string
+  description = "GOOGLE_CLOUD_PROJECT value exposed to the Cloud Run container"
+}
+
+variable "firestore_database_id" {
+  type        = string
+  description = "FIRESTORE_DATABASE_ID value exposed to the Cloud Run container"
+}
