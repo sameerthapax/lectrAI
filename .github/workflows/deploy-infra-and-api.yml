@@ -130,6 +130,8 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_google_cloud_project: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_firestore_database_id: ${{ secrets.FIRESTORE_DATABASE_ID }}
           TF_VAR_region: us-central1
           TF_VAR_environment: dev
           TF_VAR_cloud_run_service_name: lectrai-api-dev
@@ -158,6 +160,8 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_google_cloud_project: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_firestore_database_id: ${{ secrets.FIRESTORE_DATABASE_ID }}
           TF_VAR_region: us-central1
           TF_VAR_environment: dev
           TF_VAR_cloud_run_service_name: lectrai-api-dev
