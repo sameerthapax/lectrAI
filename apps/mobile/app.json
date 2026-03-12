@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Park-U",
-    "slug": "park-u-mobile",
+    "name": "LectrAI",
+    "slug": "lectrai-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -15,7 +15,7 @@
     "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.sameerthapa.parkumobile"
+      "bundleIdentifier": "com.sameerthapa.lectrai"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +23,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.sameerthapa.parkumobile"
+      "package": "com.sameerthapa.lectrai"
     },
     "web": {
       "bundler": "metro",

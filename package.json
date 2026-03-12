@@ -5,6 +5,7 @@
   "license": "MIT",
   "scripts": {
     "start": "nx start mobile",
+    "mobile:start:clear": "npm --prefix apps/mobile run start:clear",
     "android": "nx run-android mobile",
     "ios": "nx run-ios mobile"
   },

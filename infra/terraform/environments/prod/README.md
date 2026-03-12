@@ -1,6 +1,6 @@
 # prod
 
-Production Terraform environment for ParkU.
+Production Terraform environment for LectrAI.
 
 Defaults in this environment are production-safe:
 - `cloud_run_deletion_protection = true`

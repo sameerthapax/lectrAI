@@ -1,6 +1,8 @@
 # Terraform
 
-Infrastructure as code for ParkU.
+Infrastructure as code for LectrAI.
+
+LectrAI is an AI-powered lecture capture and intelligent study assistant designed to help students record, organize, and study lecture material more effectively. The system allows students to record lectures through a mobile application, upload the audio to a cloud backend, and automatically generate structured study materials including transcripts, summaries, key concepts, timelines, and practice quizzes. LectrAI also provides an AI-powered chat assistant that uses retrieval-augmented generation (RAG) to answer questions based on a student's own lecture recordings.
 
 ## What is scaffolded
 
