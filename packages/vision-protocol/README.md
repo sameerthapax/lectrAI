@@ -1,6 +1,6 @@
 # vision-protocol
 
-This library was generated with [Nx](https://nx.dev).
+Shared event payload envelopes and versioning for LectrAI services and runtime components.
 
 ## Building
 

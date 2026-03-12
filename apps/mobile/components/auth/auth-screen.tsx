@@ -85,7 +85,7 @@ export function AuthScreen({
         />
 
         <Text selectable style={{ fontSize: 14, color: 'rgba(255, 255, 255, 0.75)', fontWeight: '600' }}>
-          Park-U
+          LectrAI
         </Text>
         <Text selectable style={{ fontSize: 34, lineHeight: 40, color: WHITE, fontWeight: '800' }}>
           {isSignUp ? 'Create your account' : 'Welcome back'}

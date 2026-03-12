@@ -1,5 +1,7 @@
 # Firestore Runtime Architecture
 
+This package supports the LectrAI backend runtime by providing shared Firestore initialization for the mobile app and cloud services.
+
 ## Why lazy initialization
 
 Import-time initialization is brittle because it forces credentials/config to be valid at module load.

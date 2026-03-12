@@ -105,13 +105,13 @@ async function runMigration() {
     );
   }
 
-  // Example device registry placeholder
-  const deviceRef = db.collection('devices').doc('pi-demo-001');
+  // Example ingest source placeholder
+  const deviceRef = db.collection('devices').doc('demo-source-001');
   batch.set(
     deviceRef,
     {
       lotId: 'main-commuter-lot',
-      name: 'Raspberry Pi Demo Unit 001',
+      name: 'Demo Source 001',
       status: 'offline',
       firmwareVersion: 'v1.0.0',
       modelVersion: 'yolo-v1',
@@ -128,7 +128,7 @@ async function runMigration() {
     name: '001_init_parku_firestore',
     appliedAt: now,
     description:
-      'Initializes ParkU Firestore schema metadata, seed lots, default config, and device placeholder.',
+      'Initializes ParkU Firestore schema metadata, seed lots, default config, and source placeholder.',
   });
 
   await batch.commit();

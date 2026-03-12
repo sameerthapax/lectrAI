@@ -24,7 +24,7 @@ export default function HomeRoute() {
           Auth
         </Text>
         <Text selectable style={{ fontSize: 24, lineHeight: 30, color: '#ffffff', fontWeight: '800' }}>
-          Sign in or create your Park-U account
+          Sign in or create your LectrAI account
         </Text>
         <View style={{ flexDirection: 'row', gap: 10 }}>
           <Link
