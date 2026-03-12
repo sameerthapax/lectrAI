@@ -9,7 +9,7 @@ const app = express();
 app.get('/', (req, res) => {
   res.send({ message: 'Hello API' });
 });
-///
+///\\\
 async function bootstrap() {
   const db = getDb();
   const firestoreConfig = getFirestoreConfig();
