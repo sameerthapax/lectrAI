@@ -14,18 +14,13 @@
     ],
     "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml"]
   },
-  "workspaceLayout": {
-    "appsDir": "apps",
-    "libsDir": "packages"
-  },
-  "nxCloudId": "69a991af408cbd709b33fa1f",
+  "workspaceLayout": { "appsDir": "apps", "libsDir": "packages" },
+  "nxCloudId": "69b20ab39fa70fecdea46d67",
   "plugins": [
     {
       "plugin": "@nx/js/typescript",
       "options": {
-        "typecheck": {
-          "targetName": "typecheck"
-        },
+        "typecheck": { "targetName": "typecheck" },
         "build": {
           "targetName": "build",
           "configName": "tsconfig.lib.json",
@@ -50,17 +45,10 @@
         "watchDepsTargetName": "watch-deps"
       }
     },
-    {
-      "plugin": "@nx/eslint/plugin",
-      "options": {
-        "targetName": "lint"
-      }
-    },
+    { "plugin": "@nx/eslint/plugin", "options": { "targetName": "lint" } },
     {
       "plugin": "@nx/jest/plugin",
-      "options": {
-        "targetName": "test"
-      },
+      "options": { "targetName": "test" },
       "exclude": ["apps/api-e2e/**/*"]
     },
     {
@@ -87,9 +75,7 @@
     }
   ],
   "targetDefaults": {
-    "test": {
-      "dependsOn": ["^build"]
-    },
+    "test": { "dependsOn": ["^build"] },
     "@nx/esbuild:esbuild": {
       "cache": true,
       "dependsOn": ["^build"],
