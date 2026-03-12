@@ -1,5 +1,5 @@
 module.exports = {
-  displayName: '@park-u/mobile',
+  displayName: '@lectrai/mobile',
   preset: 'jest-expo',
   moduleFileExtensions: ['ts', 'js', 'html', 'tsx', 'jsx'],
   testMatch: ['**/?(*.)+(spec|test).[jt]s?(x)'],

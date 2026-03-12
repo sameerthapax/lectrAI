@@ -4,9 +4,9 @@
     {
       "type": "node",
       "request": "launch",
-      "name": "Debug @park-u/api with Nx",
+      "name": "Debug API with Nx",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["nx", "serve", "@park-u/api"],
+      "runtimeArgs": ["nx", "serve", "api"],
       "env": {
         "NODE_OPTIONS": "--inspect=9229"
       },

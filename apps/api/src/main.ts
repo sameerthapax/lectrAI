@@ -1,5 +1,5 @@
 import express from 'express';
-import { getDb, getFirestoreConfig } from '@park-u/db';
+import { getDb, getFirestoreConfig } from '@lectrai/db';
 
 const host = process.env.HOST ?? 'localhost';
 const port = process.env.PORT ? Number(process.env.PORT) : 3000;
@@ -9,7 +9,7 @@ const app = express();
 app.get('/', (req, res) => {
   res.send({ message: 'Hello API' });
 });
-//
+///
 async function bootstrap() {
   const db = getDb();
   const firestoreConfig = getFirestoreConfig();

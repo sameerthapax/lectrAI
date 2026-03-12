@@ -1,8 +1,8 @@
 project_id               = "your-gcp-project-id"
 region                   = "us-central1"
 environment              = "dev"
-cloud_run_service_name   = "parku-worker-dev"
-cloud_run_image          = "us-central1-docker.pkg.dev/your-gcp-project-id/parku/worker:latest"
+cloud_run_service_name   = "lectrai-worker-dev"
+cloud_run_image          = "us-central1-docker.pkg.dev/your-gcp-project-id/lectrai/worker:latest"
 cloud_run_deletion_protection = false
-pubsub_topic_name        = "parku-events-dev"
-pubsub_subscription_name = "parku-events-worker-dev"
+pubsub_topic_name        = "lectrai-events-dev"
+pubsub_subscription_name = "lectrai-events-worker-dev"

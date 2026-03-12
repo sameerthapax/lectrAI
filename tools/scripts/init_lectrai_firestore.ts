@@ -1,4 +1,4 @@
-import { getDb, getFirestoreConfig } from '@park-u/db';
+import { getDb, getFirestoreConfig } from '@lectrai/db';
 import { FieldValue } from 'firebase-admin/firestore';
 
 type LotSeed = {
@@ -47,11 +47,11 @@ async function runMigration() {
 
   const migrationRef = db
     .collection('_migrations')
-    .doc('001_init_parku_firestore');
+    .doc('001_init_lectrai_firestore');
   const migrationSnap = await migrationRef.get();
 
   if (migrationSnap.exists) {
-    console.log('Migration already applied: 001_init_parku_firestore');
+    console.log('Migration already applied: 001_init_lectrai_firestore');
     return;
   }
 
@@ -63,7 +63,7 @@ async function runMigration() {
     schemaRef,
     {
       schemaVersion: 1,
-      app: 'ParkU',
+      app: 'LectrAI',
       updatedAt: now,
     },
     { merge: true },
@@ -125,15 +125,15 @@ async function runMigration() {
 
   // Migration record
   batch.set(migrationRef, {
-    name: '001_init_parku_firestore',
+    name: '001_init_lectrai_firestore',
     appliedAt: now,
     description:
-      'Initializes ParkU Firestore schema metadata, seed lots, default config, and source placeholder.',
+      'Initializes LectrAI Firestore schema metadata, seed lots, default config, and source placeholder.',
   });
 
   await batch.commit();
 
-  console.log('Migration applied successfully: 001_init_parku_firestore');
+  console.log('Migration applied successfully: 001_init_lectrai_firestore');
 }
 
 runMigration().catch((error) => {

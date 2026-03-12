@@ -31,7 +31,7 @@ gcloud auth application-default login
 ## Usage
 
 ```ts
-import { getDb, getFirestoreConfig } from '@park-u/db';
+import { getDb, getFirestoreConfig } from '@lectrai/db';
 
 const db = getDb();
 const cfg = getFirestoreConfig();

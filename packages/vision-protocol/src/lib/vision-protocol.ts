@@ -1,4 +1,4 @@
-import type { VisionDetectionPayload } from '@park-u/shared-types';
+import type { VisionDetectionPayload } from '@lectrai/shared-types';
 
 export const VISION_PROTOCOL_VERSION = 'v1';
 
