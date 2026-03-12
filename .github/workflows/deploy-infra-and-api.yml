@@ -124,6 +124,13 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
+      - name: Debug Terraform state
+        working-directory: infra/terraform/environments/dev
+        run: |
+          terraform init -reconfigure -input=false
+          terraform workspace show
+          terraform state list || true
+
       - name: Terraform plan
         if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
         id: tf_plan
