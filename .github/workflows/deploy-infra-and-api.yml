@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - develop
+  pull_request:
+    branches:
+      - develop
 
 permissions:
   contents: read
@@ -11,13 +14,13 @@ permissions:
 
 env:
   AR_REGION: us-central1
-  AR_REPOSITORY: lectrAI
+  AR_REPOSITORY: lectrai
   API_IMAGE_NAME: api
   TF_WORKING_DIR: infra/terraform/environments/dev
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/develop') || (github.event_name == 'pull_request' && github.base_ref == 'develop') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -40,8 +43,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          BASE_SHA="${{ github.event.before }}"
-          HEAD_SHA="${{ github.sha }}"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
 
           if [[ "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
@@ -92,8 +100,8 @@ jobs:
         if: ${{ steps.affected.outputs.api_affected == 'true' }}
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push API image on merge to develop
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.api_affected == 'true' }}
+      - name: Build and push API image for develop deploys
+        if: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/develop') || (github.event_name == 'pull_request' && github.base_ref == 'develop')) && steps.affected.outputs.api_affected == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -153,8 +161,8 @@ jobs:
             exit "$PLAN_EXIT_CODE"
           fi
 
-      - name: Terraform apply on merge to develop
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.tf_plan.outputs.has_diff == 'true' && (steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true') }}
+      - name: Terraform apply for develop deploys
+        if: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/develop') || (github.event_name == 'pull_request' && github.base_ref == 'develop')) && steps.tf_plan.outputs.has_diff == 'true' && (steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true') }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
@@ -167,5 +175,5 @@ jobs:
         run: terraform apply -auto-approve -input=false tfplan
 
       - name: Terraform apply skipped
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.tf_plan.outputs.has_diff == 'false' }}
+        if: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/develop') || (github.event_name == 'pull_request' && github.base_ref == 'develop')) && steps.tf_plan.outputs.has_diff == 'false' }}
         run: echo "Terraform plan has no add/change/destroy actions. Skipping apply."
