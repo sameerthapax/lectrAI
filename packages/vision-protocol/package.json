@@ -1,5 +1,5 @@
 {
-  "name": "@park-u/vision-protocol",
+  "name": "@lectrai/vision-protocol",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "@park-u/source": "./src/index.ts",
+      "@lectrai/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
@@ -17,6 +17,6 @@
   },
   "dependencies": {
     "tslib": "^2.3.0",
-    "@park-u/shared-types": "0.0.1"
+    "@lectrai/shared-types": "0.0.1"
   }
 }

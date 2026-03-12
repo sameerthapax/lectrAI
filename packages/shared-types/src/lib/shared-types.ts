@@ -1,4 +1,4 @@
-export type ParkUEnvironment = 'dev' | 'prod';
+export type LectrAIEnvironment = 'dev' | 'prod';
 
 export interface VisionDetectionPayload {
   lotId: string;

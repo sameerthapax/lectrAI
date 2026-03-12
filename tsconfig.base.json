@@ -16,13 +16,13 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "es2022",
-    "customConditions": ["@park-u/source"],
+    "customConditions": ["@lectrai/source"],
     "baseUrl": ".",
     "paths": {
-      "@park-u/db": ["packages/db/src/index.ts"],
-      "@park-u/shared-types": ["packages/shared-types/src/index.ts"],
-      "@park-u/shared-utils": ["packages/shared-utils/src/index.ts"],
-      "@park-u/vision-protocol": ["packages/vision-protocol/src/index.ts"]
+      "@lectrai/db": ["packages/db/src/index.ts"],
+      "@lectrai/shared-types": ["packages/shared-types/src/index.ts"],
+      "@lectrai/shared-utils": ["packages/shared-utils/src/index.ts"],
+      "@lectrai/vision-protocol": ["packages/vision-protocol/src/index.ts"]
     }
   }
 }

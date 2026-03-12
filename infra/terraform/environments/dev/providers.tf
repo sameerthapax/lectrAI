@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.6.0"
 
   backend "gcs" {
-    bucket = "park-u-terraform-state"
+    bucket = "lectrai-terraform-state"
     prefix = "envs/dev"
   }
 

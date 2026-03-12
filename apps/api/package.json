@@ -103,7 +103,7 @@
     ]
   },
   "dependencies": {
-    "@park-u/db": "0.0.1",
+    "@lectrai/db": "0.0.1",
     "express": "^4.21.2"
   }
 }
