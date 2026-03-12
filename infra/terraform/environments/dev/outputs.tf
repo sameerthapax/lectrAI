@@ -9,7 +9,7 @@ output "cloud_run_service_uri" {
 }
 
 output "cloud_run_service_account_email" {
-  value       = module.cloudrun.service_account_email
+  value       = module.cloudrun.cloud_run_service_account_email
   description = "Cloud Run runtime service account"
 }
 

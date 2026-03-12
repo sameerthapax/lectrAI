@@ -1,12 +1,6 @@
 locals {
-  runtime_service_account_id = substr(replace(lower("${var.service_name}-sa"), "/[^a-z0-9-]/", "-"), 0, 30)
-  invoker_members            = var.allow_unauthenticated ? concat(var.invoker_members, ["allUsers"]) : var.invoker_members
-}
-
-resource "google_service_account" "runtime" {
-  project      = var.project_id
-  account_id   = trimsuffix(local.runtime_service_account_id, "-")
-  display_name = "${var.service_name} runtime"
+  runtime_service_account_email = "lectrai-api-dev-sa@${var.project_id}.iam.gserviceaccount.com"
+  invoker_members               = var.allow_unauthenticated ? concat(var.invoker_members, ["allUsers"]) : var.invoker_members
 }
 
 resource "google_cloud_run_v2_service" "service" {
@@ -17,7 +11,7 @@ resource "google_cloud_run_v2_service" "service" {
   deletion_protection = var.deletion_protection
 
   template {
-    service_account = google_service_account.runtime.email
+    service_account = local.runtime_service_account_email
 
     scaling {
       min_instance_count = var.min_instance_count

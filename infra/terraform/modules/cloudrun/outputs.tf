@@ -8,7 +8,12 @@ output "service_uri" {
   description = "Cloud Run service URI"
 }
 
+output "cloud_run_service_account_email" {
+  value       = "lectrai-api-dev-sa@${var.project_id}.iam.gserviceaccount.com"
+  description = "Existing service account used by Cloud Run runtime"
+}
+
 output "service_account_email" {
-  value       = google_service_account.runtime.email
-  description = "Service account used by Cloud Run runtime"
+  value       = "lectrai-api-dev-sa@${var.project_id}.iam.gserviceaccount.com"
+  description = "Existing service account used by Cloud Run runtime"
 }
