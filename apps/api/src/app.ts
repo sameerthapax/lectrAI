@@ -6,7 +6,7 @@ import { apiRouter } from './routes';
 export function createApp() {
   const app = express();
 
-  // Cloud Run sits behind Google's proxy, so trust the first forwarded hop.
+  // Cloud Run sits behind Google's proxy, so trust the first forwarded
   app.set('trust proxy', 1);
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
