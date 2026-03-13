@@ -24,7 +24,7 @@ module "cloudrun" {
   container_image     = var.cloud_run_image
   deletion_protection = var.cloud_run_deletion_protection
 
-  allow_unauthenticated = false
+  allow_unauthenticated = true
 
   environment_variables = {
     NODE_ENV                  = var.environment
