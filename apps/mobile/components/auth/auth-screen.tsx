@@ -8,14 +8,20 @@ type AuthScreenProps = {
   email: string;
   password: string;
   confirmPassword: string;
+  fullName: string;
+  universityName: string;
+  major: string;
+  timezone: string;
   loading: boolean;
   error: string | null;
   onEmailChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
+  onFullNameChange?: (value: string) => void;
+  onUniversityNameChange?: (value: string) => void;
+  onMajorChange?: (value: string) => void;
+  onTimezoneChange?: (value: string) => void;
   onConfirmPasswordChange?: (value: string) => void;
   onSubmit: () => void;
-  onGooglePress: () => void;
-  onBypassPress?: () => void;
 };
 
 const ORANGE = '#ff6a00';
@@ -27,14 +33,20 @@ export function AuthScreen({
   email,
   password,
   confirmPassword,
+  fullName,
+  universityName,
+  major,
+  timezone,
   loading,
   error,
   onEmailChange,
   onPasswordChange,
+  onFullNameChange,
+  onUniversityNameChange,
+  onMajorChange,
+  onTimezoneChange,
   onConfirmPasswordChange,
   onSubmit,
-  onGooglePress,
-  onBypassPress,
 }: AuthScreenProps) {
   const isSignUp = mode === 'signup';
 
@@ -92,8 +104,8 @@ export function AuthScreen({
         </Text>
         <Text selectable style={{ fontSize: 15, color: 'rgba(255, 255, 255, 0.75)', lineHeight: 22 }}>
           {isSignUp
-            ? 'Sign up with email and password, or continue with Google.'
-            : 'Sign in with email and password, or continue with Google.'}
+            ? 'Create your account with email verification enabled.'
+            : 'Sign in with your verified email and password.'}
         </Text>
       </View>
 
@@ -109,6 +121,32 @@ export function AuthScreen({
           boxShadow: '0 10px 30px rgba(17, 17, 17, 0.08)',
         }}
       >
+        {isSignUp ? (
+          <>
+            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+              Full name
+            </Text>
+            <TextInput
+              textContentType="name"
+              value={fullName}
+              onChangeText={onFullNameChange}
+              placeholder="Sam Student"
+              placeholderTextColor="#8f8f8f"
+              style={{
+                borderWidth: 1,
+                borderColor: '#e5e5e5',
+                borderRadius: 14,
+                borderCurve: 'continuous',
+                backgroundColor: '#fffdfb',
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                color: BLACK,
+                fontSize: 16,
+              }}
+            />
+          </>
+        ) : null}
+
         <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
           Email
         </Text>
@@ -158,6 +196,71 @@ export function AuthScreen({
 
         {isSignUp ? (
           <>
+            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+              University
+            </Text>
+            <TextInput
+              textContentType="organizationName"
+              value={universityName}
+              onChangeText={onUniversityNameChange}
+              placeholder="Murray State University"
+              placeholderTextColor="#8f8f8f"
+              style={{
+                borderWidth: 1,
+                borderColor: '#e5e5e5',
+                borderRadius: 14,
+                borderCurve: 'continuous',
+                backgroundColor: '#fffdfb',
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                color: BLACK,
+                fontSize: 16,
+              }}
+            />
+
+            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+              Major
+            </Text>
+            <TextInput
+              value={major}
+              onChangeText={onMajorChange}
+              placeholder="Computer Science"
+              placeholderTextColor="#8f8f8f"
+              style={{
+                borderWidth: 1,
+                borderColor: '#e5e5e5',
+                borderRadius: 14,
+                borderCurve: 'continuous',
+                backgroundColor: '#fffdfb',
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                color: BLACK,
+                fontSize: 16,
+              }}
+            />
+
+            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+              Timezone
+            </Text>
+            <TextInput
+              autoCapitalize="none"
+              value={timezone}
+              onChangeText={onTimezoneChange}
+              placeholder="America/Chicago"
+              placeholderTextColor="#8f8f8f"
+              style={{
+                borderWidth: 1,
+                borderColor: '#e5e5e5',
+                borderRadius: 14,
+                borderCurve: 'continuous',
+                backgroundColor: '#fffdfb',
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                color: BLACK,
+                fontSize: 16,
+              }}
+            />
+
             <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
               Confirm password
             </Text>
@@ -211,49 +314,6 @@ export function AuthScreen({
             </Text>
           )}
         </Pressable>
-
-        <Pressable
-          disabled={loading}
-          onPress={onGooglePress}
-          style={({ pressed }) => ({
-            borderRadius: 14,
-            borderCurve: 'continuous',
-            minHeight: 50,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: 1,
-            borderColor: '#d8d8d8',
-            backgroundColor: WHITE,
-            opacity: pressed ? 0.95 : 1,
-          })}
-        >
-          <Text selectable style={{ color: BLACK, fontSize: 16, fontWeight: '700' }}>
-            Continue with Google
-          </Text>
-        </Pressable>
-
-        {onBypassPress ? (
-          <Pressable
-            disabled={loading}
-            onPress={onBypassPress}
-            style={({ pressed }) => ({
-              borderRadius: 14,
-              borderCurve: 'continuous',
-              minHeight: 46,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderWidth: 1,
-              borderColor: '#e7e7e7',
-              backgroundColor: '#fffdfb',
-              opacity: pressed ? 0.95 : 1,
-            })}
-          >
-            <Text selectable style={{ color: '#4d4d4d', fontSize: 14, fontWeight: '700' }}>
-              Bypass for now
-            </Text>
-          </Pressable>
-        ) : null}
-
         <Text selectable style={{ textAlign: 'center', fontSize: 14, color: '#4a4a4a' }}>
           {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
           <Link href={isSignUp ? '/login' : '/sign-up'} style={{ color: ORANGE, fontWeight: '700' }}>

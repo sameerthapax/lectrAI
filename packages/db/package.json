@@ -16,7 +16,8 @@
     }
   },
   "dependencies": {
-    "firebase-admin": "^13.7.0",
+    "@supabase/supabase-js": "^2.57.4",
+    "postgres": "^3.4.7",
     "tslib": "^2.3.0"
   }
 }

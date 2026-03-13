@@ -24,12 +24,15 @@ module "cloudrun" {
   container_image     = var.cloud_run_image
   deletion_protection = var.cloud_run_deletion_protection
 
-  allow_unauthenticated = false
+  allow_unauthenticated = true
 
   environment_variables = {
-    NODE_ENV              = var.environment
-    GOOGLE_CLOUD_PROJECT  = var.google_cloud_project
-    FIRESTORE_DATABASE_ID = var.firestore_database_id
+    NODE_ENV                  = var.environment
+    GOOGLE_CLOUD_PROJECT      = var.google_cloud_project
+    SUPABASE_URL              = var.supabase_url
+    SUPABASE_ANON_KEY         = var.supabase_anon_key
+    SUPABASE_SERVICE_ROLE_KEY = var.supabase_service_role_key
+    DATABASE_URL              = var.database_url
   }
 
   depends_on = [google_project_service.required]

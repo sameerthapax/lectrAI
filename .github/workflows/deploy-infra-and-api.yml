@@ -138,9 +138,12 @@ jobs:
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_google_cloud_project: ${{ secrets.GCP_PROJECT_ID }}
-          TF_VAR_firestore_database_id: ${{ secrets.FIRESTORE_DATABASE_ID }}
           TF_VAR_region: us-central1
           TF_VAR_environment: dev
+          TF_VAR_supabase_url: ${{ secrets.SUPABASE_URL }}
+          TF_VAR_supabase_anon_key: ${{ secrets.SUPABASE_ANON_KEY }}
+          TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
           TF_VAR_cloud_run_service_name: lectrai-api-dev
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
           TF_VAR_pubsub_topic_name: lectrai-events-dev
@@ -168,9 +171,12 @@ jobs:
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_google_cloud_project: ${{ secrets.GCP_PROJECT_ID }}
-          TF_VAR_firestore_database_id: ${{ secrets.FIRESTORE_DATABASE_ID }}
           TF_VAR_region: us-central1
           TF_VAR_environment: dev
+          TF_VAR_supabase_url: ${{ secrets.SUPABASE_URL }}
+          TF_VAR_supabase_anon_key: ${{ secrets.SUPABASE_ANON_KEY }}
+          TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
           TF_VAR_cloud_run_service_name: lectrai-api-dev
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
           TF_VAR_pubsub_topic_name: lectrai-events-dev
