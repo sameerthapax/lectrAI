@@ -32,6 +32,27 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
+
+      - name: Resolve Nx base/head
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+
+            if [[ "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+              BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+            fi
+          fi
+
+          echo "NX_BASE=$BASE_SHA" >> "$GITHUB_ENV"
+          echo "NX_HEAD=$HEAD_SHA" >> "$GITHUB_ENV"
+
       - name: Setup Terraform
         if: ${{ github.event_name == 'pull_request' }}
         uses: hashicorp/setup-terraform@v3
@@ -44,5 +65,5 @@ jobs:
 
       # Prepend any command with "nx record --" to record its logs to Nx Cloud
       # - run: npx nx record -- echo Hello World
-      - run: npx nx run-many -t lint test typecheck
-      - run: npx nx run-many -t build --exclude=mobile
+      - run: npx nx affected -t lint --base="$NX_BASE" --head="$NX_HEAD" --outputStyle=static
+      - run: npx nx affected -t build --base="$NX_BASE" --head="$NX_HEAD" --exclude=mobile --outputStyle=static
