@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "LectrAI",
-    "slug": "lectrai-mobile",
+    "slug": "lectrai",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -9,6 +9,9 @@
     "extra": {
       "router": {
         "origin": false
+      },
+      "eas": {
+        "projectId": "848e0e06-0414-4a07-8736-c1787aff4de2"
       }
     },
     "userInterfaceStyle": "automatic",
@@ -42,6 +45,7 @@
       "expo-router",
       "expo-image",
       "expo-secure-store"
-    ]
+    ],
+    "owner": "sameerthapa"
   }
 }
