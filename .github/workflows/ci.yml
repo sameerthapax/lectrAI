@@ -9,7 +9,6 @@ on:
 permissions:
   actions: read
   contents: read
-  id-token: write
 
 env:
   TF_WORKING_DIR: infra/terraform/environments/dev
