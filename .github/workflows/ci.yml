@@ -9,12 +9,14 @@ on:
 permissions:
   actions: read
   contents: read
+  id-token: write
+
+env:
+  TF_WORKING_DIR: infra/terraform/environments/dev
 
 jobs:
   main:
     runs-on: ubuntu-latest
-    env:
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,13 +36,64 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
-      - run: npm install --global eas-cli
+      - name: Setup Terraform
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Authenticate to Google Cloud for Terraform backend
+        if: ${{ github.event_name == 'pull_request' && secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Terraform init
+        if: ${{ github.event_name == 'pull_request' && secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' && secrets.GCP_PROJECT_ID != '' && secrets.SUPABASE_URL != '' && secrets.SUPABASE_ANON_KEY != '' && secrets.SUPABASE_SERVICE_ROLE_KEY != '' && secrets.SUPABASE_DB_URL != '' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform fmt (check)
+        if: ${{ github.event_name == 'pull_request' }}
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: Terraform plan
+        if: ${{ github.event_name == 'pull_request' && secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' && secrets.GCP_PROJECT_ID != '' && secrets.SUPABASE_URL != '' && secrets.SUPABASE_ANON_KEY != '' && secrets.SUPABASE_SERVICE_ROLE_KEY != '' && secrets.SUPABASE_DB_URL != '' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_google_cloud_project: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_region: us-central1
+          TF_VAR_environment: dev
+          TF_VAR_supabase_url: ${{ secrets.SUPABASE_URL }}
+          TF_VAR_supabase_anon_key: ${{ secrets.SUPABASE_ANON_KEY }}
+          TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
+          TF_VAR_cloud_run_service_name: lectrai-api-dev
+          TF_VAR_cloud_run_image: us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/lectrai/api:${{ github.sha }}
+          TF_VAR_pubsub_topic_name: lectrai-events-dev
+          TF_VAR_pubsub_subscription_name: lectrai-events-worker-dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          terraform plan -input=false -detailed-exitcode
+          PLAN_EXIT_CODE=$?
+          set -e
+
+          if [[ "$PLAN_EXIT_CODE" == "0" || "$PLAN_EXIT_CODE" == "2" ]]; then
+            exit 0
+          fi
+
+          echo "Terraform plan failed with exit code $PLAN_EXIT_CODE"
+          exit "$PLAN_EXIT_CODE"
+
+      - name: Terraform checks skipped
+        if: ${{ github.event_name == 'pull_request' && (secrets.GCP_WORKLOAD_IDENTITY_PROVIDER == '' || secrets.GCP_SERVICE_ACCOUNT == '' || secrets.GCP_PROJECT_ID == '' || secrets.SUPABASE_URL == '' || secrets.SUPABASE_ANON_KEY == '' || secrets.SUPABASE_SERVICE_ROLE_KEY == '' || secrets.SUPABASE_DB_URL == '') }}
+        run: echo "Skipping Terraform init/plan because required GCP or Supabase secrets are not available in this PR context."
 
       # Prepend any command with "nx record --" to record its logs to Nx Cloud
       # - run: npx nx record -- echo Hello World
       - run: npx nx run-many -t lint test typecheck
       - run: npx nx run-many -t build --exclude=mobile
-      - run: npx nx run mobile:build
-        if: ${{ env.EXPO_TOKEN != '' }}
-      - run: echo "Skipping mobile:build because EXPO_TOKEN is not set."
-        if: ${{ env.EXPO_TOKEN == '' }}
