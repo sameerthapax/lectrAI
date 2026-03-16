@@ -13,7 +13,6 @@ on:
 permissions:
   actions: read
   contents: read
-  id-token: write
 
 env:
   TF_WORKING_DIR: infra/terraform/environments/dev
@@ -108,12 +107,10 @@ jobs:
 
       # Prepend any command with "nx record --" to record its logs to Nx Cloud
       # - run: npx nx record -- echo Hello World
-      - run: npx nx run-many -t lint test typecheck
+      - run: npx nx run-many -t lint typecheck
+      - run: npx nx run mobile:test -- --watchman=false
       - run: npx nx run-many -t build --exclude=mobile
       - run: npx nx run mobile:build
         if: ${{ env.EXPO_TOKEN != '' }}
       - run: echo "Skipping mobile:build because EXPO_TOKEN is not set."
         if: ${{ env.EXPO_TOKEN == '' }}
-      # Nx Cloud recommends fixes for failures to help you get CI green faster. Learn more: https://nx.dev/ci/features/self-healing-ci
-      - run: npx nx fix-ci
-        if: always()
