@@ -32,6 +32,12 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
+      - name: Setup Terraform
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
       - name: Terraform fmt (check)
         if: ${{ github.event_name == 'pull_request' }}
         run: terraform fmt -check -recursive infra/terraform
