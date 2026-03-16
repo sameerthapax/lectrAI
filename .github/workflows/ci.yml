@@ -10,9 +10,6 @@ permissions:
   actions: read
   contents: read
 
-env:
-  TF_WORKING_DIR: infra/terraform/environments/dev
-
 jobs:
   main:
     runs-on: ubuntu-latest
@@ -35,31 +32,9 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
-      - name: Setup Terraform
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
-
-      - name: Authenticate to Google Cloud for Terraform backend
-        if: ${{ github.event_name == 'pull_request' && secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' }}
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Terraform init
-        if: ${{ github.event_name == 'pull_request' && secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' && secrets.GCP_PROJECT_ID != '' && secrets.SUPABASE_URL != '' && secrets.SUPABASE_ANON_KEY != '' && secrets.SUPABASE_SERVICE_ROLE_KEY != '' && secrets.SUPABASE_DB_URL != '' }}
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init -input=false
-
       - name: Terraform fmt (check)
         if: ${{ github.event_name == 'pull_request' }}
         run: terraform fmt -check -recursive infra/terraform
-
-      - name: Terraform checks skipped
-        if: ${{ github.event_name == 'pull_request' && (secrets.GCP_WORKLOAD_IDENTITY_PROVIDER == '' || secrets.GCP_SERVICE_ACCOUNT == '' || secrets.GCP_PROJECT_ID == '' || secrets.SUPABASE_URL == '' || secrets.SUPABASE_ANON_KEY == '' || secrets.SUPABASE_SERVICE_ROLE_KEY == '' || secrets.SUPABASE_DB_URL == '') }}
-        run: echo "Skipping Terraform init because required GCP or Supabase secrets are not available in this PR context."
 
       # Prepend any command with "nx record --" to record its logs to Nx Cloud
       # - run: npx nx record -- echo Hello World
