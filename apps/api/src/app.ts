@@ -1,7 +1,7 @@
 import express from 'express';
 import { errorHandler } from './middleware/error-handler.js';
 import { apiRateLimit, authRateLimit } from './middleware/rate-limit.js';
-import { apiRouter } from './routes/index.js';
+import { apiRouter } from './routes';
 
 export function createApp() {
   const app = express();

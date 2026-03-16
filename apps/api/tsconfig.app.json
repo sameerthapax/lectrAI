@@ -1,10 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "../../dist/apps/api",
+    "outDir": "dist",
     "types": ["node"],
     "disableSourceOfProjectReferenceRedirect": true,
-    "tsBuildInfoFile": "../../dist/apps/api/tsconfig.app.tsbuildinfo"
+    "tsBuildInfoFile": "dist/tsconfig.app.tsbuildinfo"
   },
   "include": ["src/**/*.ts", "../../packages/db/src/**/*.ts"],
   "exclude": ["eslint.config.js", "eslint.config.cjs", "eslint.config.mjs"],
