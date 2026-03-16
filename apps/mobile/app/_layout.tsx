@@ -5,7 +5,8 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <AuthGate>
-        <Stack initialRouteName="(auth)">
+        <Stack initialRouteName="welcome">
+          <Stack.Screen name="welcome" options={{ headerShown: false }} />
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         </Stack>

@@ -9,7 +9,7 @@ out-tsc
 node_modules
 ios
 android
-
+.temp
 agents.md
 # IDEs and editors
 /.idea
