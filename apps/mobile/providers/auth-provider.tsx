@@ -213,14 +213,16 @@ export function AuthGate({ children }: PropsWithChildren) {
     }
 
     const inAuthGroup = segments[0] === '(auth)';
+    const onWelcomeScreen = segments[0] === 'welcome';
 
-    if (auth.status === 'authenticated' && inAuthGroup) {
+    if (auth.status === 'authenticated' && (inAuthGroup || onWelcomeScreen)) {
       router.replace('/(tabs)/home');
       return;
     }
 
-    if (auth.status === 'unauthenticated' && !inAuthGroup) {
-      router.replace('/login');
+    if (auth.status === 'unauthenticated' && !onWelcomeScreen && !inAuthGroup) {
+      router.replace('/welcome');
+      return;
     }
   }, [auth.status, rootNavigationState?.key, segments]);
 
@@ -237,7 +239,7 @@ export function AuthGate({ children }: PropsWithChildren) {
       >
         <ActivityIndicator size="large" color="#ff6a00" />
         <Text style={{ fontSize: 16, fontWeight: '700', color: '#0b0b0b' }}>
-          Restoring your session
+          Preparing LectrAI
         </Text>
       </View>
     );

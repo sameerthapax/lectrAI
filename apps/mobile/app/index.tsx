@@ -4,9 +4,13 @@ import { useAuth } from '../providers/auth-provider';
 export default function IndexRoute() {
   const auth = useAuth();
 
+  if (auth.status === 'loading') {
+    return null;
+  }
+
   if (auth.status === 'authenticated') {
     return <Redirect href="/(tabs)/home" />;
   }
 
-  return <Redirect href="/login" />;
+  return <Redirect href="/welcome" />;
 }
