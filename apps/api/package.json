@@ -2,7 +2,6 @@
   "name": "api",
   "version": "0.0.1",
   "private": true,
-  "type": "module",
   "nx": {
     "targets": {
       "build": {
@@ -13,13 +12,12 @@
         "defaultConfiguration": "production",
         "options": {
           "platform": "node",
-          "outputPath": "dist/apps/api",
+          "outputPath": "apps/api/dist",
           "format": [
-            "esm"
+            "cjs"
           ],
           "bundle": false,
           "main": "apps/api/src/main.ts",
-          "outputFileName": "apps/api/src/main.js",
           "tsConfig": "apps/api/tsconfig.app.json",
           "assets": [
             "apps/api/src/assets"
