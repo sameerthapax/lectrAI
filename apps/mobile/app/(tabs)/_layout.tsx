@@ -11,12 +11,20 @@ export default function TabsLayout() {
         <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
 
-      <NativeTabs.Trigger name="map">
+      <NativeTabs.Trigger name="courses">
         <NativeTabs.Trigger.Icon
-          sf={{ default: 'map', selected: 'map.fill' }}
-          md="map"
+          sf={{ default: 'books.vertical', selected: 'books.vertical.fill' }}
+          md="school"
         />
-        <NativeTabs.Trigger.Label>Map</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Label>Courses</NativeTabs.Trigger.Label>
+      </NativeTabs.Trigger>
+
+      <NativeTabs.Trigger name="ai-assistance">
+        <NativeTabs.Trigger.Icon
+          sf={{ default: 'sparkles.rectangle.stack', selected: 'sparkles.rectangle.stack.fill' }}
+          md="auto-awesome"
+        />
+        <NativeTabs.Trigger.Label>AI Assist</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
 
       <NativeTabs.Trigger name="settings">
