@@ -31,6 +31,7 @@
     "@types/jest": "29.5.14",
     "@types/node": "20.19.9",
     "@types/react": "~19.2.10",
+    "@types/three": "^0.183.1",
     "@vitest/coverage-v8": "^4.0.0",
     "@vitest/ui": "^4.0.0",
     "ajv": "^8.0.0",
@@ -71,6 +72,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
     "expo": "^55.0.5",
+    "expo-gl": "~55.0.9",
     "expo-secure-store": "~55.0.8",
     "postgres": "^3.4.7"
   }
