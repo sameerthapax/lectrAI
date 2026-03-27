@@ -22,7 +22,7 @@ export default function TabsLayout() {
       <NativeTabs.Trigger name="ai-assistance">
         <NativeTabs.Trigger.Icon
           sf={{ default: 'sparkles.rectangle.stack', selected: 'sparkles.rectangle.stack.fill' }}
-          md="auto-awesome"
+          md="auto_awesome"
         />
         <NativeTabs.Trigger.Label>AI Assist</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>

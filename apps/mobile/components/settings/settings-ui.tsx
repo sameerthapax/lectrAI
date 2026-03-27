@@ -1,7 +1,6 @@
 import { router } from 'expo-router';
 import type { ReactNode } from 'react';
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   Switch,
@@ -18,22 +17,7 @@ export const BORDER = '#eadfce';
 export const MUTED = '#6a6157';
 
 export function SettingsLoadingState() {
-  return (
-    <View
-      style={{
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: CREAM,
-        gap: 12,
-      }}
-    >
-      <ActivityIndicator size="large" color={ORANGE} />
-      <Text style={{ color: INK, fontSize: 16, fontWeight: '700' }}>
-        Loading your settings
-      </Text>
-    </View>
-  );
+  return null;
 }
 
 export function SettingsScreen({

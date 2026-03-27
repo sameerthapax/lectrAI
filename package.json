@@ -75,6 +75,7 @@
     "expo-gl": "~55.0.9",
     "expo-secure-store": "~55.0.8",
     "expo-sqlite": "~55.0.11",
+    "lottie-react-native": "~7.3.4",
     "postgres": "^3.4.7"
   }
 }
