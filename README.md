@@ -10,7 +10,6 @@ This Nx monorepo contains the LectrAI mobile app, backend services, shared packa
 - `apps/api`: Node API for cloud-backed LectrAI services (Cloud Run ready)
 - `packages/shared-types`: shared TypeScript types
 - `packages/shared-utils`: shared utility helpers
-- `packages/vision-protocol`: pub/sub payload envelopes and versioning
 - `infra/terraform`: Terraform environments and modules
 - `tools/scripts`: misc scripts
 

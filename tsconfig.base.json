@@ -21,8 +21,7 @@
     "paths": {
       "@lectrai/db": ["packages/db/src/index.ts"],
       "@lectrai/shared-types": ["packages/shared-types/src/index.ts"],
-      "@lectrai/shared-utils": ["packages/shared-utils/src/index.ts"],
-      "@lectrai/vision-protocol": ["packages/vision-protocol/src/index.ts"]
+      "@lectrai/shared-utils": ["packages/shared-utils/src/index.ts"]
     }
   }
 }

@@ -98,8 +98,7 @@
     },
     "implicitDependencies": [
       "shared-types",
-      "shared-utils",
-      "vision-protocol"
+      "shared-utils"
     ]
   },
   "dependencies": {
