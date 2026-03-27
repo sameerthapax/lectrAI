@@ -23,6 +23,10 @@ import {
   setStoredAuthSession,
   type StoredAuthSession,
 } from '../services/auth-storage';
+import {
+  clearLocalCache,
+  initializeLocalDatabase,
+} from '../services/local-db';
 
 type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
 
@@ -60,6 +64,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     const restoreSession = async () => {
       try {
+        await initializeLocalDatabase();
         const storedSession = await getStoredAuthSession();
 
         if (!storedSession) {
@@ -87,6 +92,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         setStatus('authenticated');
       } catch {
         await clearStoredAuthSession();
+        await clearLocalCache();
 
         if (mounted) {
           setUser(null);
@@ -127,6 +133,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     } finally {
       refreshPromiseRef.current = null;
       await clearStoredAuthSession();
+      await clearLocalCache();
       setUser(null);
       setSession(null);
       setStatus('unauthenticated');
@@ -148,6 +155,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   async function applyAuthResult(result: AuthResponse) {
     if (result.session) {
+      await initializeLocalDatabase();
       await setStoredAuthSession(toStoredSession(result.session));
       setSession(result.session);
       setUser(result.user);
@@ -156,6 +164,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
 
     await clearStoredAuthSession();
+    await clearLocalCache();
     setSession(null);
     setUser(null);
     setStatus('unauthenticated');
@@ -182,6 +191,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         })
         .catch(async () => {
           await clearStoredAuthSession();
+          await clearLocalCache();
           setUser(null);
           setSession(null);
           setStatus('unauthenticated');

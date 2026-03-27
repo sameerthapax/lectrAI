@@ -3,6 +3,7 @@ import { SettingsProvider } from '../../../providers/settings-provider';
 
 export default function SettingsLayout() {
   return (
+
     <SettingsProvider>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />

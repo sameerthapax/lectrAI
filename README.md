@@ -23,3 +23,30 @@ nx run infra:fmt
 nx run infra:validate
 nx run infra:plan
 ```
+
+## Mobile setup
+
+The Expo app reads public client-side variables from `apps/mobile/.env.local`.
+
+1. Copy `apps/mobile/.env.example` to `apps/mobile/.env.local`.
+2. Set `EXPO_PUBLIC_API_BASE_URL` to your backend URL.
+
+Example for the iOS simulator:
+
+```bash
+EXPO_PUBLIC_API_BASE_URL=http://localhost:3000/api
+```
+
+Example for a physical device on the same network:
+
+```bash
+EXPO_PUBLIC_API_BASE_URL=http://192.168.1.42:3000/api
+```
+
+Start the app from the repo root so Expo injects the variables during bundling:
+
+```bash
+npx nx run-ios mobile
+```
+
+If you change an `EXPO_PUBLIC_*` variable, restart Metro before relaunching the app.

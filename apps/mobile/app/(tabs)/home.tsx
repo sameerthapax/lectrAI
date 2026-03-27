@@ -1,8 +1,6 @@
-import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
-import { useAuth } from '../../providers/auth-provider';
+import { Image, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 
 export default function HomeRoute() {
-  const auth = useAuth();
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
 
@@ -88,42 +86,40 @@ export default function HomeRoute() {
         <Pressable
           style={({ pressed }) => ({
             flex: 1.1,
-            minHeight: 148,
+            minHeight: 106,
             borderRadius: 30,
             borderCurve: 'continuous',
-            padding: 16,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
             justifyContent: 'space-between',
-            backgroundColor: 'rgba(255,255,255,0.72)',
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.65)',
-            boxShadow: pressed
-              ? '0 10px 24px rgba(15, 23, 42, 0.12)'
-              : '0 18px 40px rgba(15, 23, 42, 0.12)',
+            backgroundColor: 'transparent',
+            boxShadow: pressed ? '0 8px 18px rgba(15, 23, 42, 0.04)' : '0 12px 24px rgba(15, 23, 42, 0.04)',
           })}
         >
           <View
             style={{
-              width: 76,
-              height: 76,
-              borderRadius: 38,
+              width: '50%',
+              aspectRatio: 1,
+              maxWidth: 96,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: '#ffddd6',
-              boxShadow: '0 12px 24px rgba(239, 68, 68, 0.18)',
             }}
           >
-            <View
+            <Image
+              source={require('../../assets/images/record_logo.png')}
               style={{
-                width: 28,
-                height: 28,
-                borderRadius: 14,
-                backgroundColor: '#ef4444',
+                width: '100%',
+                height: '100%',
+                resizeMode: 'center',
               }}
             />
           </View>
 
-          <View style={{ gap: 6 }}>
-            <Text selectable style={{ fontSize: 22, lineHeight: 27, color: '#111827', fontWeight: '800' }}>
+          <View style={{ gap: 4 }}>
+            <Text selectable style={{ fontSize: 9, letterSpacing: 1.2, color: '#ef4444', fontWeight: '800', textTransform: 'uppercase' }}>
+              Recording
+            </Text>
+            <Text selectable style={{ fontSize: 18, lineHeight: 22, color: '#111827', fontWeight: '800' }}>
               Record lecture
             </Text>
           </View>
@@ -133,10 +129,10 @@ export default function HomeRoute() {
           <View
             style={{
               flex: 1,
-              minHeight: 68,
-              borderRadius: 26,
+              minHeight: 58,
+              borderRadius: 24,
               borderCurve: 'continuous',
-              padding: 14,
+              padding: 12,
               justifyContent: 'space-between',
               backgroundColor: 'rgba(255,255,255,0.68)',
               borderWidth: 1,
@@ -150,11 +146,11 @@ export default function HomeRoute() {
                   key={course.code}
                   style={{
                     position: 'absolute',
-                    top: index * 8,
-                    left: index * 8,
+                    top: index * 7,
+                    left: index * 7,
                     right: 0,
-                    height: 42,
-                    borderRadius: 18,
+                    height: 38,
+                    borderRadius: 16,
                     borderCurve: 'continuous',
                     paddingHorizontal: 12,
                     justifyContent: 'center',
@@ -169,17 +165,17 @@ export default function HomeRoute() {
                   </Text>
                 </View>
               ))}
-              <View style={{ height: 58 }} />
+              <View style={{ height: 50 }} />
             </View>
           </View>
 
           <View
             style={{
               flex: 1,
-              minHeight: 68,
-              borderRadius: 26,
+              minHeight: 58,
+              borderRadius: 24,
               borderCurve: 'continuous',
-              padding: 14,
+              padding: 12,
               justifyContent: 'center',
               alignItems: 'center',
               backgroundColor: 'rgba(255,255,255,0.68)',
@@ -188,8 +184,8 @@ export default function HomeRoute() {
               boxShadow: '0 14px 30px rgba(15, 23, 42, 0.10)',
             }}
           >
-            <Text selectable style={{ fontSize: 40, textAlign: 'center' }}>🧠</Text>
-            <Text selectable style={{ marginTop: 6, fontSize: 15, color: '#334155', fontWeight: '700' }}>
+            <Text selectable style={{ fontSize: 32, textAlign: 'center' }}>🧠</Text>
+            <Text selectable style={{ marginTop: 4, fontSize: 14, color: '#334155', fontWeight: '700' }}>
               Exam review
             </Text>
           </View>
@@ -324,10 +320,13 @@ export default function HomeRoute() {
             key={stat.label}
             style={{
               flex: 1,
-              minHeight: 82,
-              borderRadius: 22,
+              minHeight: 70,
+              borderRadius: 20,
               borderCurve: 'continuous',
-              padding: 14,
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
               justifyContent: 'space-between',
               backgroundColor: 'rgba(255,255,255,0.72)',
               borderWidth: 1,
@@ -335,36 +334,15 @@ export default function HomeRoute() {
               boxShadow: '0 14px 28px rgba(15, 23, 42, 0.10)',
             }}
           >
-            <Text selectable style={{ fontSize: 24 }}>{stat.label}</Text>
+            <Text selectable style={{ fontSize: 22 }}>{stat.label}</Text>
             <Text
               selectable
-              style={{ color: '#0f172a', fontSize: 24, fontWeight: '800', fontVariant: ['tabular-nums'] }}
+              style={{ color: '#0f172a', fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}
             >
               {stat.value}
             </Text>
           </View>
         ))}
-      </View>
-
-      <View
-        style={{
-          borderRadius: 28,
-          borderCurve: 'continuous',
-          padding: 18,
-          gap: 8,
-          backgroundColor: 'rgba(17, 24, 39, 0.88)',
-          boxShadow: '0 16px 34px rgba(15, 23, 42, 0.16)',
-        }}
-      >
-        <Text selectable style={{ color: 'rgba(255,255,255,0.74)', fontSize: 13, fontWeight: '700' }}>
-          Session
-        </Text>
-        <Text selectable style={{ color: '#ffffff', fontSize: 22, fontWeight: '800' }}>
-          {auth.user?.fullName ?? 'LectrAI'}
-        </Text>
-        <Text selectable style={{ color: 'rgba(255,255,255,0.78)', fontSize: 15, lineHeight: 21 }}>
-          Signed in as {auth.user?.email ?? 'unknown user'}
-        </Text>
       </View>
     </ScrollView>
   );

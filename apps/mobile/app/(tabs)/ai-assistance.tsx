@@ -2,14 +2,7 @@ import { BlurView } from 'expo-blur';
 import { Stack } from 'expo-router';
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 
-let LokiNativeVoiceVisualizer: null | React.ComponentType = null;
-
-try {
-  LokiNativeVoiceVisualizer =
-    require('../../components/ai/loki-native-voice-visualizer').default;
-} catch {
-  LokiNativeVoiceVisualizer = null;
-}
+const LokiNativeVoiceVisualizer = require('../../components/ai/loki-native-voice-visualizer').default;
 
 const prompts = [
   'Break down Lecture 6 before my quiz.',
@@ -113,66 +106,7 @@ export default function AiAssistanceRoute() {
             boxShadow: '0 20px 44px rgba(15, 23, 42, 0.14)',
           }}
         >
-          {LokiNativeVoiceVisualizer ? (
-            <LokiNativeVoiceVisualizer />
-          ) : (
-            <View
-              style={{
-                flex: 1,
-                padding: 20,
-                justifyContent: 'space-between',
-                backgroundColor: '#110f0f',
-              }}
-            >
-              <View
-                style={{
-                  alignSelf: 'flex-start',
-                  borderRadius: 999,
-                  borderCurve: 'continuous',
-                  paddingHorizontal: 12,
-                  paddingVertical: 8,
-                  backgroundColor: 'rgba(255,245,235,0.08)',
-                }}
-              >
-                <Text selectable style={{ color: '#fed7aa', fontSize: 12, fontWeight: '700' }}>
-                  Native visualizer unavailable
-                </Text>
-              </View>
-
-              <View style={{ alignItems: 'center', gap: 12 }}>
-                <Text selectable style={{ fontSize: 68 }}>🟠</Text>
-                <Text selectable style={{ color: '#fff7ed', fontSize: 18, fontWeight: '800' }}>
-                  Loki renderer
-                </Text>
-                <Text
-                  selectable
-                  style={{
-                    maxWidth: 260,
-                    color: '#fdba74',
-                    fontSize: 13,
-                    lineHeight: 18,
-                    textAlign: 'center',
-                    fontWeight: '600',
-                  }}
-                >
-                  Build a native iOS dev client to load the Expo GL module and run the icosahedron
-                  renderer.
-                </Text>
-              </View>
-
-              <View style={{ gap: 6 }}>
-                <Text selectable style={{ color: '#ffedd5', fontSize: 12, fontWeight: '700' }}>
-                  Required:
-                </Text>
-                <Text selectable style={{ color: '#fdba74', fontSize: 12.5, lineHeight: 18 }}>
-                  1. Install `expo-gl` and `expo-three`
-                </Text>
-                <Text selectable style={{ color: '#fdba74', fontSize: 12.5, lineHeight: 18 }}>
-                  2. Rebuild iOS instead of using the current runtime
-                </Text>
-              </View>
-            </View>
-          )}
+          <LokiNativeVoiceVisualizer />
         </View>
 
         <BlurView
