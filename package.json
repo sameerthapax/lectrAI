@@ -2,14 +2,20 @@
   "name": "@lectrai/source",
   "version": "0.0.0",
   "main": "apps/mobile/index.js",
+  "packageManager": "npm@10.8.2",
   "license": "MIT",
   "scripts": {
+    "preinstall": "node ./tools/check-toolchain.cjs",
     "start": "nx start mobile",
     "mobile:start:clear": "npm --prefix apps/mobile run start:clear",
     "android": "nx run-android mobile",
     "ios": "nx run-ios mobile"
   },
   "private": true,
+  "engines": {
+    "node": ">=20 <21",
+    "npm": ">=10 <11"
+  },
   "devDependencies": {
     "@eslint/js": "^9.8.0",
     "@expo/cli": "~54.0.16",

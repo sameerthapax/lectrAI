@@ -10,6 +10,7 @@ COPY nx.json tsconfig.base.json tsconfig.json ./
 COPY apps/api ./apps/api
 COPY packages ./packages
 COPY tools ./tools
+COPY .npmrc .nvmrc ./
 
 RUN npm ci
 RUN npx nx sync
