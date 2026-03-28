@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
 import {
   type AuthResponse,
   type AuthSession,
@@ -27,6 +26,7 @@ import {
   clearLocalCache,
   initializeLocalDatabase,
 } from '../services/local-db';
+import { useDelayedLoadingOverlay } from './loading-overlay-provider';
 
 type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
 
@@ -58,6 +58,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
   const refreshPromiseRef = useRef<Promise<AuthResponse | null> | null>(null);
+
+  useDelayedLoadingOverlay(status === 'loading');
 
   useEffect(() => {
     let mounted = true;
@@ -237,22 +239,7 @@ export function AuthGate({ children }: PropsWithChildren) {
   }, [auth.status, rootNavigationState?.key, segments]);
 
   if (auth.status === 'loading') {
-    return (
-      <View
-        style={{
-          flex: 1,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: '#ffffff',
-          gap: 16,
-        }}
-      >
-        <ActivityIndicator size="large" color="#ff6a00" />
-        <Text style={{ fontSize: 16, fontWeight: '700', color: '#0b0b0b' }}>
-          Preparing LectrAI
-        </Text>
-      </View>
-    );
+    return null;
   }
 
   return <>{children}</>;

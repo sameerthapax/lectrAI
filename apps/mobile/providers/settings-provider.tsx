@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react';
 import { useAuth } from './auth-provider';
+import { useDelayedLoadingOverlay } from './loading-overlay-provider';
 import {
   createDefaultUserSettings,
   getStoredUserSettings,
@@ -37,6 +38,8 @@ export function SettingsProvider({ children }: PropsWithChildren) {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [hasHydrated, setHasHydrated] = useState(false);
+
+  useDelayedLoadingOverlay(loading);
 
   const userId = auth.user?.id ?? null;
 
