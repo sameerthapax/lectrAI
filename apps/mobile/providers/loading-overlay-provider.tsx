@@ -87,6 +87,40 @@ export function useDelayedLoadingOverlay(active: boolean, delayMs = LOADING_OVER
   }, [active, context, delayMs]);
 }
 
+export function useLoadingOverlayControl() {
+  const context = useContext(LoadingOverlayContext);
+  const tokenRef = useRef(Symbol('manual-global-loading-overlay'));
+  const isShownRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (context && isShownRef.current) {
+        context.hide(tokenRef.current);
+        isShownRef.current = false;
+      }
+    };
+  }, [context]);
+
+  return {
+    show() {
+      if (!context || isShownRef.current) {
+        return;
+      }
+
+      context.show(tokenRef.current);
+      isShownRef.current = true;
+    },
+    hide() {
+      if (!context || !isShownRef.current) {
+        return;
+      }
+
+      context.hide(tokenRef.current);
+      isShownRef.current = false;
+    },
+  };
+}
+
 function GlobalLoadingOverlay() {
   return (
     <View pointerEvents="auto" style={styles.overlay}>

@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 const DATABASE_NAME = 'lectrai-cache.db';
 
-export const LOCAL_CACHE_SCHEMA_VERSION = 2;
+export const LOCAL_CACHE_SCHEMA_VERSION = 3;
 
 const SYNC_STATUS_CHECK = `
 CHECK (sync_status IN ('synced', 'pending_pull', 'pending_push', 'conflict'))
@@ -628,6 +628,7 @@ export type SyncOutboxRecord = {
 export async function initializeLocalDatabase() {
   const db = await getLocalDatabase();
   await db.execAsync(CACHE_SCHEMA_SQL);
+  await migrateLocalDatabase(db);
   await setMetaValue(db, 'local_cache_schema_version', String(LOCAL_CACHE_SCHEMA_VERSION));
   return db;
 }
@@ -663,6 +664,42 @@ export async function setMetaValue(db: SQLite.SQLiteDatabase, key: string, value
        updated_at = excluded.updated_at`,
     [key, value]
   );
+}
+
+async function migrateLocalDatabase(db: SQLite.SQLiteDatabase) {
+  await ensureTableColumns(db, 'cached_courses', [
+    ['owner_user_id', 'TEXT'],
+    ['course_code', 'TEXT'],
+    ['course_name', "TEXT NOT NULL DEFAULT ''"],
+    ['instructor_name', 'TEXT'],
+    ['semester', 'TEXT'],
+    ['section', 'TEXT'],
+    ['description', 'TEXT'],
+    ['color_hex', 'TEXT'],
+    ['is_archived', 'INTEGER NOT NULL DEFAULT 0'],
+    ['created_at', 'TEXT'],
+    ['updated_at', 'TEXT'],
+    ['sync_status', "TEXT NOT NULL DEFAULT 'synced'"],
+    ['dirty_fields_json', 'TEXT'],
+    ['last_synced_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+  ]);
+}
+
+async function ensureTableColumns(
+  db: SQLite.SQLiteDatabase,
+  tableName: string,
+  columns: Array<[columnName: string, definition: string]>
+) {
+  const tableInfo = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${tableName});`);
+  const existingColumns = new Set(tableInfo.map((column) => column.name));
+
+  for (const [columnName, definition] of columns) {
+    if (existingColumns.has(columnName)) {
+      continue;
+    }
+
+    await db.execAsync(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition};`);
+  }
 }
 
 async function getLocalDatabase() {

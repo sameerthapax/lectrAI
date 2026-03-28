@@ -1,14 +1,25 @@
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Image, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import {
+  CurrentCourseCarousel,
+  buildCourseSelectorCards,
+} from '../../components/home/current-course-carousel';
+import { useAuth } from '../../providers/auth-provider';
+import {
+  getSelectedCourseId,
+  listCoursesForUser,
+  NO_CLASS_COURSE_ID,
+  setSelectedCourseId,
+  type LocalCourseRecord,
+} from '../../services/courses-repository';
 
 export default function HomeRoute() {
+  const auth = useAuth();
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
-
-  const courseStack = [
-    { code: 'CSC 499', tint: '#dbeafe' },
-    { code: 'AI 430', tint: '#ffedd5' },
-    { code: 'MAT 345', tint: '#dcfce7' },
-  ];
+  const [courses, setCourses] = useState<LocalCourseRecord[]>([]);
+  const [selectedCourseId, setSelectedCourseIdState] = useState(NO_CLASS_COURSE_ID);
 
   const quizOptions = [
     'A system that stores every lecture as raw audio only',
@@ -16,6 +27,49 @@ export default function HomeRoute() {
     'A reminder tool that replaces note-taking entirely',
     'A static chatbot with no lecture context',
   ];
+  const courseCards = buildCourseSelectorCards(courses);
+
+  useFocusEffect(
+    useCallback(() => {
+      const user = auth.user;
+      let cancelled = false;
+
+      const loadHomeCourses = async () => {
+        if (!user) {
+          if (!cancelled) {
+            setCourses([]);
+            setSelectedCourseIdState(NO_CLASS_COURSE_ID);
+          }
+          return;
+        }
+
+        const [nextCourses, persistedCourseId] = await Promise.all([
+          listCoursesForUser(user),
+          getSelectedCourseId(),
+        ]);
+
+        if (!cancelled) {
+          setCourses(nextCourses);
+          setSelectedCourseIdState(
+            nextCourses.some((course) => course.id === persistedCourseId) || persistedCourseId === NO_CLASS_COURSE_ID
+              ? persistedCourseId
+              : NO_CLASS_COURSE_ID
+          );
+        }
+      };
+
+      void loadHomeCourses();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [auth.user?.id])
+  );
+
+  const handleSelectCourse = async (courseId: string) => {
+    setSelectedCourseIdState(courseId);
+    await setSelectedCourseId(courseId);
+  };
 
   return (
     <ScrollView
@@ -85,22 +139,23 @@ export default function HomeRoute() {
       >
         <Pressable
           style={({ pressed }) => ({
-            flex: 1.1,
-            minHeight: 106,
+            flex: 1,
+            minHeight: 104,
             borderRadius: 30,
             borderCurve: 'continuous',
-            paddingHorizontal: 14,
-            paddingVertical: 12,
+            paddingHorizontal: 16,
+            paddingVertical: 14,
             justifyContent: 'space-between',
-            backgroundColor: 'transparent',
-            boxShadow: pressed ? '0 8px 18px rgba(15, 23, 42, 0.04)' : '0 12px 24px rgba(15, 23, 42, 0.04)',
+            backgroundColor: 'rgba(255,255,255,0.72)',
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.7)',
+            boxShadow: pressed ? '0 10px 20px rgba(15, 23, 42, 0.06)' : '0 16px 28px rgba(15, 23, 42, 0.08)',
           })}
         >
           <View
             style={{
-              width: '50%',
+              width: '100%',
               aspectRatio: 1,
-              maxWidth: 96,
               alignItems: 'center',
               justifyContent: 'center',
             }}
@@ -108,9 +163,9 @@ export default function HomeRoute() {
             <Image
               source={require('../../assets/images/record_logo.png')}
               style={{
-                width: '100%',
-                height: '100%',
-                resizeMode: 'center',
+                width: '150%',
+                height: '150%',
+                objectFit: 'fill',
               }}
             />
           </View>
@@ -125,49 +180,13 @@ export default function HomeRoute() {
           </View>
         </Pressable>
 
-        <View style={{ flex: 0.82, gap: 12 }}>
-          <View
-            style={{
-              flex: 1,
-              minHeight: 58,
-              borderRadius: 24,
-              borderCurve: 'continuous',
-              padding: 12,
-              justifyContent: 'space-between',
-              backgroundColor: 'rgba(255,255,255,0.68)',
-              borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.66)',
-              boxShadow: '0 14px 30px rgba(15, 23, 42, 0.10)',
-            }}
-          >
-            <View style={{ marginTop: 2, paddingBottom: 2 }}>
-              {courseStack.map((course, index) => (
-                <View
-                  key={course.code}
-                  style={{
-                    position: 'absolute',
-                    top: index * 7,
-                    left: index * 7,
-                    right: 0,
-                    height: 38,
-                    borderRadius: 16,
-                    borderCurve: 'continuous',
-                    paddingHorizontal: 12,
-                    justifyContent: 'center',
-                    backgroundColor: course.tint,
-                    borderWidth: 1,
-                    borderColor: 'rgba(255,255,255,0.8)',
-                    boxShadow: '0 8px 18px rgba(15, 23, 42, 0.08)',
-                  }}
-                >
-                  <Text selectable style={{ fontSize: 12, fontWeight: '800', color: '#1f2937' }}>
-                    {course.code}
-                  </Text>
-                </View>
-              ))}
-              <View style={{ height: 50 }} />
-            </View>
-          </View>
+        <View style={{ gap: 12 }}>
+          <CurrentCourseCarousel
+            cards={courseCards}
+            onSelect={handleSelectCourse}
+            selectedCourseId={selectedCourseId}
+            width={Math.max(144, width * 0.34)}
+          />
 
           <View
             style={{
