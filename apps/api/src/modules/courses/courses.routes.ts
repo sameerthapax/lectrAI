@@ -1,16 +1,11 @@
 import { Router } from 'express';
+import { deleteCourse, getCourses, patchCourse, postCourse } from './courses.controller.js';
 
 const coursesRouter = Router();
 
-coursesRouter.get('/', (req, res) => {
-  res.json({
-    message: 'Courses API scaffolded',
-    resource: 'courses',
-    user: {
-      id: req.authUser?.id ?? null,
-      email: req.authUser?.email ?? null,
-    },
-  });
-});
+coursesRouter.get('/', getCourses);
+coursesRouter.post('/', postCourse);
+coursesRouter.put('/:courseId', patchCourse);
+coursesRouter.delete('/:courseId', deleteCourse);
 
 export { coursesRouter };
