@@ -26,7 +26,7 @@ export function SettingsScreen({
   children,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   children: ReactNode;
 }) {
   return (
@@ -42,48 +42,51 @@ export function SettingsScreen({
     >
       <View
         style={{
-          borderRadius: 28,
-          borderCurve: 'continuous',
-          padding: 22,
-          backgroundColor: INK,
-          overflow: 'hidden',
-          gap: 10,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          paddingTop: 8,
+          paddingBottom: 4,
         }}
       >
-        <View
-          style={{
-            position: 'absolute',
-            top: -42,
-            right: -28,
-            width: 180,
-            height: 180,
-            borderRadius: 999,
-            backgroundColor: 'rgba(255, 106, 0, 0.16)',
-          }}
-        />
         <Pressable
           onPress={() => router.back()}
           style={({ pressed }) => ({
-            alignSelf: 'flex-start',
-            minHeight: 38,
-            paddingHorizontal: 14,
+            position: 'absolute',
+            left: 0,
+            width: 38,
+            height: 38,
             borderRadius: 999,
             borderCurve: 'continuous',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: 'rgba(255,255,255,0.09)',
+            backgroundColor: 'rgba(255,255,255,0.72)',
+            borderWidth: 1,
+            borderColor: BORDER,
             opacity: pressed ? 0.88 : 1,
           })}
         >
-          <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '800' }}>← Back</Text>
+          <Text style={{ color: INK, fontSize: 18, fontWeight: '900' }}>←</Text>
         </Pressable>
-        <Text style={{ color: '#ffffff', fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
+        <Text style={{ color: INK, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
           {title}
         </Text>
-        <Text style={{ color: 'rgba(255,255,255,0.84)', fontSize: 15, lineHeight: 22 }}>
+      </View>
+
+      {subtitle ? (
+        <Text
+          style={{
+            marginTop: -4,
+            textAlign: 'center',
+            color: MUTED,
+            fontSize: 14,
+            lineHeight: 21,
+            paddingHorizontal: 20,
+          }}
+        >
           {subtitle}
         </Text>
-      </View>
+      ) : null}
 
       {children}
     </ScrollView>
