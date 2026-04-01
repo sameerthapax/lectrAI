@@ -31,7 +31,7 @@ export function CurrentCourseCarousel({
 }: CurrentCourseCarouselProps) {
   const flatListRef = useRef<FlatList<LocalCourseSelectorCard>>(null);
   const [didMountList, setDidMountList] = useState(false);
-  const cardWidth = Math.max(132, Math.min(164, width * 0.94));
+  const cardWidth = Math.max(140, Math.min(172, width * 0.94));
   const sideInset = Math.max(0, (width - cardWidth) / 2);
   const infiniteCards = useMemo(() => buildInfiniteCards(cards), [cards]);
   const logicalIndex = Math.max(
@@ -78,8 +78,8 @@ export function CurrentCourseCarousel({
       style={{
         borderRadius: 28,
         borderCurve: 'continuous',
-        maxWidth: 146,
-        minHeight: 146,
+        maxWidth: 156,
+        minHeight: 154,
         paddingTop: 10,
         paddingBottom: 10,
         backgroundColor: 'rgba(255,255,255,0.7)',

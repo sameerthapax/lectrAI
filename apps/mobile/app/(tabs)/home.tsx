@@ -7,19 +7,19 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Alert,
   Easing,
-  Image,
   Pressable,
   ScrollView,
   Text,
   View,
   useWindowDimensions,
 } from 'react-native';
+import Svg, { Path, Rect } from 'react-native-svg';
 import {
   CurrentCourseCarousel,
   buildCourseSelectorCards,
@@ -250,7 +250,7 @@ export default function HomeRoute() {
     }
   };
 
-  const closeRecording = async () => {
+  const closeRecording = async (navigateToResults = false) => {
     try {
       setRecordingBusy(true);
 
@@ -273,6 +273,9 @@ export default function HomeRoute() {
         useNativeDriver: true,
       }).start(() => {
         setRecordingVisible(false);
+        if (navigateToResults) {
+          router.push('/recording-results');
+        }
       });
     } catch (error) {
       Alert.alert(
@@ -444,14 +447,53 @@ export default function HomeRoute() {
                   justifyContent: 'center',
                 }}
               >
-                <Image
-                  source={require('../../assets/images/record_logo.png')}
+                <View
                   style={{
-                    width: '150%',
-                    height: '150%',
-                    objectFit: 'fill',
+                    width: 160,
+                    height: 160,
+                    borderRadius: 48,
+                    backgroundColor: '#fff8f2',
+                    borderWidth: 1,
+                    borderColor: '#fdddc7',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 22px 38px rgba(249, 115, 22, 0.14)',
                   }}
-                />
+                >
+                  <Svg width={92} height={92} viewBox="0 0 44 44" fill="none">
+                    <Rect x="14" y="6" width="16" height="21" rx="8" fill="#F97316" />
+                    <Path
+                      d="M11 21.5C11 27.299 15.701 32 21.5 32C27.299 32 32 27.299 32 21.5"
+                      stroke="#F97316"
+                      strokeWidth="3.2"
+                      strokeLinecap="round"
+                    />
+                    <Path
+                      d="M21.5 32V37"
+                      stroke="#F97316"
+                      strokeWidth="3.2"
+                      strokeLinecap="round"
+                    />
+                    <Path
+                      d="M16.5 37H26.5"
+                      stroke="#F97316"
+                      strokeWidth="3.2"
+                      strokeLinecap="round"
+                    />
+                    <Path
+                      d="M8 16.5V26.5"
+                      stroke="#FDBA74"
+                      strokeWidth="2.4"
+                      strokeLinecap="round"
+                    />
+                    <Path
+                      d="M36 16.5V26.5"
+                      stroke="#FDBA74"
+                      strokeWidth="2.4"
+                      strokeLinecap="round"
+                    />
+                  </Svg>
+                </View>
               </View>
 
               <View style={{ gap: 4 }}>
@@ -469,7 +511,7 @@ export default function HomeRoute() {
                 cards={courseCards}
                 onSelect={handleSelectCourse}
                 selectedCourseId={selectedCourseId}
-                width={Math.max(144, width * 0.34)}
+                width={Math.max(152, width * 0.36)}
               />
 
               <View
@@ -838,7 +880,9 @@ export default function HomeRoute() {
 
             <View style={{ width: '100%', flexDirection: 'row', gap: 12 }}>
               <Pressable
-                onPress={closeRecording}
+                onPress={() => {
+                  void closeRecording(false);
+                }}
                 disabled={recordingBusy}
                 style={({ pressed }) => ({
                   flex: 1,
@@ -857,7 +901,9 @@ export default function HomeRoute() {
               </Pressable>
 
               <Pressable
-                onPress={closeRecording}
+                onPress={() => {
+                  void closeRecording(true);
+                }}
                 disabled={recordingBusy}
                 style={({ pressed }) => ({
                   flex: 1,
