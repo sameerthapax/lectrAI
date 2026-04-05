@@ -225,7 +225,8 @@ export function AuthGate({ children }: PropsWithChildren) {
     }
 
     const inAuthGroup = segments[0] === '(auth)';
-    const onWelcomeScreen = segments[0] === 'welcome';
+    const onWelcomeScreen =
+      segments[0] === 'welcome' || (segments[0] === '(pages)' && segments[1] === 'welcome');
 
     if (auth.status === 'authenticated' && (inAuthGroup || onWelcomeScreen)) {
       router.replace('/(tabs)/home');

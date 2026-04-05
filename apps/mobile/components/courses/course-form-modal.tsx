@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { useAppTheme } from '../../providers/settings-provider';
 import {
   COURSE_COLOR_WHEEL,
   getSemesterYearOptions,
@@ -30,6 +31,7 @@ export function CourseFormModal({
   saving,
   visible,
 }: CourseFormModalProps) {
+  const theme = useAppTheme();
   const [openDropdown, setOpenDropdown] = useState<'term' | 'year' | null>(null);
   const yearOptions = getSemesterYearOptions();
 
@@ -43,7 +45,7 @@ export function CourseFormModal({
       <View
         style={{
           flex: 1,
-          backgroundColor: 'rgba(15, 23, 42, 0.55)',
+          backgroundColor: theme.colors.modalBackdrop,
           justifyContent: 'center',
           paddingHorizontal: 18,
           paddingVertical: 28,
@@ -54,17 +56,19 @@ export function CourseFormModal({
             maxHeight: '90%',
             borderRadius: 28,
             borderCurve: 'continuous',
-            backgroundColor: '#fffdf8',
+            backgroundColor: theme.colors.card,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
             padding: 18,
             gap: 16,
             boxShadow: '0 24px 48px rgba(15, 23, 42, 0.18)',
           }}
         >
           <View style={{ gap: 4 }}>
-            <Text style={{ color: '#0f172a', fontSize: 22, fontWeight: '800' }}>
+            <Text style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800' }}>
               {mode === 'create' ? 'Add course' : 'Edit course'}
             </Text>
-            <Text style={{ color: '#475569', fontSize: 14, lineHeight: 20 }}>
+            <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20 }}>
               Changes save to the main database immediately, then refresh the local cache.
             </Text>
           </View>
@@ -79,8 +83,8 @@ export function CourseFormModal({
                 autoCorrect={false}
                 onChangeText={(value) => onChange('courseName', value)}
                 placeholder="Artificial Intelligence"
-                placeholderTextColor="#94a3b8"
-                style={styles.input}
+                placeholderTextColor={theme.colors.inputPlaceholder}
+                style={getInputStyle(theme)}
                 value={draft.courseName}
               />
             </Field>
@@ -92,8 +96,8 @@ export function CourseFormModal({
                   autoCorrect={false}
                   onChangeText={(value) => onChange('courseCode', value)}
                   placeholder="CSC 430"
-                  placeholderTextColor="#94a3b8"
-                  style={styles.input}
+                  placeholderTextColor={theme.colors.inputPlaceholder}
+                  style={getInputStyle(theme)}
                   value={draft.courseCode}
                 />
               </Field>
@@ -104,8 +108,8 @@ export function CourseFormModal({
                   autoCorrect={false}
                   onChangeText={(value) => onChange('section', value)}
                   placeholder="B"
-                  placeholderTextColor="#94a3b8"
-                  style={styles.input}
+                  placeholderTextColor={theme.colors.inputPlaceholder}
+                  style={getInputStyle(theme)}
                   value={draft.section}
                 />
               </Field>
@@ -117,8 +121,8 @@ export function CourseFormModal({
                 autoCorrect={false}
                 onChangeText={(value) => onChange('instructorName', value)}
                 placeholder="Prof. Nguyen"
-                placeholderTextColor="#94a3b8"
-                style={styles.input}
+                placeholderTextColor={theme.colors.inputPlaceholder}
+                style={getInputStyle(theme)}
                 value={draft.instructorName}
               />
             </Field>
@@ -128,10 +132,12 @@ export function CourseFormModal({
                 <DropdownField
                   isOpen={openDropdown === 'term'}
                   label={draft.semesterTerm}
+                  theme={theme}
                   onPress={() => setOpenDropdown((current) => (current === 'term' ? null : 'term'))}
                 />
                 {openDropdown === 'term' ? (
                   <DropdownList
+                    theme={theme}
                     options={SEMESTER_TERMS}
                     onSelect={(value) => {
                       onChange('semesterTerm', value);
@@ -146,10 +152,12 @@ export function CourseFormModal({
                 <DropdownField
                   isOpen={openDropdown === 'year'}
                   label={draft.semesterYear}
+                  theme={theme}
                   onPress={() => setOpenDropdown((current) => (current === 'year' ? null : 'year'))}
                 />
                 {openDropdown === 'year' ? (
                   <DropdownList
+                    theme={theme}
                     options={yearOptions}
                     onSelect={(value) => {
                       onChange('semesterYear', value);
@@ -165,6 +173,7 @@ export function CourseFormModal({
               <ColorWheel
                 onSelect={(value) => onChange('colorHex', value)}
                 selectedColor={draft.colorHex}
+                theme={theme}
               />
             </Field>
 
@@ -175,8 +184,8 @@ export function CourseFormModal({
                 numberOfLines={4}
                 onChangeText={(value) => onChange('description', value)}
                 placeholder="Short note about the course focus, format, or study goals."
-                placeholderTextColor="#94a3b8"
-                style={[styles.input, styles.multilineInput]}
+                placeholderTextColor={theme.colors.inputPlaceholder}
+                style={[getInputStyle(theme), styles.multilineInput]}
                 textAlignVertical="top"
                 value={draft.description}
               />
@@ -189,24 +198,34 @@ export function CourseFormModal({
                 borderRadius: 16,
                 paddingHorizontal: 12,
                 paddingVertical: 10,
-                backgroundColor: '#fff1f2',
+                backgroundColor: theme.colors.dangerSoft,
+                borderWidth: 1,
+                borderColor: theme.colors.dangerBorder,
               }}
             >
-              <Text style={{ color: '#be123c', fontSize: 13, fontWeight: '700' }}>{errorMessage}</Text>
+              <Text style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '700' }}>{errorMessage}</Text>
             </View>
           ) : null}
 
           <View style={{ flexDirection: 'row', gap: 10 }}>
-            <Pressable onPress={onClose} style={({ pressed }) => [styles.secondaryButton, pressed && styles.secondaryButtonPressed]}>
-              <Text style={styles.secondaryButtonText}>Cancel</Text>
+            <Pressable
+              onPress={onClose}
+              style={({ pressed }) => [
+                getSecondaryButtonStyle(theme),
+                pressed && getSecondaryButtonPressedStyle(theme),
+              ]}
+            >
+              <Text style={getSecondaryButtonTextStyle(theme)}>Cancel</Text>
             </Pressable>
 
             <Pressable
               disabled={saving}
               onPress={onSubmit}
               style={({ pressed }) => [
-                styles.primaryButton,
-                saving ? styles.primaryButtonDisabled : pressed && styles.primaryButtonPressed,
+                getPrimaryButtonStyle(theme),
+                saving
+                  ? getPrimaryButtonDisabledStyle(theme)
+                  : pressed && getPrimaryButtonPressedStyle(theme),
               ]}
             >
               <Text style={styles.primaryButtonText}>
@@ -229,9 +248,11 @@ function Field({
   label: string;
   style?: object;
 }) {
+  const theme = useAppTheme();
+
   return (
     <View style={[{ gap: 6 }, style]}>
-      <Text style={{ color: '#334155', fontSize: 13, fontWeight: '700' }}>{label}</Text>
+      <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '700' }}>{label}</Text>
       {children}
     </View>
   );
@@ -244,19 +265,20 @@ function DropdownField({
 }: {
   isOpen: boolean;
   label: string;
+  theme: ReturnType<typeof useAppTheme>;
   onPress: () => void;
 }) {
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [
-        styles.dropdownField,
-        pressed && { borderColor: '#94a3b8' },
-        isOpen && { borderColor: '#115e59' },
+        getDropdownFieldStyle(theme),
+        pressed && { borderColor: theme.colors.textSubtle },
+        isOpen && { borderColor: theme.colors.accent },
       ]}
     >
-      <Text style={{ color: '#0f172a', fontSize: 15, fontWeight: '600' }}>{label}</Text>
-      <Text style={{ color: '#64748b', fontSize: 16, fontWeight: '700' }}>{isOpen ? '−' : '+'}</Text>
+      <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '600' }}>{label}</Text>
+      <Text style={{ color: theme.colors.textMuted, fontSize: 16, fontWeight: '700' }}>{isOpen ? '−' : '+'}</Text>
     </Pressable>
   );
 }
@@ -269,6 +291,7 @@ function DropdownList({
   onSelect: (value: string) => void;
   options: readonly string[];
   selectedValue: string;
+  theme: ReturnType<typeof useAppTheme>;
 }) {
   return (
     <View style={styles.dropdownList}>
@@ -283,12 +306,19 @@ function DropdownList({
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor:
-              option === selectedValue ? '#d1fae5' : pressed ? '#e2e8f0' : '#f8fafc',
+              option === selectedValue
+                ? theme.colors.successSoft
+                : pressed
+                  ? theme.colors.neutralBorder
+                  : theme.colors.neutralSoft,
+            borderWidth: 1,
+            borderColor:
+              option === selectedValue ? theme.colors.successBorder : theme.colors.neutralBorder,
           })}
         >
           <Text
             style={{
-              color: option === selectedValue ? '#065f46' : '#334155',
+              color: option === selectedValue ? theme.colors.success : theme.colors.textMuted,
               fontSize: 14,
               fontWeight: '700',
             }}
@@ -307,6 +337,7 @@ function ColorWheel({
 }: {
   onSelect: (value: string) => void;
   selectedColor: string;
+  theme: ReturnType<typeof useAppTheme>;
 }) {
   const size = 184;
   const radius = 64;
@@ -342,7 +373,7 @@ function ColorWheel({
                 justifyContent: 'center',
                 backgroundColor: color,
                 borderWidth: selected ? 3 : 1.5,
-                borderColor: selected ? '#0f172a' : 'rgba(255,255,255,0.9)',
+                borderColor: selected ? theme.colors.emphasis : theme.colors.border,
                 boxShadow: selected
                   ? '0 10px 18px rgba(15, 23, 42, 0.18)'
                   : '0 6px 12px rgba(15, 23, 42, 0.10)',
@@ -365,7 +396,7 @@ function ColorWheel({
             alignItems: 'center',
             justifyContent: 'center',
             borderWidth: 4,
-            borderColor: '#ffffff',
+            borderColor: theme.colors.card,
             boxShadow: '0 12px 22px rgba(15, 23, 42, 0.16)',
           }}
         >
@@ -383,11 +414,7 @@ const styles = {
     minHeight: 50,
     borderRadius: 18,
     borderCurve: 'continuous' as const,
-    borderWidth: 1,
-    borderColor: '#d9e0ea',
-    backgroundColor: '#ffffff',
     paddingHorizontal: 14,
-    color: '#0f172a',
     fontSize: 15,
   },
   multilineInput: {
@@ -446,3 +473,62 @@ const styles = {
     fontWeight: '800' as const,
   },
 };
+
+function getInputStyle(theme: ReturnType<typeof useAppTheme>) {
+  return {
+    ...styles.input,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    backgroundColor: theme.colors.inputBackground,
+    color: theme.colors.text,
+  };
+}
+
+function getDropdownFieldStyle(theme: ReturnType<typeof useAppTheme>) {
+  return {
+    ...styles.dropdownField,
+    borderColor: theme.colors.inputBorder,
+    backgroundColor: theme.colors.inputBackground,
+  };
+}
+
+function getSecondaryButtonStyle(theme: ReturnType<typeof useAppTheme>) {
+  return {
+    ...styles.secondaryButton,
+    backgroundColor: theme.colors.neutralSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.neutralBorder,
+  };
+}
+
+function getSecondaryButtonPressedStyle(theme: ReturnType<typeof useAppTheme>) {
+  return {
+    backgroundColor: theme.colors.neutralBorder,
+  };
+}
+
+function getSecondaryButtonTextStyle(theme: ReturnType<typeof useAppTheme>) {
+  return {
+    ...styles.secondaryButtonText,
+    color: theme.colors.textMuted,
+  };
+}
+
+function getPrimaryButtonStyle(theme: ReturnType<typeof useAppTheme>) {
+  return {
+    ...styles.primaryButton,
+    backgroundColor: theme.colors.accent,
+  };
+}
+
+function getPrimaryButtonPressedStyle(theme: ReturnType<typeof useAppTheme>) {
+  return {
+    backgroundColor: theme.colors.accentMuted,
+  };
+}
+
+function getPrimaryButtonDisabledStyle(theme: ReturnType<typeof useAppTheme>) {
+  return {
+    backgroundColor: theme.resolvedMode === 'dark' ? '#5b6472' : '#94a3b8',
+  };
+}

@@ -1,13 +1,7 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
-
-const CREAM = '#f7f6f2';
-const INK = '#0b0b0b';
-const CARD = 'rgba(255,255,255,0.78)';
-const BORDER = 'rgba(255,255,255,0.72)';
-const ORANGE = '#f97316';
-const MUTED = '#5b6472';
+import { useAppTheme } from '../../providers/settings-provider';
 
 const MOCK_SUMMARY = [
   'The lecture introduced the core idea of entropy as a way to describe disorder and energy distribution in thermodynamic systems.',
@@ -23,17 +17,20 @@ const MOCK_TRANSCRIPT = [
 ];
 
 export default function RecordingResultsRoute() {
+  const theme = useAppTheme();
   const [summaryExpanded, setSummaryExpanded] = useState(true);
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
 
   return (
-    <View style={{ flex: 1, backgroundColor: CREAM }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{
+          flexGrow: 1,
           padding: 16,
           paddingBottom: 120,
           gap: 14,
+          backgroundColor: theme.colors.screen,
         }}
       >
         <View
@@ -56,21 +53,22 @@ export default function RecordingResultsRoute() {
               borderCurve: 'continuous',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: 'rgba(255,255,255,0.72)',
+              backgroundColor: theme.colors.overlay,
               borderWidth: 1,
-              borderColor: BORDER,
+              borderColor: theme.colors.border,
               opacity: pressed ? 0.88 : 1,
             })}
           >
-            <Text style={{ color: INK, fontSize: 18, fontWeight: '900' }}>←</Text>
+            <Text style={{ color: theme.colors.text, fontSize: 18, fontWeight: '900' }}>←</Text>
           </Pressable>
 
-          <Text style={{ color: INK, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
+          <Text style={{ color: theme.colors.text, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
             Lecture Review
           </Text>
         </View>
 
         <NotionSection
+          theme={theme}
           title="Summary"
           expanded={summaryExpanded}
           onToggle={() => setSummaryExpanded((current) => !current)}
@@ -78,7 +76,7 @@ export default function RecordingResultsRoute() {
           {MOCK_SUMMARY.map((paragraph) => (
             <Text
               key={paragraph}
-              style={{ color: '#18212f', fontSize: 15, lineHeight: 25, fontWeight: '500' }}
+              style={{ color: theme.colors.text, fontSize: 15, lineHeight: 25, fontWeight: '500' }}
             >
               {paragraph}
             </Text>
@@ -86,17 +84,18 @@ export default function RecordingResultsRoute() {
         </NotionSection>
 
         <NotionSection
+          theme={theme}
           title="Transcript"
           expanded={transcriptExpanded}
           onToggle={() => setTranscriptExpanded((current) => !current)}
         >
           {MOCK_TRANSCRIPT.map((paragraph, index) => (
             <View key={`${index}-${paragraph}`} style={{ gap: 6 }}>
-              <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '800', letterSpacing: 0.8 }}>
+              <Text style={{ color: theme.colors.textSubtle, fontSize: 12, fontWeight: '800', letterSpacing: 0.8 }}>
                 {`00:0${index + 2}`}
               </Text>
               <Text
-                style={{ color: '#1e293b', fontSize: 15, lineHeight: 25, fontWeight: '500' }}
+                style={{ color: theme.colors.text, fontSize: 15, lineHeight: 25, fontWeight: '500' }}
               >
                 {paragraph}
               </Text>
@@ -114,9 +113,9 @@ export default function RecordingResultsRoute() {
           borderRadius: 24,
           borderCurve: 'continuous',
           padding: 12,
-          backgroundColor: 'rgba(255,255,255,0.9)',
+          backgroundColor: theme.colors.card,
           borderWidth: 1,
-          borderColor: BORDER,
+          borderColor: theme.colors.border,
           boxShadow: '0 18px 36px rgba(15, 23, 42, 0.12)',
         }}
       >
@@ -130,11 +129,11 @@ export default function RecordingResultsRoute() {
             borderCurve: 'continuous',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: ORANGE,
+            backgroundColor: theme.colors.accent,
             opacity: pressed ? 0.92 : 1,
           })}
         >
-          <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '900' }}>
+          <Text style={{ color: theme.colors.accentContrast, fontSize: 16, fontWeight: '900' }}>
             Generate Quiz
           </Text>
         </Pressable>
@@ -148,11 +147,13 @@ function NotionSection({
   expanded,
   onToggle,
   children,
+  theme,
 }: {
   title: string;
   expanded: boolean;
   onToggle: () => void;
   children: React.ReactNode;
+  theme: ReturnType<typeof useAppTheme>;
 }) {
   return (
     <View
@@ -161,9 +162,9 @@ function NotionSection({
         borderCurve: 'continuous',
         padding: 18,
         gap: 14,
-        backgroundColor: CARD,
+        backgroundColor: theme.colors.card,
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: theme.colors.border,
         boxShadow: '0 16px 28px rgba(15, 23, 42, 0.08)',
       }}
     >
@@ -177,7 +178,7 @@ function NotionSection({
         })}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <Text style={{ color: INK, fontSize: 24, lineHeight: 30, fontWeight: '900' }}>
+          <Text style={{ color: theme.colors.text, fontSize: 24, lineHeight: 30, fontWeight: '900' }}>
             {title}
           </Text>
         </View>
@@ -189,14 +190,14 @@ function NotionSection({
             borderRadius: 999,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: expanded ? '#fff1e8' : '#f8fafc',
+            backgroundColor: expanded ? theme.colors.accentSoft : theme.colors.neutralSoft,
             borderWidth: 1,
-            borderColor: expanded ? '#fed7aa' : '#e2e8f0',
+            borderColor: expanded ? theme.colors.accentBorder : theme.colors.neutralBorder,
           }}
         >
           <Text
             style={{
-              color: expanded ? ORANGE : MUTED,
+              color: expanded ? theme.colors.accent : theme.colors.textMuted,
               fontSize: 18,
               fontWeight: '900',
             }}

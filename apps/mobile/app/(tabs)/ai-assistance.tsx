@@ -1,6 +1,7 @@
 import { BlurView } from 'expo-blur';
 import { Stack } from 'expo-router';
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { useAppTheme } from '../../providers/settings-provider';
 
 const LokiNativeVoiceVisualizer = require('../../components/ai/loki-native-voice-visualizer').default;
 
@@ -11,6 +12,7 @@ const prompts = [
 ];
 
 export default function AiAssistanceRoute() {
+  const theme = useAppTheme();
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
 
@@ -20,12 +22,13 @@ export default function AiAssistanceRoute() {
 
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={{
-          padding: 16,
-          gap: 12,
-          paddingBottom: 18,
-          backgroundColor: '#f7f6f2',
-        }}
+      contentContainerStyle={{
+        flexGrow: 1,
+        padding: 16,
+        gap: 12,
+        paddingBottom: 18,
+        backgroundColor: theme.colors.screen,
+      }}
       >
         <View
           pointerEvents="none"
@@ -72,11 +75,11 @@ export default function AiAssistanceRoute() {
           }}
         >
           <View style={{ gap: 2 }}>
-            <Text selectable style={{ color: '#475569', fontSize: 13, fontWeight: '700' }}>
+            <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '700' }}>
               AI assistant
             </Text>
-            <Text selectable style={{ color: '#0f172a', fontSize: 30, fontWeight: '800' }}>
-              Meet <Text style={{ color: '#ea580c' }}>Loki</Text>
+            <Text selectable style={{ color: theme.colors.text, fontSize: 30, fontWeight: '800' }}>
+              Meet <Text style={{ color: theme.colors.accent }}>Loki</Text>
             </Text>
           </View>
 
@@ -86,11 +89,13 @@ export default function AiAssistanceRoute() {
               borderCurve: 'continuous',
               paddingHorizontal: 12,
               paddingVertical: 8,
-              backgroundColor: pressed ? 'rgba(255,255,255,0.56)' : 'rgba(255,255,255,0.68)',
+              backgroundColor: pressed ? theme.colors.cardMuted : theme.colors.overlay,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
               boxShadow: '0 10px 20px rgba(15, 23, 42, 0.06)',
             })}
           >
-            <Text selectable style={{ color: '#64748b', fontSize: 12, fontWeight: '700' }}>
+            <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, fontWeight: '700' }}>
               History
             </Text>
           </Pressable>
@@ -111,17 +116,19 @@ export default function AiAssistanceRoute() {
 
         <BlurView
           intensity={24}
-          tint="light"
+          tint={theme.resolvedMode === 'dark' ? 'dark' : 'light'}
           style={{
             borderRadius: 24,
             overflow: 'hidden',
             borderCurve: 'continuous',
-            backgroundColor: 'rgba(255,255,255,0.48)',
+            backgroundColor: theme.colors.overlay,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
             boxShadow: '0 12px 26px rgba(15, 23, 42, 0.08)',
           }}
         >
           <View style={{ padding: 14, gap: 8 }}>
-            <Text selectable style={{ color: '#0f172a', fontSize: 17, fontWeight: '700' }}>
+            <Text selectable style={{ color: theme.colors.text, fontSize: 17, fontWeight: '700' }}>
               Suggested prompts
             </Text>
 
@@ -137,7 +144,9 @@ export default function AiAssistanceRoute() {
                   flexDirection: 'row',
                   gap: 8,
                   alignItems: 'center',
-                  backgroundColor: index === 0 ? 'rgba(255,243,230,0.92)' : 'rgba(248,250,252,0.88)',
+                  backgroundColor: index === 0 ? theme.colors.accentSoft : theme.colors.neutralSoft,
+                  borderWidth: 1,
+                  borderColor: index === 0 ? theme.colors.accentBorder : theme.colors.neutralBorder,
                 }}
               >
                 <Text selectable style={{ fontSize: 19 }}>
@@ -146,7 +155,13 @@ export default function AiAssistanceRoute() {
                 <Text
                   selectable
                   numberOfLines={2}
-                  style={{ flex: 1, color: '#334155', fontSize: 12.5, lineHeight: 16, fontWeight: '600' }}
+                  style={{
+                    flex: 1,
+                    color: theme.colors.textMuted,
+                    fontSize: 12.5,
+                    lineHeight: 16,
+                    fontWeight: '600',
+                  }}
                 >
                   {prompt}
                 </Text>
@@ -165,12 +180,12 @@ export default function AiAssistanceRoute() {
               alignItems: 'center',
               justifyContent: 'center',
               gap: 4,
-              backgroundColor: pressed ? '#f97316' : '#ea580c',
+              backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
               boxShadow: '0 16px 28px rgba(234, 88, 12, 0.18)',
             })}
           >
             <Text selectable style={{ fontSize: 22 }}>🎤</Text>
-            <Text selectable style={{ color: '#ffffff', fontSize: 15, fontWeight: '700' }}>
+            <Text selectable style={{ color: theme.colors.accentContrast, fontSize: 15, fontWeight: '700' }}>
               Speak
             </Text>
           </Pressable>
@@ -184,12 +199,14 @@ export default function AiAssistanceRoute() {
               alignItems: 'center',
               justifyContent: 'center',
               gap: 4,
-              backgroundColor: pressed ? 'rgba(15,23,42,0.90)' : 'rgba(15,23,42,0.84)',
+              backgroundColor: pressed ? theme.colors.neutralBorder : theme.colors.neutralSoft,
+              borderWidth: 1,
+              borderColor: theme.colors.neutralBorder,
               boxShadow: '0 16px 28px rgba(15, 23, 42, 0.16)',
             })}
           >
             <Text selectable style={{ fontSize: 22 }}>💬</Text>
-            <Text selectable style={{ color: '#ffffff', fontSize: 15, fontWeight: '700' }}>
+            <Text selectable style={{ color: theme.colors.text, fontSize: 15, fontWeight: '700' }}>
               Chat
             </Text>
           </Pressable>

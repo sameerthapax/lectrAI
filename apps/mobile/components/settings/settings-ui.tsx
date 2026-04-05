@@ -8,6 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useAppTheme } from '../../providers/settings-provider';
 
 export const ORANGE = '#ff6a00';
 export const INK = '#0b0b0b';
@@ -29,15 +30,18 @@ export function SettingsScreen({
   subtitle?: string;
   children: ReactNode;
 }) {
+  const theme = useAppTheme();
+
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{
+        flexGrow: 1,
         paddingHorizontal: 16,
         paddingTop: 18,
         paddingBottom: 32,
         gap: 14,
-        backgroundColor: CREAM,
+        backgroundColor: theme.colors.screen,
       }}
     >
       <View
@@ -60,15 +64,15 @@ export function SettingsScreen({
             borderCurve: 'continuous',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: 'rgba(255,255,255,0.72)',
+            backgroundColor: theme.resolvedMode === 'dark' ? '#20262b' : 'rgba(255,255,255,0.72)',
             borderWidth: 1,
-            borderColor: BORDER,
+            borderColor: theme.colors.border,
             opacity: pressed ? 0.88 : 1,
           })}
         >
-          <Text style={{ color: INK, fontSize: 18, fontWeight: '900' }}>←</Text>
+          <Text style={{ color: theme.colors.text, fontSize: 18, fontWeight: '900' }}>←</Text>
         </Pressable>
-        <Text style={{ color: INK, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
+        <Text style={{ color: theme.colors.text, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
           {title}
         </Text>
       </View>
@@ -78,7 +82,7 @@ export function SettingsScreen({
           style={{
             marginTop: -4,
             textAlign: 'center',
-            color: MUTED,
+            color: theme.colors.textMuted,
             fontSize: 14,
             lineHeight: 21,
             paddingHorizontal: 20,
@@ -102,24 +106,26 @@ export function SectionCard({
   description?: string;
   children: ReactNode;
 }) {
+  const theme = useAppTheme();
+
   return (
     <View
       style={{
         borderRadius: 24,
         borderCurve: 'continuous',
-        backgroundColor: CARD,
+        backgroundColor: theme.colors.card,
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: theme.colors.border,
         padding: 18,
         gap: 16,
       }}
     >
       <View style={{ gap: description ? 6 : 0 }}>
-        <Text style={{ color: INK, fontSize: 22, lineHeight: 28, fontWeight: '900' }}>
+        <Text style={{ color: theme.colors.text, fontSize: 22, lineHeight: 28, fontWeight: '900' }}>
           {title}
         </Text>
         {description ? (
-          <Text style={{ color: MUTED, fontSize: 14, lineHeight: 21 }}>{description}</Text>
+          <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 21 }}>{description}</Text>
         ) : null}
       </View>
       {children}
@@ -136,15 +142,17 @@ export function SettingsLinkCard({
   description: string;
   onPress: () => void;
 }) {
+  const theme = useAppTheme();
+
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => ({
         borderRadius: 24,
         borderCurve: 'continuous',
-        backgroundColor: CARD,
+        backgroundColor: theme.colors.card,
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: theme.colors.border,
         padding: 18,
         gap: 8,
         opacity: pressed ? 0.94 : 1,
@@ -159,12 +167,12 @@ export function SettingsLinkCard({
         }}
       >
         <View style={{ flex: 1, gap: 6 }}>
-          <Text style={{ color: INK, fontSize: 20, lineHeight: 25, fontWeight: '900' }}>
+          <Text style={{ color: theme.colors.text, fontSize: 20, lineHeight: 25, fontWeight: '900' }}>
             {title}
           </Text>
-          <Text style={{ color: MUTED, fontSize: 14, lineHeight: 21 }}>{description}</Text>
+          <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 21 }}>{description}</Text>
         </View>
-        <Text style={{ color: ORANGE, fontSize: 24, fontWeight: '800' }}>›</Text>
+        <Text style={{ color: theme.colors.accent, fontSize: 24, fontWeight: '800' }}>›</Text>
       </View>
     </Pressable>
   );
@@ -185,13 +193,15 @@ export function ProfileField({
   keyboardType?: 'default' | 'email-address' | 'number-pad';
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
 }) {
+  const theme = useAppTheme();
+
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: '#3d3328', fontSize: 14, fontWeight: '800' }}>{label}</Text>
+      <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{label}</Text>
       <TextInput
         value={value}
         placeholder={placeholder}
-        placeholderTextColor="#9b8f81"
+        placeholderTextColor={theme.colors.inputPlaceholder}
         keyboardType={keyboardType}
         autoCapitalize={autoCapitalize ?? 'words'}
         onChangeText={onChangeText}
@@ -200,10 +210,10 @@ export function ProfileField({
           borderRadius: 16,
           borderCurve: 'continuous',
           borderWidth: 1,
-          borderColor: '#e2d6c7',
-          backgroundColor: '#ffffff',
+          borderColor: theme.colors.inputBorder,
+          backgroundColor: theme.colors.inputBackground,
           paddingHorizontal: 14,
-          color: INK,
+          color: theme.colors.text,
           fontSize: 15,
           fontWeight: '600',
         }}
@@ -223,6 +233,8 @@ export function ToggleRow({
   value: boolean;
   onValueChange: (value: boolean) => void;
 }) {
+  const theme = useAppTheme();
+
   return (
     <View
       style={{
@@ -233,21 +245,23 @@ export function ToggleRow({
       }}
     >
       <View style={{ flex: 1, gap: 4 }}>
-        <Text style={{ color: INK, fontSize: 16, lineHeight: 21, fontWeight: '800' }}>
+        <Text style={{ color: theme.colors.text, fontSize: 16, lineHeight: 21, fontWeight: '800' }}>
           {title}
         </Text>
-        <Text style={{ color: MUTED, fontSize: 14, lineHeight: 20 }}>{description}</Text>
+        <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20 }}>{description}</Text>
       </View>
       <Switch
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: '#d8cec0', true: '#ffb480' }}
-        thumbColor={value ? ORANGE : '#f8f1e6'}
+        trackColor={{ false: theme.colors.switchTrackOff, true: theme.colors.switchTrackOn }}
+        thumbColor={value ? theme.colors.switchThumbOn : theme.colors.switchThumbOff}
       />
     </View>
   );
 }
 
 export function Divider() {
-  return <View style={{ height: 1, backgroundColor: '#eee3d5' }} />;
+  const theme = useAppTheme();
+
+  return <View style={{ height: 1, backgroundColor: theme.colors.hairline }} />;
 }

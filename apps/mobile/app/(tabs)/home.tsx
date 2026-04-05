@@ -37,6 +37,7 @@ import { useSettings } from '../../providers/settings-provider';
 export default function HomeRoute() {
   const auth = useAuth();
   const settingsState = useSettings();
+  const theme = settingsState.theme;
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
   const [courses, setCourses] = useState<LocalCourseRecord[]>([]);
@@ -274,7 +275,7 @@ export default function HomeRoute() {
       }).start(() => {
         setRecordingVisible(false);
         if (navigateToResults) {
-          router.push('/recording-results');
+          router.push('/recording-results-page');
         }
       });
     } catch (error) {
@@ -351,16 +352,17 @@ export default function HomeRoute() {
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#f7f6f2' }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
       <Animated.View style={{ flex: 1, transform: [{ scale: contentScale }] }}>
         <ScrollView
           scrollEnabled={!recordingVisible}
           contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={{
+            flexGrow: 1,
             padding: 16,
             gap: 12,
             paddingBottom: 32,
-            backgroundColor: '#f7f6f2',
+            backgroundColor: theme.colors.screen,
           }}
         >
           <View
@@ -430,9 +432,9 @@ export default function HomeRoute() {
                 paddingHorizontal: 16,
                 paddingVertical: 14,
                 justifyContent: 'space-between',
-                backgroundColor: 'rgba(255,255,255,0.72)',
+                backgroundColor: theme.colors.overlay,
                 borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.7)',
+                borderColor: theme.colors.border,
                 opacity: recordingVisible ? 0.3 : recordingBusy || pressed ? 0.9 : 1,
                 boxShadow: pressed
                   ? '0 10px 20px rgba(15, 23, 42, 0.06)'
@@ -452,9 +454,9 @@ export default function HomeRoute() {
                     width: 160,
                     height: 160,
                     borderRadius: 48,
-                    backgroundColor: '#fff8f2',
+                    backgroundColor: theme.colors.cardMuted,
                     borderWidth: 1,
-                    borderColor: '#fdddc7',
+                    borderColor: theme.colors.border,
                     alignItems: 'center',
                     justifyContent: 'center',
                     boxShadow: '0 22px 38px rgba(249, 115, 22, 0.14)',
@@ -497,10 +499,10 @@ export default function HomeRoute() {
               </View>
 
               <View style={{ gap: 4 }}>
-                <Text selectable style={{ fontSize: 9, letterSpacing: 1.2, color: '#ef4444', fontWeight: '800', textTransform: 'uppercase' }}>
+                <Text selectable style={{ fontSize: 9, letterSpacing: 1.2, color: theme.colors.danger, fontWeight: '800', textTransform: 'uppercase' }}>
                   Recording
                 </Text>
-                <Text selectable style={{ fontSize: 18, lineHeight: 22, color: '#111827', fontWeight: '800' }}>
+                <Text selectable style={{ fontSize: 18, lineHeight: 22, color: theme.colors.text, fontWeight: '800' }}>
                   Record lecture
                 </Text>
               </View>
@@ -523,132 +525,17 @@ export default function HomeRoute() {
                   padding: 12,
                   justifyContent: 'center',
                   alignItems: 'center',
-                  backgroundColor: 'rgba(255,255,255,0.68)',
+                  backgroundColor: theme.colors.overlay,
                   borderWidth: 1,
-                  borderColor: 'rgba(255,255,255,0.66)',
+                  borderColor: theme.colors.border,
                   boxShadow: '0 14px 30px rgba(15, 23, 42, 0.10)',
                 }}
               >
                 <Text selectable style={{ fontSize: 32, textAlign: 'center' }}>🧠</Text>
-                <Text selectable style={{ marginTop: 4, fontSize: 14, color: '#334155', fontWeight: '700' }}>
+                <Text selectable style={{ marginTop: 4, fontSize: 14, color: theme.colors.textMuted, fontWeight: '700' }}>
                   Exam review
                 </Text>
               </View>
-            </View>
-          </View>
-
-          <View
-            style={{
-              borderRadius: 30,
-              borderCurve: 'continuous',
-              padding: 16,
-              gap: 12,
-              backgroundColor: 'rgba(255,255,255,0.76)',
-              borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.7)',
-              boxShadow: '0 20px 44px rgba(15, 23, 42, 0.12)',
-            }}
-          >
-            <View
-              style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
-            >
-              <Text selectable style={{ color: '#111827', fontSize: 22, fontWeight: '800' }}>
-                Quick quiz
-              </Text>
-              <View
-                style={{
-                  borderRadius: 999,
-                  paddingHorizontal: 11,
-                  paddingVertical: 7,
-                  backgroundColor: '#fff1e8',
-                }}
-              >
-                <Text
-                  selectable
-                  style={{ color: '#c2410c', fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}
-                >
-                  04/10
-                </Text>
-              </View>
-            </View>
-
-            <View
-              style={{
-                height: 94,
-                borderRadius: 22,
-                borderCurve: 'continuous',
-                padding: 14,
-                justifyContent: 'center',
-                backgroundColor: '#fff8f1',
-                borderWidth: 1,
-                borderColor: '#fde6d5',
-              }}
-            >
-              <Text
-                selectable
-                adjustsFontSizeToFit
-                minimumFontScale={0.72}
-                numberOfLines={3}
-                style={{
-                  color: '#7c2d12',
-                  fontSize: isCompact ? 20 : 22,
-                  lineHeight: isCompact ? 24 : 26,
-                  fontWeight: '800',
-                }}
-              >
-                Which LectrAI component retrieves relevant lecture segments before generating a grounded answer?
-              </Text>
-            </View>
-
-            <View style={{ gap: 8 }}>
-              {quizOptions.map((option, index) => (
-                <View
-                  key={option}
-                  style={{
-                    minHeight: 58,
-                    borderRadius: 18,
-                    borderCurve: 'continuous',
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    flexDirection: 'row',
-                    gap: 10,
-                    alignItems: 'center',
-                    backgroundColor: index === 1 ? '#eefbf3' : '#f8fafc',
-                    borderWidth: 1,
-                    borderColor: index === 1 ? '#bbf7d0' : '#e5e7eb',
-                  }}
-                >
-                  <View
-                    style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 14,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: index === 1 ? '#16a34a' : '#e2e8f0',
-                    }}
-                  >
-                    <Text selectable style={{ color: index === 1 ? '#ffffff' : '#475569', fontSize: 13, fontWeight: '800' }}>
-                      {String.fromCharCode(65 + index)}
-                    </Text>
-                  </View>
-                  <Text
-                    selectable
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.82}
-                    numberOfLines={2}
-                    style={{
-                      flex: 1,
-                      color: '#1f2937',
-                      fontSize: 14,
-                      lineHeight: 18,
-                      fontWeight: index === 1 ? '700' : '600',
-                    }}
-                  >
-                    {option}
-                  </Text>
-                </View>
-              ))}
             </View>
           </View>
 
@@ -675,22 +562,138 @@ export default function HomeRoute() {
                   flexDirection: 'row',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  backgroundColor: 'rgba(255,255,255,0.72)',
+                  backgroundColor: theme.colors.overlay,
                   borderWidth: 1,
-                  borderColor: 'rgba(255,255,255,0.68)',
+                  borderColor: theme.colors.border,
                   boxShadow: '0 14px 28px rgba(15, 23, 42, 0.10)',
                 }}
               >
                 <Text selectable style={{ fontSize: 22 }}>{stat.label}</Text>
                 <Text
                   selectable
-                  style={{ color: '#0f172a', fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}
+                  style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}
                 >
                   {stat.value}
                 </Text>
               </View>
             ))}
           </View>
+
+          <View
+            style={{
+              borderRadius: 30,
+              borderCurve: 'continuous',
+              padding: 16,
+              gap: 12,
+              backgroundColor: theme.colors.overlay,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              boxShadow: '0 20px 44px rgba(15, 23, 42, 0.12)',
+            }}
+          >
+            <View
+              style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+            >
+              <Text selectable style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800' }}>
+                Quick quiz
+              </Text>
+              <View
+                style={{
+                  borderRadius: 999,
+                  paddingHorizontal: 11,
+                  paddingVertical: 7,
+                  backgroundColor: theme.colors.accentSoft,
+                }}
+              >
+                <Text
+                  selectable
+                  style={{ color: theme.colors.accentMuted, fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}
+                >
+                  04/10
+                </Text>
+              </View>
+            </View>
+
+            <View
+              style={{
+                height: 94,
+                borderRadius: 22,
+                borderCurve: 'continuous',
+                padding: 14,
+                justifyContent: 'center',
+                backgroundColor: theme.colors.cardMuted,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+              }}
+            >
+              <Text
+                selectable
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                numberOfLines={3}
+                style={{
+                  color: theme.colors.text,
+                  fontSize: isCompact ? 20 : 22,
+                  lineHeight: isCompact ? 24 : 26,
+                  fontWeight: '800',
+                }}
+              >
+                Which LectrAI component retrieves relevant lecture segments before generating a grounded answer?
+              </Text>
+            </View>
+
+            <View style={{ gap: 8 }}>
+              {quizOptions.map((option, index) => (
+                <View
+                  key={option}
+                  style={{
+                    minHeight: 58,
+                    borderRadius: 18,
+                    borderCurve: 'continuous',
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    flexDirection: 'row',
+                    gap: 10,
+                    alignItems: 'center',
+                    backgroundColor: index === 1 ? theme.colors.successSoft : theme.colors.neutralSoft,
+                    borderWidth: 1,
+                    borderColor: index === 1 ? theme.colors.successBorder : theme.colors.neutralBorder,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: index === 1 ? theme.colors.success : theme.colors.neutralBorder,
+                    }}
+                  >
+                    <Text selectable style={{ color: index === 1 ? '#ffffff' : theme.colors.textMuted, fontSize: 13, fontWeight: '800' }}>
+                      {String.fromCharCode(65 + index)}
+                    </Text>
+                  </View>
+                  <Text
+                    selectable
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.82}
+                    numberOfLines={2}
+                    style={{
+                      flex: 1,
+                      color: theme.colors.text,
+                      fontSize: 14,
+                      lineHeight: 18,
+                      fontWeight: index === 1 ? '700' : '600',
+                    }}
+                  >
+                    {option}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
         </ScrollView>
       </Animated.View>
 
@@ -707,11 +710,11 @@ export default function HomeRoute() {
         >
           <BlurView
             intensity={55}
-            tint="light"
+            tint={theme.resolvedMode === 'dark' ? 'dark' : 'light'}
             style={{
               position: 'absolute',
               inset: 0,
-              backgroundColor: 'rgba(248, 250, 252, 0.36)',
+              backgroundColor: theme.resolvedMode === 'dark' ? 'rgba(10, 13, 16, 0.54)' : 'rgba(248, 250, 252, 0.36)',
             }}
           />
 
@@ -721,9 +724,9 @@ export default function HomeRoute() {
               borderRadius: 34,
               borderCurve: 'continuous',
               padding: 24,
-              backgroundColor: 'rgba(255,255,255,0.92)',
+              backgroundColor: theme.colors.card,
               borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.86)',
+              borderColor: theme.colors.border,
               alignItems: 'center',
               gap: 18,
               boxShadow: '0 24px 48px rgba(15, 23, 42, 0.18)',
@@ -738,7 +741,7 @@ export default function HomeRoute() {
                 paddingHorizontal: 12,
                 paddingVertical: 7,
                 borderRadius: 999,
-                backgroundColor: '#fff1f2',
+                backgroundColor: theme.colors.dangerSoft,
               }}
             >
               <Animated.View
@@ -746,14 +749,14 @@ export default function HomeRoute() {
                   width: 10,
                   height: 10,
                   borderRadius: 999,
-                  backgroundColor: '#ef4444',
+                  backgroundColor: theme.colors.danger,
                   opacity: recordingPulse.interpolate({
                     inputRange: [0, 1],
                     outputRange: [0.45, 1],
                   }),
                 }}
               />
-              <Text style={{ fontSize: 11, letterSpacing: 1.4, color: '#ef4444', fontWeight: '900', textTransform: 'uppercase' }}>
+              <Text style={{ fontSize: 11, letterSpacing: 1.4, color: theme.colors.danger, fontWeight: '900', textTransform: 'uppercase' }}>
                 Recording in progress
               </Text>
             </View>
@@ -765,7 +768,7 @@ export default function HomeRoute() {
                   width: 170,
                   height: 170,
                   borderRadius: 999,
-                  backgroundColor: '#fee2e2',
+                  backgroundColor: theme.colors.dangerBorder,
                   opacity: pulseOpacity,
                   transform: [{ scale: pulseScale }, { scale: outerRingScale }],
                 }}
@@ -851,7 +854,15 @@ export default function HomeRoute() {
             </View>
 
             <View style={{ alignItems: 'center', gap: 8 }}>
-              <Text style={{ fontSize: 34, lineHeight: 40, color: '#111827', fontWeight: '900', fontVariant: ['tabular-nums'] }}>
+              <Text
+                style={{
+                  fontSize: 34,
+                  lineHeight: 40,
+                  color: theme.colors.text,
+                  fontWeight: '900',
+                  fontVariant: ['tabular-nums'],
+                }}
+              >
                 {formattedRecordingTime}
               </Text>
             </View>
@@ -891,13 +902,13 @@ export default function HomeRoute() {
                   borderCurve: 'continuous',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  backgroundColor: '#f8fafc',
+                  backgroundColor: theme.colors.neutralSoft,
                   borderWidth: 1,
-                  borderColor: '#e2e8f0',
+                  borderColor: theme.colors.neutralBorder,
                   opacity: pressed ? 0.92 : 1,
                 })}
               >
-                <Text style={{ color: '#334155', fontSize: 15, fontWeight: '800' }}>Cancel</Text>
+                <Text style={{ color: theme.colors.textMuted, fontSize: 15, fontWeight: '800' }}>Cancel</Text>
               </Pressable>
 
               <Pressable
@@ -912,7 +923,7 @@ export default function HomeRoute() {
                   borderCurve: 'continuous',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  backgroundColor: '#ef4444',
+                  backgroundColor: theme.colors.danger,
                   opacity: pressed ? 0.92 : 1,
                 })}
               >
