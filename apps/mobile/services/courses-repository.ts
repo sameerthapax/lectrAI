@@ -1,6 +1,11 @@
 import type { AuthUser } from './auth-api';
 import type { RemoteCoursePayload, RemoteCourseRecord } from './courses-api';
-import { getMetaValue, initializeLocalDatabase, setMetaValue } from './local-db';
+import {
+  getMetaValue,
+  initializeLocalDatabase,
+  runSerializedLocalWrite,
+  setMetaValue,
+} from './local-db';
 
 export type SemesterTerm = 'Winter' | 'Spring' | 'Summer' | 'Fall';
 export const NO_CLASS_COURSE_ID = 'no-class';
@@ -128,15 +133,15 @@ export async function listCoursesForUser(user: AuthUser) {
 }
 
 export async function replaceCoursesForUser(user: AuthUser, courses: RemoteCourseRecord[]) {
-  const db = await initializeLocalDatabase();
+  await runSerializedLocalWrite(async (db) => {
+    await db.withTransactionAsync(async () => {
+      await ensureLocalUser(db, user);
+      await db.runAsync('DELETE FROM cached_courses WHERE owner_user_id = ?', [user.id]);
 
-  await db.withTransactionAsync(async () => {
-    await ensureLocalUser(db, user);
-    await db.runAsync('DELETE FROM cached_courses WHERE owner_user_id = ?', [user.id]);
-
-    for (const course of courses) {
-      await upsertCourseRecord(db, course);
-    }
+      for (const course of courses) {
+        await upsertCourseRecord(db, course);
+      }
+    });
   });
 }
 

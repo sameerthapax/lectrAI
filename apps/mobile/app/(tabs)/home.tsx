@@ -8,7 +8,7 @@ import {
   useAudioRecorderState,
 } from 'expo-audio';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Alert,
@@ -33,6 +33,19 @@ import {
   type LocalCourseRecord,
 } from '../../services/courses-repository';
 import { useSettings } from '../../providers/settings-provider';
+import { fetchStatsOverview, incrementStreak } from '../../services/stats-api';
+import {
+  getCachedStatsForUser,
+  upsertStatsForUser,
+  type LocalStatsRecord,
+} from '../../services/stats-repository';
+
+const DIGIT_HEIGHT = 28;
+const DIGIT_WIDTH = 16;
+const DIGIT_GAP = 1;
+const MIN_STREAK_DIGITS = 2;
+const DIGIT_REPEAT_COUNT = 24;
+const DIGIT_REPEAT_OFFSET = 10;
 
 export default function HomeRoute() {
   const auth = useAuth();
@@ -41,13 +54,17 @@ export default function HomeRoute() {
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
   const [courses, setCourses] = useState<LocalCourseRecord[]>([]);
+  const [stats, setStats] = useState<LocalStatsRecord | null>(null);
   const [selectedCourseId, setSelectedCourseIdState] = useState(NO_CLASS_COURSE_ID);
   const [recordingVisible, setRecordingVisible] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
+  const [streakBusy, setStreakBusy] = useState(false);
   const recordingOverlay = useRef(new Animated.Value(0)).current;
   const recordingPulse = useRef(new Animated.Value(0)).current;
   const recordingFloat = useRef(new Animated.Value(0)).current;
   const recordingShimmer = useRef(new Animated.Value(0)).current;
+  const streakValue = useRef(new Animated.Value(0)).current;
+  const hasAnimatedInitialStreak = useRef(false);
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
     isMeteringEnabled: true,
@@ -107,9 +124,102 @@ export default function HomeRoute() {
     }, [auth.user?.id])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      const user = auth.user;
+      let cancelled = false;
+
+      const loadStats = async () => {
+        if (!user) {
+          if (!cancelled) {
+            setStats(null);
+            hasAnimatedInitialStreak.current = false;
+            streakValue.setValue(0);
+          }
+          return;
+        }
+
+        const cachedStats = await getCachedStatsForUser(user);
+
+        if (!cancelled) {
+          setStats(cachedStats);
+
+          if (!hasAnimatedInitialStreak.current) {
+            hasAnimatedInitialStreak.current = true;
+            animateStreakValue(streakValue, 0, cachedStats.streakDays, 3000);
+          } else {
+            streakValue.setValue(cachedStats.streakDays);
+          }
+        }
+
+        try {
+          const accessToken = await auth.getValidAccessToken();
+
+          if (!accessToken) {
+            throw new Error('Your session expired. Please sign in again.');
+          }
+
+          const remoteStats = await fetchStatsOverview(accessToken);
+          await upsertStatsForUser(user, remoteStats);
+          const nextStats = await getCachedStatsForUser(user);
+
+          if (!cancelled) {
+            const previousStreak = cachedStats.streakDays;
+            setStats(nextStats);
+
+            if (nextStats.streakDays !== previousStreak) {
+              animateStreakValue(streakValue, previousStreak, nextStats.streakDays, 450);
+            } else {
+              streakValue.setValue(nextStats.streakDays);
+            }
+          }
+        } catch {
+          // Keep cached stats visible when the sync request fails.
+        }
+      };
+
+      void loadStats();
+
+      return () => {
+        cancelled = true;
+        streakValue.stopAnimation();
+      };
+    }, [auth.user?.id, streakValue])
+  );
+
   const handleSelectCourse = async (courseId: string) => {
     setSelectedCourseIdState(courseId);
     await setSelectedCourseId(courseId);
+  };
+
+  const handleIncrementStreak = async () => {
+    if (!auth.user || streakBusy) {
+      return;
+    }
+
+    const previousStreak = stats?.streakDays ?? 0;
+    setStreakBusy(true);
+
+    try {
+      const accessToken = await auth.getValidAccessToken();
+
+      if (!accessToken) {
+        throw new Error('Your session expired. Please sign in again.');
+      }
+
+      const remoteStats = await incrementStreak(accessToken);
+      await upsertStatsForUser(auth.user, remoteStats);
+      const nextStats = await getCachedStatsForUser(auth.user);
+      setStats(nextStats);
+      animateStreakValue(streakValue, previousStreak, nextStats.streakDays, 450);
+    } catch (error) {
+      Alert.alert(
+        'Could not update streak',
+        error instanceof Error ? error.message : 'Please try again.'
+      );
+    } finally {
+      setStreakBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -350,6 +460,8 @@ export default function HomeRoute() {
       normalizedMeter * (30 + multiplier * 34) +
       (index % 2 === 0 ? 10 : 2)
   );
+  const statsSummary = stats ?? EMPTY_STATS;
+  const statsCardScale = getStatsCardScale(statsSummary);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
@@ -545,38 +657,68 @@ export default function HomeRoute() {
               gap: 10,
             }}
           >
-            {[
-              { label: '🔥', value: '5', tint: '#fff1e8' },
-              { label: '📈', value: '84%', tint: '#eefbf3' },
-              { label: '📚', value: '4', tint: '#eff6ff' },
-            ].map((stat) => (
-              <View
-                key={stat.label}
-                style={{
-                  flex: 1,
-                  minHeight: 70,
-                  borderRadius: 20,
-                  borderCurve: 'continuous',
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  backgroundColor: theme.colors.overlay,
-                  borderWidth: 1,
-                  borderColor: theme.colors.border,
-                  boxShadow: '0 14px 28px rgba(15, 23, 42, 0.10)',
-                }}
-              >
-                <Text selectable style={{ fontSize: 22 }}>{stat.label}</Text>
+            <StatCard
+              disabled={streakBusy}
+              icon="🔥"
+              label="Streak"
+              onPress={handleIncrementStreak}
+              scale={statsCardScale}
+              theme={theme}
+              value={(
+                <RollingNumber
+                  animatedValue={streakValue}
+                  color={theme.colors.text}
+                  scale={statsCardScale}
+                  value={statsSummary.streakDays}
+                />
+              )}
+            />
+            <StatCard
+              icon="📈"
+              label="Semester"
+              scale={statsCardScale}
+              theme={theme}
+              value={
                 <Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.8}
+                  numberOfLines={1}
                   selectable
-                  style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}
+                  style={{
+                    color: theme.colors.text,
+                    fontSize: 22 * statsCardScale,
+                    fontWeight: '800',
+                    lineHeight: 26 * statsCardScale,
+                    fontVariant: ['tabular-nums'],
+                  }}
                 >
-                  {stat.value}
+                  {statsSummary.progressPercent}%
                 </Text>
-              </View>
-            ))}
+              }
+            />
+            <StatCard
+              icon="📚"
+              label="Courses"
+              scale={statsCardScale}
+              theme={theme}
+              value={
+                <Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.8}
+                  numberOfLines={1}
+                  selectable
+                  style={{
+                    color: theme.colors.text,
+                    fontSize: 22 * statsCardScale,
+                    fontWeight: '800',
+                    lineHeight: 26 * statsCardScale,
+                    fontVariant: ['tabular-nums'],
+                  }}
+                >
+                  {statsSummary.coursesThisSemester}
+                </Text>
+              }
+            />
           </View>
 
           <View
@@ -935,4 +1077,295 @@ export default function HomeRoute() {
       ) : null}
     </View>
   );
+}
+
+const EMPTY_STATS: LocalStatsRecord = {
+  userId: '',
+  streakDays: 0,
+  progressPercent: 0,
+  coursesThisSemester: 0,
+  currentSemesterLabel: '',
+  lastIncrementedOn: null,
+  syncStatus: 'pending_pull',
+  createdAt: null,
+  updatedAt: null,
+};
+
+function animateStreakValue(
+  animatedValue: Animated.Value,
+  fromValue: number,
+  toValue: number,
+  duration: number
+) {
+  animatedValue.stopAnimation();
+  animatedValue.setValue(fromValue);
+
+  Animated.timing(animatedValue, {
+    toValue,
+    duration,
+    easing: Easing.out(Easing.cubic),
+    useNativeDriver: false,
+  }).start();
+}
+
+function StatCard({
+  disabled,
+  icon,
+  label,
+  onPress,
+  scale,
+  theme,
+  value,
+}: {
+  disabled?: boolean;
+  icon: string;
+  label: string;
+  onPress?: () => void;
+  scale: number;
+  theme: ReturnType<typeof useSettings>['theme'];
+  value: ReactNode;
+}) {
+  const content = (
+    <View
+      style={{
+        width: '100%',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          alignSelf: 'center',
+          justifyContent: 'center',
+          gap: 4 * scale,
+        }}
+      >
+        <Text
+          numberOfLines={1}
+          selectable
+          style={{
+            fontSize: 15 * scale,
+            lineHeight: 17 * scale,
+          }}
+        >
+          {icon}
+        </Text>
+        <Text
+          numberOfLines={1}
+          selectable
+          style={{
+            color: theme.colors.textMuted,
+            fontSize: 11 * scale,
+            lineHeight: 13 * scale,
+            fontWeight: '700',
+          }}
+        >
+          {label}
+        </Text>
+      </View>
+      <View
+        style={{
+          flex: 1,
+          minWidth: 0,
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+          marginTop: 4 * scale,
+        }}
+      >
+        {value}
+      </View>
+    </View>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable
+        disabled={disabled}
+        onPress={onPress}
+        style={({ pressed }) => ({
+          ...statCardContainerStyle(theme),
+          opacity: disabled ? 0.62 : pressed ? 0.92 : 1,
+        })}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return <View style={statCardContainerStyle(theme)}>{content}</View>;
+}
+
+function RollingNumber({
+  animatedValue,
+  color,
+  scale,
+  value,
+}: {
+  animatedValue: Animated.Value;
+  color: string;
+  scale: number;
+  value: number;
+}) {
+  const safeValue = Math.max(0, value);
+  const digitCount = Math.max(MIN_STREAK_DIGITS, String(safeValue).length);
+  const places = Array.from({ length: digitCount }, (_, index) =>
+    10 ** (digitCount - index - 1)
+  );
+  const intrinsicWidth = digitCount * DIGIT_WIDTH + (digitCount - 1) * DIGIT_GAP;
+  const scaledDigitHeight = DIGIT_HEIGHT * scale;
+  const scaledWidth = intrinsicWidth * scale;
+
+  return (
+    <View
+      style={{
+        width: scaledWidth,
+        height: scaledDigitHeight,
+        justifyContent: 'center',
+        alignItems: 'center',
+        overflow: 'hidden',
+      }}
+    >
+      <View
+        style={{
+          width: intrinsicWidth,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: DIGIT_GAP,
+          transform: [{ scale }],
+        }}
+      >
+        {places.map((place) => (
+          <RollingDigit
+            key={place}
+            animatedValue={animatedValue}
+            color={color}
+            place={place}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function RollingDigit({
+  animatedValue,
+  color,
+  place,
+}: {
+  animatedValue: Animated.Value;
+  color: string;
+  place: number;
+}) {
+  const translateY = useRef(
+    new Animated.Value(-(DIGIT_REPEAT_OFFSET * 10) * DIGIT_HEIGHT)
+  ).current;
+  const stepRef = useRef(0);
+
+  useEffect(() => {
+    stepRef.current = 0;
+    translateY.setValue(-(DIGIT_REPEAT_OFFSET * 10) * DIGIT_HEIGHT);
+
+    const listenerId = animatedValue.addListener(({ value }) => {
+      const nextStep = Math.floor(Math.max(0, value) / place);
+
+      if (nextStep === stepRef.current) {
+        return;
+      }
+
+      stepRef.current = nextStep;
+      translateY.stopAnimation();
+      Animated.timing(translateY, {
+        toValue: -(DIGIT_REPEAT_OFFSET * 10 + nextStep) * DIGIT_HEIGHT,
+        duration: place === 1 ? 90 : 140,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+
+    return () => {
+      animatedValue.removeListener(listenerId);
+    };
+  }, [animatedValue, place, translateY]);
+
+  return (
+    <View
+      style={{
+        width: DIGIT_WIDTH,
+        height: DIGIT_HEIGHT,
+        overflow: 'hidden',
+      }}
+    >
+      <Animated.View style={{ transform: [{ translateY }] }}>
+        {DIGIT_STRIP.map((value, index) => (
+          <Text
+            key={`${value}-${index}`}
+            selectable
+            style={{
+              height: DIGIT_HEIGHT,
+              width: DIGIT_WIDTH,
+              color,
+              fontSize: 22,
+              lineHeight: DIGIT_HEIGHT,
+              fontWeight: '800',
+              textAlign: 'center',
+              fontVariant: ['tabular-nums'],
+            }}
+          >
+            {value}
+          </Text>
+        ))}
+      </Animated.View>
+    </View>
+  );
+}
+
+const DIGITS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] as const;
+const DIGIT_STRIP = Array.from(
+  { length: DIGIT_REPEAT_COUNT * DIGITS.length },
+  (_, index) => DIGITS[index % DIGITS.length]
+);
+
+function getStatsCardScale(stats: Pick<LocalStatsRecord, 'streakDays' | 'progressPercent' | 'coursesThisSemester'>) {
+  const longestValueLength = Math.max(
+    String(Math.max(0, stats.streakDays)).length,
+    `${Math.max(0, stats.progressPercent)}%`.length,
+    String(Math.max(0, stats.coursesThisSemester)).length
+  );
+
+  if (longestValueLength >= 6) {
+    return 0.82;
+  }
+
+  if (longestValueLength === 5) {
+    return 0.9;
+  }
+
+  if (longestValueLength === 4) {
+    return 0.96;
+  }
+
+  return 1;
+}
+
+function statCardContainerStyle(theme: ReturnType<typeof useSettings>['theme']) {
+  return {
+    flex: 1,
+    minHeight: 70,
+    borderRadius: 20,
+    borderCurve: 'continuous' as const,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    overflow: 'hidden' as const,
+    backgroundColor: theme.colors.overlay,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    boxShadow: '0 14px 28px rgba(15, 23, 42, 0.10)',
+  };
 }

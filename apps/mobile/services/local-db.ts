@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 const DATABASE_NAME = 'lectrai-cache.db';
 
-export const LOCAL_CACHE_SCHEMA_VERSION = 3;
+export const LOCAL_CACHE_SCHEMA_VERSION = 4;
 
 const SYNC_STATUS_CHECK = `
 CHECK (sync_status IN ('synced', 'pending_pull', 'pending_push', 'conflict'))
@@ -106,6 +106,20 @@ CREATE TABLE IF NOT EXISTS cached_user_settings (
   preferred_quiz_question_count INTEGER,
   preferred_quiz_difficulty TEXT,
   chat_response_max_tokens INTEGER,
+  created_at TEXT,
+  updated_at TEXT,
+  sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
+  dirty_fields_json TEXT,
+  last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS cached_user_stats (
+  user_id TEXT PRIMARY KEY NOT NULL REFERENCES cached_users(id) ON DELETE CASCADE,
+  streak_days INTEGER NOT NULL DEFAULT 0,
+  progress_percent INTEGER NOT NULL DEFAULT 0,
+  courses_this_semester INTEGER NOT NULL DEFAULT 0,
+  current_semester_label TEXT,
+  last_incremented_on TEXT,
   created_at TEXT,
   updated_at TEXT,
   sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
@@ -527,6 +541,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_outbox_status_created_at ON sync_outbox(stat
 CREATE INDEX IF NOT EXISTS idx_downloaded_assets_owner ON downloaded_assets(owner_type, owner_id);
 CREATE INDEX IF NOT EXISTS idx_cached_course_members_course_id ON cached_course_members(course_id);
 CREATE INDEX IF NOT EXISTS idx_cached_course_members_user_id ON cached_course_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_cached_user_stats_sync_status ON cached_user_stats(sync_status);
 CREATE INDEX IF NOT EXISTS idx_cached_lectures_course_id ON cached_lectures(course_id);
 CREATE INDEX IF NOT EXISTS idx_cached_lectures_updated_at ON cached_lectures(updated_at);
 CREATE INDEX IF NOT EXISTS idx_cached_lecture_tags_lecture_id ON cached_lecture_tags(lecture_id);
@@ -579,6 +594,7 @@ const CLEAR_TABLES = [
   'cached_lectures',
   'cached_course_members',
   'cached_courses',
+  'cached_user_stats',
   'cached_user_settings',
   'cached_users',
   'downloaded_assets',
@@ -588,6 +604,9 @@ const CLEAR_TABLES = [
 ] as const;
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let databaseInitializationPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let databaseInitialized = false;
+let serializedWriteChain: Promise<void> = Promise.resolve();
 
 export type SyncStatus = 'synced' | 'pending_pull' | 'pending_push' | 'conflict';
 export type OutboxStatus = 'queued' | 'processing' | 'failed' | 'completed';
@@ -626,22 +645,35 @@ export type SyncOutboxRecord = {
 };
 
 export async function initializeLocalDatabase() {
-  const db = await getLocalDatabase();
-  await db.execAsync(CACHE_SCHEMA_SQL);
-  await migrateLocalDatabase(db);
-  await setMetaValue(db, 'local_cache_schema_version', String(LOCAL_CACHE_SCHEMA_VERSION));
-  return db;
+  if (databaseInitialized) {
+    return getLocalDatabase();
+  }
+
+  if (!databaseInitializationPromise) {
+    databaseInitializationPromise = (async () => {
+      const db = await getLocalDatabase();
+      await db.execAsync(CACHE_SCHEMA_SQL);
+      await migrateLocalDatabase(db);
+      await setMetaValue(db, 'local_cache_schema_version', String(LOCAL_CACHE_SCHEMA_VERSION));
+      databaseInitialized = true;
+      return db;
+    })().finally(() => {
+      databaseInitializationPromise = null;
+    });
+  }
+
+  return databaseInitializationPromise;
 }
 
 export async function clearLocalCache() {
-  const db = await initializeLocalDatabase();
+  await runSerializedLocalWrite(async (db) => {
+    await db.withTransactionAsync(async () => {
+      for (const table of CLEAR_TABLES) {
+        await db.execAsync(`DELETE FROM ${table};`);
+      }
 
-  await db.withTransactionAsync(async () => {
-    for (const table of CLEAR_TABLES) {
-      await db.execAsync(`DELETE FROM ${table};`);
-    }
-
-    await setMetaValue(db, 'local_cache_schema_version', String(LOCAL_CACHE_SCHEMA_VERSION));
+      await setMetaValue(db, 'local_cache_schema_version', String(LOCAL_CACHE_SCHEMA_VERSION));
+    });
   });
 }
 
@@ -666,7 +698,35 @@ export async function setMetaValue(db: SQLite.SQLiteDatabase, key: string, value
   );
 }
 
+export async function runSerializedLocalWrite<T>(
+  operation: (db: SQLite.SQLiteDatabase) => Promise<T>
+) {
+  const db = await initializeLocalDatabase();
+  const resultPromise = serializedWriteChain.then(() => operation(db));
+
+  serializedWriteChain = resultPromise.then(
+    () => undefined,
+    () => undefined
+  );
+
+  return resultPromise;
+}
+
 async function migrateLocalDatabase(db: SQLite.SQLiteDatabase) {
+  await ensureTableColumns(db, 'cached_user_stats', [
+    ['user_id', 'TEXT'],
+    ['streak_days', 'INTEGER NOT NULL DEFAULT 0'],
+    ['progress_percent', 'INTEGER NOT NULL DEFAULT 0'],
+    ['courses_this_semester', 'INTEGER NOT NULL DEFAULT 0'],
+    ['current_semester_label', 'TEXT'],
+    ['last_incremented_on', 'TEXT'],
+    ['created_at', 'TEXT'],
+    ['updated_at', 'TEXT'],
+    ['sync_status', "TEXT NOT NULL DEFAULT 'synced'"],
+    ['dirty_fields_json', 'TEXT'],
+    ['last_synced_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+  ]);
+
   await ensureTableColumns(db, 'cached_courses', [
     ['owner_user_id', 'TEXT'],
     ['course_code', 'TEXT'],

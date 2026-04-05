@@ -261,6 +261,7 @@ function Field({
 function DropdownField({
   isOpen,
   label,
+  theme,
   onPress,
 }: {
   isOpen: boolean;
@@ -287,6 +288,7 @@ function DropdownList({
   onSelect,
   options,
   selectedValue,
+  theme,
 }: {
   onSelect: (value: string) => void;
   options: readonly string[];
@@ -334,6 +336,7 @@ function DropdownList({
 function ColorWheel({
   onSelect,
   selectedColor,
+  theme,
 }: {
   onSelect: (value: string) => void;
   selectedColor: string;
