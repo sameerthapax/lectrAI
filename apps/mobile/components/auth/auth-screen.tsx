@@ -1,5 +1,6 @@
 import { Link } from 'expo-router';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { useAppTheme } from '../../providers/settings-provider';
 
 type AuthMode = 'login' | 'signup';
 
@@ -48,6 +49,7 @@ export function AuthScreen({
   onConfirmPasswordChange,
   onSubmit,
 }: AuthScreenProps) {
+  const theme = useAppTheme();
   const isSignUp = mode === 'signup';
 
   return (
@@ -59,7 +61,7 @@ export function AuthScreen({
         padding: 16,
         justifyContent: 'center',
         gap: 20,
-        backgroundColor: WHITE,
+        backgroundColor: theme.colors.screen,
       }}
     >
       <View
@@ -115,15 +117,15 @@ export function AuthScreen({
           borderCurve: 'continuous',
           padding: 18,
           gap: 12,
-          backgroundColor: WHITE,
+          backgroundColor: theme.colors.card,
           borderWidth: 1,
-          borderColor: '#ececec',
+          borderColor: theme.colors.border,
           boxShadow: '0 10px 30px rgba(17, 17, 17, 0.08)',
         }}
       >
         {isSignUp ? (
           <>
-            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text }}>
               Full name
             </Text>
             <TextInput
@@ -131,23 +133,23 @@ export function AuthScreen({
               value={fullName}
               onChangeText={onFullNameChange}
               placeholder="Sam Student"
-              placeholderTextColor="#8f8f8f"
+              placeholderTextColor={theme.colors.inputPlaceholder}
               style={{
                 borderWidth: 1,
-                borderColor: '#e5e5e5',
+                borderColor: theme.colors.inputBorder,
                 borderRadius: 14,
                 borderCurve: 'continuous',
-                backgroundColor: '#fffdfb',
+                backgroundColor: theme.colors.inputBackground,
                 paddingHorizontal: 14,
                 paddingVertical: 12,
-                color: BLACK,
+                color: theme.colors.text,
                 fontSize: 16,
               }}
             />
           </>
         ) : null}
 
-        <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+        <Text selectable style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text }}>
           Email
         </Text>
         <TextInput
@@ -157,21 +159,21 @@ export function AuthScreen({
           value={email}
           onChangeText={onEmailChange}
           placeholder="you@example.com"
-          placeholderTextColor="#8f8f8f"
+          placeholderTextColor={theme.colors.inputPlaceholder}
           style={{
             borderWidth: 1,
-            borderColor: '#e5e5e5',
+            borderColor: theme.colors.inputBorder,
             borderRadius: 14,
             borderCurve: 'continuous',
-            backgroundColor: '#fffdfb',
+            backgroundColor: theme.colors.inputBackground,
             paddingHorizontal: 14,
             paddingVertical: 12,
-            color: BLACK,
+            color: theme.colors.text,
             fontSize: 16,
           }}
         />
 
-        <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+        <Text selectable style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text }}>
           Password
         </Text>
         <TextInput
@@ -180,23 +182,23 @@ export function AuthScreen({
           value={password}
           onChangeText={onPasswordChange}
           placeholder="••••••••"
-          placeholderTextColor="#8f8f8f"
+          placeholderTextColor={theme.colors.inputPlaceholder}
           style={{
             borderWidth: 1,
-            borderColor: '#e5e5e5',
+            borderColor: theme.colors.inputBorder,
             borderRadius: 14,
             borderCurve: 'continuous',
-            backgroundColor: '#fffdfb',
+            backgroundColor: theme.colors.inputBackground,
             paddingHorizontal: 14,
             paddingVertical: 12,
-            color: BLACK,
+            color: theme.colors.text,
             fontSize: 16,
           }}
         />
 
         {isSignUp ? (
           <>
-            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text }}>
               University
             </Text>
             <TextInput
@@ -204,42 +206,42 @@ export function AuthScreen({
               value={universityName}
               onChangeText={onUniversityNameChange}
               placeholder="Murray State University"
-              placeholderTextColor="#8f8f8f"
+              placeholderTextColor={theme.colors.inputPlaceholder}
               style={{
                 borderWidth: 1,
-                borderColor: '#e5e5e5',
+                borderColor: theme.colors.inputBorder,
                 borderRadius: 14,
                 borderCurve: 'continuous',
-                backgroundColor: '#fffdfb',
+                backgroundColor: theme.colors.inputBackground,
                 paddingHorizontal: 14,
                 paddingVertical: 12,
-                color: BLACK,
+                color: theme.colors.text,
                 fontSize: 16,
               }}
             />
 
-            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text }}>
               Major
             </Text>
             <TextInput
               value={major}
               onChangeText={onMajorChange}
               placeholder="Computer Science"
-              placeholderTextColor="#8f8f8f"
+              placeholderTextColor={theme.colors.inputPlaceholder}
               style={{
                 borderWidth: 1,
-                borderColor: '#e5e5e5',
+                borderColor: theme.colors.inputBorder,
                 borderRadius: 14,
                 borderCurve: 'continuous',
-                backgroundColor: '#fffdfb',
+                backgroundColor: theme.colors.inputBackground,
                 paddingHorizontal: 14,
                 paddingVertical: 12,
-                color: BLACK,
+                color: theme.colors.text,
                 fontSize: 16,
               }}
             />
 
-            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text }}>
               Timezone
             </Text>
             <TextInput
@@ -247,21 +249,21 @@ export function AuthScreen({
               value={timezone}
               onChangeText={onTimezoneChange}
               placeholder="America/Chicago"
-              placeholderTextColor="#8f8f8f"
+              placeholderTextColor={theme.colors.inputPlaceholder}
               style={{
                 borderWidth: 1,
-                borderColor: '#e5e5e5',
+                borderColor: theme.colors.inputBorder,
                 borderRadius: 14,
                 borderCurve: 'continuous',
-                backgroundColor: '#fffdfb',
+                backgroundColor: theme.colors.inputBackground,
                 paddingHorizontal: 14,
                 paddingVertical: 12,
-                color: BLACK,
+                color: theme.colors.text,
                 fontSize: 16,
               }}
             />
 
-            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: '#222' }}>
+            <Text selectable style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text }}>
               Confirm password
             </Text>
             <TextInput
@@ -270,16 +272,16 @@ export function AuthScreen({
               value={confirmPassword}
               onChangeText={onConfirmPasswordChange}
               placeholder="••••••••"
-              placeholderTextColor="#8f8f8f"
+              placeholderTextColor={theme.colors.inputPlaceholder}
               style={{
                 borderWidth: 1,
-                borderColor: '#e5e5e5',
+                borderColor: theme.colors.inputBorder,
                 borderRadius: 14,
                 borderCurve: 'continuous',
-                backgroundColor: '#fffdfb',
+                backgroundColor: theme.colors.inputBackground,
                 paddingHorizontal: 14,
                 paddingVertical: 12,
-                color: BLACK,
+                color: theme.colors.text,
                 fontSize: 16,
               }}
             />
@@ -287,7 +289,7 @@ export function AuthScreen({
         ) : null}
 
         {error ? (
-          <Text selectable style={{ color: '#b42318', fontSize: 13, fontWeight: '600' }}>
+          <Text selectable style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '600' }}>
             {error}
           </Text>
         ) : null}
@@ -302,7 +304,7 @@ export function AuthScreen({
             minHeight: 50,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: loading ? '#ffb480' : ORANGE,
+            backgroundColor: loading ? theme.colors.switchTrackOn : ORANGE,
             opacity: pressed ? 0.9 : 1,
           })}
         >
@@ -314,7 +316,7 @@ export function AuthScreen({
             </Text>
           )}
         </Pressable>
-        <Text selectable style={{ textAlign: 'center', fontSize: 14, color: '#4a4a4a' }}>
+        <Text selectable style={{ textAlign: 'center', fontSize: 14, color: theme.colors.textMuted }}>
           {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
           <Link href={isSignUp ? '/login' : '/sign-up'} style={{ color: ORANGE, fontWeight: '700' }}>
             {isSignUp ? 'Sign in' : 'Create one'}

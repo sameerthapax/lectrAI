@@ -7,6 +7,7 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
+import { useAppTheme } from '../../providers/settings-provider';
 import { NO_CLASS_COURSE_ID, type LocalCourseRecord } from '../../services/courses-repository';
 
 type CurrentCourseCarouselProps = {
@@ -29,8 +30,10 @@ export function CurrentCourseCarousel({
   selectedCourseId,
   width,
 }: CurrentCourseCarouselProps) {
+  const theme = useAppTheme();
   const flatListRef = useRef<FlatList<LocalCourseSelectorCard>>(null);
   const [didMountList, setDidMountList] = useState(false);
+  const hasMultipleCards = cards.length > 1;
   const cardWidth = Math.max(140, Math.min(172, width * 0.94));
   const sideInset = Math.max(0, (width - cardWidth) / 2);
   const infiniteCards = useMemo(() => buildInfiniteCards(cards), [cards]);
@@ -38,39 +41,44 @@ export function CurrentCourseCarousel({
     0,
     cards.findIndex((card) => card.id === selectedCourseId)
   );
-  const initialIndex = cards.length > 1 ? logicalIndex + 1 : 0;
+  const initialIndex = hasMultipleCards ? logicalIndex + 1 : 0;
 
   useEffect(() => {
-    if (!didMountList) {
+    if (!didMountList || !hasMultipleCards) {
       return;
     }
 
-    const targetIndex = cards.length > 1 ? logicalIndex + 1 : 0;
+    const targetIndex = logicalIndex + 1;
     flatListRef.current?.scrollToIndex({ animated: false, index: targetIndex });
-  }, [cards.length, didMountList, logicalIndex]);
+  }, [didMountList, hasMultipleCards, logicalIndex]);
 
   const handleMomentumEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (cards.length === 0) {
+    if (cards.length === 0 || !hasMultipleCards) {
       return;
     }
 
     const offsetX = event.nativeEvent.contentOffset.x;
     const rawIndex = Math.round(offsetX / cardWidth);
+    const lastCard = cards[cards.length - 1];
+    const firstCard = cards[0];
 
-    if (rawIndex <= 0) {
+    if (rawIndex <= 0 && lastCard) {
       const wrappedIndex = cards.length;
       flatListRef.current?.scrollToIndex({ animated: false, index: wrappedIndex });
-      onSelect(cards[cards.length - 1]!.id);
+      onSelect(lastCard.id);
       return;
     }
 
-    if (rawIndex >= cards.length + 1) {
+    if (rawIndex >= cards.length + 1 && firstCard) {
       flatListRef.current?.scrollToIndex({ animated: false, index: 1 });
-      onSelect(cards[0]!.id);
+      onSelect(firstCard.id);
       return;
     }
 
-    onSelect(cards[rawIndex - 1]!.id);
+    const selectedCard = cards[rawIndex - 1];
+    if (selectedCard) {
+      onSelect(selectedCard.id);
+    }
   };
 
   return (
@@ -82,9 +90,11 @@ export function CurrentCourseCarousel({
         minHeight: 154,
         paddingTop: 10,
         paddingBottom: 10,
-        backgroundColor: 'rgba(255,255,255,0.7)',
+        backgroundColor: theme.colors.overlay,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
         boxShadow: '0 18px 36px rgba(15, 23, 42, 0.10)',
-        overflow : 'hidden',
+        overflow: 'hidden',
       }}
     >
       <FlatList
@@ -99,9 +109,10 @@ export function CurrentCourseCarousel({
         initialScrollIndex={initialIndex}
         keyExtractor={(item, index) => `${item.id}-${index}`}
         onLayout={() => setDidMountList(true)}
-        onMomentumScrollEnd={handleMomentumEnd}
+        onMomentumScrollEnd={hasMultipleCards ? handleMomentumEnd : undefined}
         snapToInterval={cardWidth}
         snapToAlignment="center"
+        scrollEnabled={hasMultipleCards}
         decelerationRate="fast"
         contentContainerStyle={{ paddingHorizontal: sideInset }}
         renderItem={({ item }) => (
@@ -120,7 +131,9 @@ export function CurrentCourseCarousel({
                 paddingHorizontal: 12,
                 paddingVertical: 10,
                 justifyContent: 'center',
-                backgroundColor: pressed ? '#f3f4f6' : '#ffffff',
+                backgroundColor: pressed ? theme.colors.neutralSoft : theme.colors.card,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
                 boxShadow: pressed
                   ? '0 8px 18px rgba(15, 23, 42, 0.08)'
                   : '0 12px 22px rgba(15, 23, 42, 0.10)',
@@ -134,14 +147,24 @@ export function CurrentCourseCarousel({
                 <Text
                   selectable
                   numberOfLines={1}
-                  style={{ color: '#334155', fontSize: 13, lineHeight: 16, fontWeight: '800' }}
+                  style={{
+                    color: theme.colors.textMuted,
+                    fontSize: 13,
+                    lineHeight: 16,
+                    fontWeight: '800',
+                  }}
                 >
                   {item.title}
                 </Text>
                 <Text
                   selectable
                   numberOfLines={2}
-                  style={{ color: '#0f172a', fontSize: 20, lineHeight: 23, fontWeight: '800' }}
+                  style={{
+                    color: theme.colors.text,
+                    fontSize: 20,
+                    lineHeight: 23,
+                    fontWeight: '800',
+                  }}
                 >
                   {item.subtitle}
                 </Text>
@@ -168,7 +191,12 @@ export function CurrentCourseCarousel({
               width: card.id === selectedCourseId ? 16 : 6,
               height: 6,
               borderRadius: 999,
-              backgroundColor: card.id === selectedCourseId ? '#0f172a' : 'rgba(148, 163, 184, 0.45)',
+              backgroundColor:
+                card.id === selectedCourseId
+                  ? theme.colors.text
+                  : theme.resolvedMode === 'dark'
+                    ? 'rgba(183, 176, 167, 0.35)'
+                    : 'rgba(148, 163, 184, 0.45)',
             }}
           />
         ))}
@@ -200,5 +228,12 @@ function buildInfiniteCards(cards: LocalCourseSelectorCard[]) {
     return cards;
   }
 
-  return [cards[cards.length - 1]!, ...cards, cards[0]!];
+  const firstCard = cards[0];
+  const lastCard = cards[cards.length - 1];
+
+  if (!firstCard || !lastCard) {
+    return cards;
+  }
+
+  return [lastCard, ...cards, firstCard];
 }

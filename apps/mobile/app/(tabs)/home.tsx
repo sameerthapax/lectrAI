@@ -8,7 +8,7 @@ import {
   useAudioRecorderState,
 } from 'expo-audio';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Alert,
@@ -33,20 +33,38 @@ import {
   type LocalCourseRecord,
 } from '../../services/courses-repository';
 import { useSettings } from '../../providers/settings-provider';
+import { fetchStatsOverview, incrementStreak } from '../../services/stats-api';
+import {
+  getCachedStatsForUser,
+  upsertStatsForUser,
+  type LocalStatsRecord,
+} from '../../services/stats-repository';
+
+const DIGIT_HEIGHT = 28;
+const DIGIT_WIDTH = 16;
+const DIGIT_GAP = 1;
+const MIN_STREAK_DIGITS = 2;
+const DIGIT_REPEAT_COUNT = 24;
+const DIGIT_REPEAT_OFFSET = 10;
 
 export default function HomeRoute() {
   const auth = useAuth();
   const settingsState = useSettings();
+  const theme = settingsState.theme;
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
   const [courses, setCourses] = useState<LocalCourseRecord[]>([]);
+  const [stats, setStats] = useState<LocalStatsRecord | null>(null);
   const [selectedCourseId, setSelectedCourseIdState] = useState(NO_CLASS_COURSE_ID);
   const [recordingVisible, setRecordingVisible] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
+  const [streakBusy, setStreakBusy] = useState(false);
   const recordingOverlay = useRef(new Animated.Value(0)).current;
   const recordingPulse = useRef(new Animated.Value(0)).current;
   const recordingFloat = useRef(new Animated.Value(0)).current;
   const recordingShimmer = useRef(new Animated.Value(0)).current;
+  const streakValue = useRef(new Animated.Value(0)).current;
+  const hasAnimatedInitialStreak = useRef(false);
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
     isMeteringEnabled: true,
@@ -106,9 +124,102 @@ export default function HomeRoute() {
     }, [auth.user?.id])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      const user = auth.user;
+      let cancelled = false;
+
+      const loadStats = async () => {
+        if (!user) {
+          if (!cancelled) {
+            setStats(null);
+            hasAnimatedInitialStreak.current = false;
+            streakValue.setValue(0);
+          }
+          return;
+        }
+
+        const cachedStats = await getCachedStatsForUser(user);
+
+        if (!cancelled) {
+          setStats(cachedStats);
+
+          if (!hasAnimatedInitialStreak.current) {
+            hasAnimatedInitialStreak.current = true;
+            animateStreakValue(streakValue, 0, cachedStats.streakDays, 3000);
+          } else {
+            streakValue.setValue(cachedStats.streakDays);
+          }
+        }
+
+        try {
+          const accessToken = await auth.getValidAccessToken();
+
+          if (!accessToken) {
+            throw new Error('Your session expired. Please sign in again.');
+          }
+
+          const remoteStats = await fetchStatsOverview(accessToken);
+          await upsertStatsForUser(user, remoteStats);
+          const nextStats = await getCachedStatsForUser(user);
+
+          if (!cancelled) {
+            const previousStreak = cachedStats.streakDays;
+            setStats(nextStats);
+
+            if (nextStats.streakDays !== previousStreak) {
+              animateStreakValue(streakValue, previousStreak, nextStats.streakDays, 450);
+            } else {
+              streakValue.setValue(nextStats.streakDays);
+            }
+          }
+        } catch {
+          // Keep cached stats visible when the sync request fails.
+        }
+      };
+
+      void loadStats();
+
+      return () => {
+        cancelled = true;
+        streakValue.stopAnimation();
+      };
+    }, [auth.user?.id, streakValue])
+  );
+
   const handleSelectCourse = async (courseId: string) => {
     setSelectedCourseIdState(courseId);
     await setSelectedCourseId(courseId);
+  };
+
+  const handleIncrementStreak = async () => {
+    if (!auth.user || streakBusy) {
+      return;
+    }
+
+    const previousStreak = stats?.streakDays ?? 0;
+    setStreakBusy(true);
+
+    try {
+      const accessToken = await auth.getValidAccessToken();
+
+      if (!accessToken) {
+        throw new Error('Your session expired. Please sign in again.');
+      }
+
+      const remoteStats = await incrementStreak(accessToken);
+      await upsertStatsForUser(auth.user, remoteStats);
+      const nextStats = await getCachedStatsForUser(auth.user);
+      setStats(nextStats);
+      animateStreakValue(streakValue, previousStreak, nextStats.streakDays, 450);
+    } catch (error) {
+      Alert.alert(
+        'Could not update streak',
+        error instanceof Error ? error.message : 'Please try again.'
+      );
+    } finally {
+      setStreakBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -274,7 +385,7 @@ export default function HomeRoute() {
       }).start(() => {
         setRecordingVisible(false);
         if (navigateToResults) {
-          router.push('/recording-results');
+          router.push('/recording-results-page');
         }
       });
     } catch (error) {
@@ -349,18 +460,21 @@ export default function HomeRoute() {
       normalizedMeter * (30 + multiplier * 34) +
       (index % 2 === 0 ? 10 : 2)
   );
+  const statsSummary = stats ?? EMPTY_STATS;
+  const statsCardScale = getStatsCardScale(statsSummary);
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#f7f6f2' }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
       <Animated.View style={{ flex: 1, transform: [{ scale: contentScale }] }}>
         <ScrollView
           scrollEnabled={!recordingVisible}
           contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={{
+            flexGrow: 1,
             padding: 16,
             gap: 12,
             paddingBottom: 32,
-            backgroundColor: '#f7f6f2',
+            backgroundColor: theme.colors.screen,
           }}
         >
           <View
@@ -430,9 +544,9 @@ export default function HomeRoute() {
                 paddingHorizontal: 16,
                 paddingVertical: 14,
                 justifyContent: 'space-between',
-                backgroundColor: 'rgba(255,255,255,0.72)',
+                backgroundColor: theme.colors.overlay,
                 borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.7)',
+                borderColor: theme.colors.border,
                 opacity: recordingVisible ? 0.3 : recordingBusy || pressed ? 0.9 : 1,
                 boxShadow: pressed
                   ? '0 10px 20px rgba(15, 23, 42, 0.06)'
@@ -452,9 +566,9 @@ export default function HomeRoute() {
                     width: 160,
                     height: 160,
                     borderRadius: 48,
-                    backgroundColor: '#fff8f2',
+                    backgroundColor: theme.colors.cardMuted,
                     borderWidth: 1,
-                    borderColor: '#fdddc7',
+                    borderColor: theme.colors.border,
                     alignItems: 'center',
                     justifyContent: 'center',
                     boxShadow: '0 22px 38px rgba(249, 115, 22, 0.14)',
@@ -497,10 +611,10 @@ export default function HomeRoute() {
               </View>
 
               <View style={{ gap: 4 }}>
-                <Text selectable style={{ fontSize: 9, letterSpacing: 1.2, color: '#ef4444', fontWeight: '800', textTransform: 'uppercase' }}>
+                <Text selectable style={{ fontSize: 9, letterSpacing: 1.2, color: theme.colors.danger, fontWeight: '800', textTransform: 'uppercase' }}>
                   Recording
                 </Text>
-                <Text selectable style={{ fontSize: 18, lineHeight: 22, color: '#111827', fontWeight: '800' }}>
+                <Text selectable style={{ fontSize: 18, lineHeight: 22, color: theme.colors.text, fontWeight: '800' }}>
                   Record lecture
                 </Text>
               </View>
@@ -523,14 +637,14 @@ export default function HomeRoute() {
                   padding: 12,
                   justifyContent: 'center',
                   alignItems: 'center',
-                  backgroundColor: 'rgba(255,255,255,0.68)',
+                  backgroundColor: theme.colors.overlay,
                   borderWidth: 1,
-                  borderColor: 'rgba(255,255,255,0.66)',
+                  borderColor: theme.colors.border,
                   boxShadow: '0 14px 30px rgba(15, 23, 42, 0.10)',
                 }}
               >
                 <Text selectable style={{ fontSize: 32, textAlign: 'center' }}>🧠</Text>
-                <Text selectable style={{ marginTop: 4, fontSize: 14, color: '#334155', fontWeight: '700' }}>
+                <Text selectable style={{ marginTop: 4, fontSize: 14, color: theme.colors.textMuted, fontWeight: '700' }}>
                   Exam review
                 </Text>
               </View>
@@ -539,20 +653,90 @@ export default function HomeRoute() {
 
           <View
             style={{
+              flexDirection: 'row',
+              gap: 10,
+            }}
+          >
+            <StatCard
+              disabled={streakBusy}
+              icon="🔥"
+              label="Streak"
+              onPress={handleIncrementStreak}
+              scale={statsCardScale}
+              theme={theme}
+              value={(
+                <RollingNumber
+                  animatedValue={streakValue}
+                  color={theme.colors.text}
+                  scale={statsCardScale}
+                  value={statsSummary.streakDays}
+                />
+              )}
+            />
+            <StatCard
+              icon="📈"
+              label="Semester"
+              scale={statsCardScale}
+              theme={theme}
+              value={
+                <Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.8}
+                  numberOfLines={1}
+                  selectable
+                  style={{
+                    color: theme.colors.text,
+                    fontSize: 22 * statsCardScale,
+                    fontWeight: '800',
+                    lineHeight: 26 * statsCardScale,
+                    fontVariant: ['tabular-nums'],
+                  }}
+                >
+                  {statsSummary.progressPercent}%
+                </Text>
+              }
+            />
+            <StatCard
+              icon="📚"
+              label="Courses"
+              scale={statsCardScale}
+              theme={theme}
+              value={
+                <Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.8}
+                  numberOfLines={1}
+                  selectable
+                  style={{
+                    color: theme.colors.text,
+                    fontSize: 22 * statsCardScale,
+                    fontWeight: '800',
+                    lineHeight: 26 * statsCardScale,
+                    fontVariant: ['tabular-nums'],
+                  }}
+                >
+                  {statsSummary.coursesThisSemester}
+                </Text>
+              }
+            />
+          </View>
+
+          <View
+            style={{
               borderRadius: 30,
               borderCurve: 'continuous',
               padding: 16,
               gap: 12,
-              backgroundColor: 'rgba(255,255,255,0.76)',
+              backgroundColor: theme.colors.overlay,
               borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.7)',
+              borderColor: theme.colors.border,
               boxShadow: '0 20px 44px rgba(15, 23, 42, 0.12)',
             }}
           >
             <View
               style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
             >
-              <Text selectable style={{ color: '#111827', fontSize: 22, fontWeight: '800' }}>
+              <Text selectable style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800' }}>
                 Quick quiz
               </Text>
               <View
@@ -560,12 +744,12 @@ export default function HomeRoute() {
                   borderRadius: 999,
                   paddingHorizontal: 11,
                   paddingVertical: 7,
-                  backgroundColor: '#fff1e8',
+                  backgroundColor: theme.colors.accentSoft,
                 }}
               >
                 <Text
                   selectable
-                  style={{ color: '#c2410c', fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}
+                  style={{ color: theme.colors.accentMuted, fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}
                 >
                   04/10
                 </Text>
@@ -579,9 +763,9 @@ export default function HomeRoute() {
                 borderCurve: 'continuous',
                 padding: 14,
                 justifyContent: 'center',
-                backgroundColor: '#fff8f1',
+                backgroundColor: theme.colors.cardMuted,
                 borderWidth: 1,
-                borderColor: '#fde6d5',
+                borderColor: theme.colors.border,
               }}
             >
               <Text
@@ -590,7 +774,7 @@ export default function HomeRoute() {
                 minimumFontScale={0.72}
                 numberOfLines={3}
                 style={{
-                  color: '#7c2d12',
+                  color: theme.colors.text,
                   fontSize: isCompact ? 20 : 22,
                   lineHeight: isCompact ? 24 : 26,
                   fontWeight: '800',
@@ -613,9 +797,9 @@ export default function HomeRoute() {
                     flexDirection: 'row',
                     gap: 10,
                     alignItems: 'center',
-                    backgroundColor: index === 1 ? '#eefbf3' : '#f8fafc',
+                    backgroundColor: index === 1 ? theme.colors.successSoft : theme.colors.neutralSoft,
                     borderWidth: 1,
-                    borderColor: index === 1 ? '#bbf7d0' : '#e5e7eb',
+                    borderColor: index === 1 ? theme.colors.successBorder : theme.colors.neutralBorder,
                   }}
                 >
                   <View
@@ -625,10 +809,10 @@ export default function HomeRoute() {
                       borderRadius: 14,
                       alignItems: 'center',
                       justifyContent: 'center',
-                      backgroundColor: index === 1 ? '#16a34a' : '#e2e8f0',
+                      backgroundColor: index === 1 ? theme.colors.success : theme.colors.neutralBorder,
                     }}
                   >
-                    <Text selectable style={{ color: index === 1 ? '#ffffff' : '#475569', fontSize: 13, fontWeight: '800' }}>
+                    <Text selectable style={{ color: index === 1 ? '#ffffff' : theme.colors.textMuted, fontSize: 13, fontWeight: '800' }}>
                       {String.fromCharCode(65 + index)}
                     </Text>
                   </View>
@@ -639,7 +823,7 @@ export default function HomeRoute() {
                     numberOfLines={2}
                     style={{
                       flex: 1,
-                      color: '#1f2937',
+                      color: theme.colors.text,
                       fontSize: 14,
                       lineHeight: 18,
                       fontWeight: index === 1 ? '700' : '600',
@@ -652,45 +836,6 @@ export default function HomeRoute() {
             </View>
           </View>
 
-          <View
-            style={{
-              flexDirection: 'row',
-              gap: 10,
-            }}
-          >
-            {[
-              { label: '🔥', value: '5', tint: '#fff1e8' },
-              { label: '📈', value: '84%', tint: '#eefbf3' },
-              { label: '📚', value: '4', tint: '#eff6ff' },
-            ].map((stat) => (
-              <View
-                key={stat.label}
-                style={{
-                  flex: 1,
-                  minHeight: 70,
-                  borderRadius: 20,
-                  borderCurve: 'continuous',
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  backgroundColor: 'rgba(255,255,255,0.72)',
-                  borderWidth: 1,
-                  borderColor: 'rgba(255,255,255,0.68)',
-                  boxShadow: '0 14px 28px rgba(15, 23, 42, 0.10)',
-                }}
-              >
-                <Text selectable style={{ fontSize: 22 }}>{stat.label}</Text>
-                <Text
-                  selectable
-                  style={{ color: '#0f172a', fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}
-                >
-                  {stat.value}
-                </Text>
-              </View>
-            ))}
-          </View>
         </ScrollView>
       </Animated.View>
 
@@ -707,11 +852,11 @@ export default function HomeRoute() {
         >
           <BlurView
             intensity={55}
-            tint="light"
+            tint={theme.resolvedMode === 'dark' ? 'dark' : 'light'}
             style={{
               position: 'absolute',
               inset: 0,
-              backgroundColor: 'rgba(248, 250, 252, 0.36)',
+              backgroundColor: theme.resolvedMode === 'dark' ? 'rgba(10, 13, 16, 0.54)' : 'rgba(248, 250, 252, 0.36)',
             }}
           />
 
@@ -721,9 +866,9 @@ export default function HomeRoute() {
               borderRadius: 34,
               borderCurve: 'continuous',
               padding: 24,
-              backgroundColor: 'rgba(255,255,255,0.92)',
+              backgroundColor: theme.colors.card,
               borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.86)',
+              borderColor: theme.colors.border,
               alignItems: 'center',
               gap: 18,
               boxShadow: '0 24px 48px rgba(15, 23, 42, 0.18)',
@@ -738,7 +883,7 @@ export default function HomeRoute() {
                 paddingHorizontal: 12,
                 paddingVertical: 7,
                 borderRadius: 999,
-                backgroundColor: '#fff1f2',
+                backgroundColor: theme.colors.dangerSoft,
               }}
             >
               <Animated.View
@@ -746,14 +891,14 @@ export default function HomeRoute() {
                   width: 10,
                   height: 10,
                   borderRadius: 999,
-                  backgroundColor: '#ef4444',
+                  backgroundColor: theme.colors.danger,
                   opacity: recordingPulse.interpolate({
                     inputRange: [0, 1],
                     outputRange: [0.45, 1],
                   }),
                 }}
               />
-              <Text style={{ fontSize: 11, letterSpacing: 1.4, color: '#ef4444', fontWeight: '900', textTransform: 'uppercase' }}>
+              <Text style={{ fontSize: 11, letterSpacing: 1.4, color: theme.colors.danger, fontWeight: '900', textTransform: 'uppercase' }}>
                 Recording in progress
               </Text>
             </View>
@@ -765,7 +910,7 @@ export default function HomeRoute() {
                   width: 170,
                   height: 170,
                   borderRadius: 999,
-                  backgroundColor: '#fee2e2',
+                  backgroundColor: theme.colors.dangerBorder,
                   opacity: pulseOpacity,
                   transform: [{ scale: pulseScale }, { scale: outerRingScale }],
                 }}
@@ -851,7 +996,15 @@ export default function HomeRoute() {
             </View>
 
             <View style={{ alignItems: 'center', gap: 8 }}>
-              <Text style={{ fontSize: 34, lineHeight: 40, color: '#111827', fontWeight: '900', fontVariant: ['tabular-nums'] }}>
+              <Text
+                style={{
+                  fontSize: 34,
+                  lineHeight: 40,
+                  color: theme.colors.text,
+                  fontWeight: '900',
+                  fontVariant: ['tabular-nums'],
+                }}
+              >
                 {formattedRecordingTime}
               </Text>
             </View>
@@ -891,13 +1044,13 @@ export default function HomeRoute() {
                   borderCurve: 'continuous',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  backgroundColor: '#f8fafc',
+                  backgroundColor: theme.colors.neutralSoft,
                   borderWidth: 1,
-                  borderColor: '#e2e8f0',
+                  borderColor: theme.colors.neutralBorder,
                   opacity: pressed ? 0.92 : 1,
                 })}
               >
-                <Text style={{ color: '#334155', fontSize: 15, fontWeight: '800' }}>Cancel</Text>
+                <Text style={{ color: theme.colors.textMuted, fontSize: 15, fontWeight: '800' }}>Cancel</Text>
               </Pressable>
 
               <Pressable
@@ -912,7 +1065,7 @@ export default function HomeRoute() {
                   borderCurve: 'continuous',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  backgroundColor: '#ef4444',
+                  backgroundColor: theme.colors.danger,
                   opacity: pressed ? 0.92 : 1,
                 })}
               >
@@ -924,4 +1077,295 @@ export default function HomeRoute() {
       ) : null}
     </View>
   );
+}
+
+const EMPTY_STATS: LocalStatsRecord = {
+  userId: '',
+  streakDays: 0,
+  progressPercent: 0,
+  coursesThisSemester: 0,
+  currentSemesterLabel: '',
+  lastIncrementedOn: null,
+  syncStatus: 'pending_pull',
+  createdAt: null,
+  updatedAt: null,
+};
+
+function animateStreakValue(
+  animatedValue: Animated.Value,
+  fromValue: number,
+  toValue: number,
+  duration: number
+) {
+  animatedValue.stopAnimation();
+  animatedValue.setValue(fromValue);
+
+  Animated.timing(animatedValue, {
+    toValue,
+    duration,
+    easing: Easing.out(Easing.cubic),
+    useNativeDriver: false,
+  }).start();
+}
+
+function StatCard({
+  disabled,
+  icon,
+  label,
+  onPress,
+  scale,
+  theme,
+  value,
+}: {
+  disabled?: boolean;
+  icon: string;
+  label: string;
+  onPress?: () => void;
+  scale: number;
+  theme: ReturnType<typeof useSettings>['theme'];
+  value: ReactNode;
+}) {
+  const content = (
+    <View
+      style={{
+        width: '100%',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          alignSelf: 'center',
+          justifyContent: 'center',
+          gap: 4 * scale,
+        }}
+      >
+        <Text
+          numberOfLines={1}
+          selectable
+          style={{
+            fontSize: 15 * scale,
+            lineHeight: 17 * scale,
+          }}
+        >
+          {icon}
+        </Text>
+        <Text
+          numberOfLines={1}
+          selectable
+          style={{
+            color: theme.colors.textMuted,
+            fontSize: 11 * scale,
+            lineHeight: 13 * scale,
+            fontWeight: '700',
+          }}
+        >
+          {label}
+        </Text>
+      </View>
+      <View
+        style={{
+          flex: 1,
+          minWidth: 0,
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+          marginTop: 4 * scale,
+        }}
+      >
+        {value}
+      </View>
+    </View>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable
+        disabled={disabled}
+        onPress={onPress}
+        style={({ pressed }) => ({
+          ...statCardContainerStyle(theme),
+          opacity: disabled ? 0.62 : pressed ? 0.92 : 1,
+        })}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return <View style={statCardContainerStyle(theme)}>{content}</View>;
+}
+
+function RollingNumber({
+  animatedValue,
+  color,
+  scale,
+  value,
+}: {
+  animatedValue: Animated.Value;
+  color: string;
+  scale: number;
+  value: number;
+}) {
+  const safeValue = Math.max(0, value);
+  const digitCount = Math.max(MIN_STREAK_DIGITS, String(safeValue).length);
+  const places = Array.from({ length: digitCount }, (_, index) =>
+    10 ** (digitCount - index - 1)
+  );
+  const intrinsicWidth = digitCount * DIGIT_WIDTH + (digitCount - 1) * DIGIT_GAP;
+  const scaledDigitHeight = DIGIT_HEIGHT * scale;
+  const scaledWidth = intrinsicWidth * scale;
+
+  return (
+    <View
+      style={{
+        width: scaledWidth,
+        height: scaledDigitHeight,
+        justifyContent: 'center',
+        alignItems: 'center',
+        overflow: 'hidden',
+      }}
+    >
+      <View
+        style={{
+          width: intrinsicWidth,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: DIGIT_GAP,
+          transform: [{ scale }],
+        }}
+      >
+        {places.map((place) => (
+          <RollingDigit
+            key={place}
+            animatedValue={animatedValue}
+            color={color}
+            place={place}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function RollingDigit({
+  animatedValue,
+  color,
+  place,
+}: {
+  animatedValue: Animated.Value;
+  color: string;
+  place: number;
+}) {
+  const translateY = useRef(
+    new Animated.Value(-(DIGIT_REPEAT_OFFSET * 10) * DIGIT_HEIGHT)
+  ).current;
+  const stepRef = useRef(0);
+
+  useEffect(() => {
+    stepRef.current = 0;
+    translateY.setValue(-(DIGIT_REPEAT_OFFSET * 10) * DIGIT_HEIGHT);
+
+    const listenerId = animatedValue.addListener(({ value }) => {
+      const nextStep = Math.floor(Math.max(0, value) / place);
+
+      if (nextStep === stepRef.current) {
+        return;
+      }
+
+      stepRef.current = nextStep;
+      translateY.stopAnimation();
+      Animated.timing(translateY, {
+        toValue: -(DIGIT_REPEAT_OFFSET * 10 + nextStep) * DIGIT_HEIGHT,
+        duration: place === 1 ? 90 : 140,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+
+    return () => {
+      animatedValue.removeListener(listenerId);
+    };
+  }, [animatedValue, place, translateY]);
+
+  return (
+    <View
+      style={{
+        width: DIGIT_WIDTH,
+        height: DIGIT_HEIGHT,
+        overflow: 'hidden',
+      }}
+    >
+      <Animated.View style={{ transform: [{ translateY }] }}>
+        {DIGIT_STRIP.map((value, index) => (
+          <Text
+            key={`${value}-${index}`}
+            selectable
+            style={{
+              height: DIGIT_HEIGHT,
+              width: DIGIT_WIDTH,
+              color,
+              fontSize: 22,
+              lineHeight: DIGIT_HEIGHT,
+              fontWeight: '800',
+              textAlign: 'center',
+              fontVariant: ['tabular-nums'],
+            }}
+          >
+            {value}
+          </Text>
+        ))}
+      </Animated.View>
+    </View>
+  );
+}
+
+const DIGITS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] as const;
+const DIGIT_STRIP = Array.from(
+  { length: DIGIT_REPEAT_COUNT * DIGITS.length },
+  (_, index) => DIGITS[index % DIGITS.length]
+);
+
+function getStatsCardScale(stats: Pick<LocalStatsRecord, 'streakDays' | 'progressPercent' | 'coursesThisSemester'>) {
+  const longestValueLength = Math.max(
+    String(Math.max(0, stats.streakDays)).length,
+    `${Math.max(0, stats.progressPercent)}%`.length,
+    String(Math.max(0, stats.coursesThisSemester)).length
+  );
+
+  if (longestValueLength >= 6) {
+    return 0.82;
+  }
+
+  if (longestValueLength === 5) {
+    return 0.9;
+  }
+
+  if (longestValueLength === 4) {
+    return 0.96;
+  }
+
+  return 1;
+}
+
+function statCardContainerStyle(theme: ReturnType<typeof useSettings>['theme']) {
+  return {
+    flex: 1,
+    minHeight: 70,
+    borderRadius: 20,
+    borderCurve: 'continuous' as const,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    overflow: 'hidden' as const,
+    backgroundColor: theme.colors.overlay,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    boxShadow: '0 14px 28px rgba(15, 23, 42, 0.10)',
+  };
 }

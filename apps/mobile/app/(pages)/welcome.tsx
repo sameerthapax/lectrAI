@@ -10,13 +10,10 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { useAppTheme } from '../../providers/settings-provider';
 
 const ORANGE = '#ff6a00';
-const AMBER = '#ffb36b';
 const INK = '#0b0b0b';
-const CREAM = '#f7f1e8';
-const PANEL = '#fffaf3';
-const BORDER = '#eadfce';
 const SPLASH_DURATION_MS = 5000;
 
 const featureScreens = [
@@ -44,6 +41,7 @@ const featureScreens = [
 ];
 
 export default function WelcomeRoute() {
+  const theme = useAppTheme();
   const { width } = useWindowDimensions();
   const [phase, setPhase] = useState<'splash' | 'features'>('splash');
   const [featureIndex, setFeatureIndex] = useState(0);
@@ -253,7 +251,7 @@ export default function WelcomeRoute() {
       <View
         style={{
           flex: 1,
-          backgroundColor: INK,
+          backgroundColor: theme.resolvedMode === 'dark' ? INK : INK,
           alignItems: 'center',
           justifyContent: 'center',
           paddingHorizontal: 28,
@@ -338,7 +336,7 @@ export default function WelcomeRoute() {
               }}
             />
             <Image
-              source={require('../assets/images/icon.png')}
+              source={require('../../assets/images/icon.png')}
               style={{ width: 88, height: 88, borderRadius: 24 }}
               resizeMode="contain"
             />
@@ -377,14 +375,14 @@ export default function WelcomeRoute() {
     <View
       style={{
         flex: 1,
-        backgroundColor: CREAM,
+        backgroundColor: theme.colors.screen,
         paddingHorizontal: 20,
         paddingTop: 72,
         paddingBottom: 32,
         justifyContent: 'space-between',
       }}
     >
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle={theme.resolvedMode === 'dark' ? 'light-content' : 'dark-content'} />
 
       <View style={{ gap: 18 }}>
         <View
@@ -395,16 +393,30 @@ export default function WelcomeRoute() {
           }}
         >
           <View style={{ gap: 6 }}>
-            <Text style={{ color: '#5b4a3a', fontSize: 13, fontWeight: '800', letterSpacing: 0.5 }}>
+            <Text
+              style={{
+                color: theme.colors.textMuted,
+                fontSize: 13,
+                fontWeight: '800',
+                letterSpacing: 0.5,
+              }}
+            >
               MEET LECTRAI
             </Text>
-            <Text style={{ color: INK, fontSize: 28, lineHeight: 34, fontWeight: '900' }}>
+            <Text
+              style={{
+                color: theme.colors.text,
+                fontSize: 28,
+                lineHeight: 34,
+                fontWeight: '900',
+              }}
+            >
               Built to help you learn from every lecture.
             </Text>
           </View>
 
           <Image
-            source={require('../assets/images/icon.png')}
+            source={require('../../assets/images/icon.png')}
             style={{ width: 56, height: 56, borderRadius: 16 }}
             resizeMode="contain"
           />
@@ -418,7 +430,7 @@ export default function WelcomeRoute() {
                 flex: 1,
                 height: 6,
                 borderRadius: 999,
-                backgroundColor: index === featureIndex ? ORANGE : '#e6d8c7',
+                backgroundColor: index === featureIndex ? ORANGE : theme.colors.neutralBorder,
               }}
             />
           ))}
@@ -432,9 +444,9 @@ export default function WelcomeRoute() {
           borderRadius: 30,
           borderCurve: 'continuous',
           padding: 24,
-          backgroundColor: PANEL,
+          backgroundColor: theme.colors.card,
           borderWidth: 1,
-          borderColor: BORDER,
+          borderColor: theme.colors.border,
           overflow: 'hidden',
           gap: 18,
           opacity: featureOpacity,
@@ -471,10 +483,12 @@ export default function WelcomeRoute() {
           <Text style={{ color: ORANGE, fontSize: 12, fontWeight: '900', letterSpacing: 0.5 }}>
             {currentScreen.eyebrow.toUpperCase()}
           </Text>
-          <Text style={{ color: '#18120d', fontSize: 28, lineHeight: 34, fontWeight: '900' }}>
+          <Text style={{ color: theme.colors.text, fontSize: 28, lineHeight: 34, fontWeight: '900' }}>
             {currentScreen.title}
           </Text>
-          <Text style={{ color: '#6a6157', fontSize: 15, lineHeight: 23, fontWeight: '500' }}>
+          <Text
+            style={{ color: theme.colors.textMuted, fontSize: 15, lineHeight: 23, fontWeight: '500' }}
+          >
             {currentScreen.body}
           </Text>
         </View>
@@ -501,12 +515,14 @@ export default function WelcomeRoute() {
         <Text
           style={{
             textAlign: 'center',
-            color: '#7b6f62',
+            color: theme.colors.textMuted,
             fontSize: 13,
             fontWeight: '600',
           }}
         >
-          {isLastScreen ? 'Head straight to login and start exploring.' : `Step ${featureIndex + 1} of ${featureScreens.length}`}
+          {isLastScreen
+            ? 'Head straight to login and start exploring.'
+            : `Step ${featureIndex + 1} of ${featureScreens.length}`}
         </Text>
       </View>
     </View>

@@ -6,8 +6,10 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { useColorScheme } from 'react-native';
 import { useAuth } from './auth-provider';
 import { useDelayedLoadingOverlay } from './loading-overlay-provider';
+import { createAppTheme, resolveThemeMode, type AppTheme, type ThemeMode } from '../services/app-theme';
 import {
   createDefaultUserSettings,
   getStoredUserSettings,
@@ -22,6 +24,7 @@ type SettingsContextValue = {
   settings: UserSettings | null;
   loading: boolean;
   topEmail: string;
+  theme: AppTheme;
   saveProfile: (profile: ProfileSettings) => void;
   updateProfileField: (field: keyof ProfileSettings, value: string) => void;
   updateNotificationSetting: (
@@ -29,6 +32,7 @@ type SettingsContextValue = {
     value: boolean
   ) => void;
   updatePermissionSetting: (field: keyof PermissionSettings, value: boolean) => void;
+  updateThemeMode: (value: ThemeMode) => void;
 };
 
 const SettingsContext = createContext<SettingsContextValue | null>(null);
@@ -38,6 +42,7 @@ export function SettingsProvider({ children }: PropsWithChildren) {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [hasHydrated, setHasHydrated] = useState(false);
+  const systemColorScheme = useColorScheme();
 
   useDelayedLoadingOverlay(loading);
 
@@ -82,6 +87,10 @@ export function SettingsProvider({ children }: PropsWithChildren) {
                 university:
                   storedSettings.profile.university ||
                   defaultSettings.profile.university,
+              },
+              appearance: {
+                ...defaultSettings.appearance,
+                ...storedSettings.appearance,
               },
             }
           : defaultSettings;
@@ -181,7 +190,35 @@ export function SettingsProvider({ children }: PropsWithChildren) {
     });
   };
 
+  const updateThemeMode = (value: ThemeMode) => {
+    setSettings((current) => {
+      if (!current) {
+        return current;
+      }
+
+      return {
+        ...current,
+        appearance: {
+          ...current.appearance,
+          themeMode: value,
+        },
+      };
+    });
+  };
+
   const topEmail = auth.user?.email ?? settings?.profile.email ?? 'unknown user';
+  const resolvedThemeMode = resolveThemeMode(
+    settings?.appearance.themeMode ?? defaultSettings.appearance.themeMode,
+    systemColorScheme
+  );
+  const theme = useMemo(
+    () =>
+      createAppTheme(
+        settings?.appearance.themeMode ?? defaultSettings.appearance.themeMode,
+        resolvedThemeMode
+      ),
+    [defaultSettings.appearance.themeMode, resolvedThemeMode, settings?.appearance.themeMode]
+  );
 
   return (
     <SettingsContext.Provider
@@ -189,10 +226,12 @@ export function SettingsProvider({ children }: PropsWithChildren) {
         settings,
         loading,
         topEmail,
+        theme,
         saveProfile,
         updateProfileField,
         updateNotificationSetting,
         updatePermissionSetting,
+        updateThemeMode,
       }}
     >
       {children}
@@ -208,4 +247,8 @@ export function useSettings() {
   }
 
   return context;
+}
+
+export function useAppTheme() {
+  return useSettings().theme;
 }

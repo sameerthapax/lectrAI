@@ -12,15 +12,13 @@ import {
   ORANGE,
   SettingsLinkCard,
   SettingsLoadingState,
-  CARD,
-  BORDER,
 } from '../../../components/settings/settings-ui';
 import { useAuth } from '../../../providers/auth-provider';
 import { useSettings } from '../../../providers/settings-provider';
 
 export default function SettingsHomeRoute() {
   const auth = useAuth();
-  const { loading } = useSettings();
+  const { loading, settings, theme } = useSettings();
   const [loggingOut, setLoggingOut] = useState(false);
 
   const onLogout = async () => {
@@ -46,10 +44,11 @@ export default function SettingsHomeRoute() {
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{
+        flexGrow: 1,
         padding: 16,
         gap: 14,
         paddingBottom: 32,
-        backgroundColor: '#f7f6f2',
+        backgroundColor: theme.colors.screen,
       }}
     >
       <View
@@ -63,11 +62,20 @@ export default function SettingsHomeRoute() {
           style={{
           }}
         >
-          <Text style={{ color: '#0f172a', fontSize: 30, fontWeight: '800' }}>
+          <Text style={{ color: theme.colors.text, fontSize: 30, fontWeight: '800' }}>
             Settings
           </Text>
         </View>
 
+        <SettingsLinkCard
+          title="Appearance"
+          description={
+            settings?.appearance.themeMode === 'system'
+              ? `Following your phone: ${theme.resolvedMode === 'dark' ? 'Dark' : 'Light'}.`
+              : `Using ${settings?.appearance.themeMode === 'dark' ? 'Dark' : 'Light'} mode.`
+          }
+          onPress={() => router.push('/(tabs)/settings/appearance')}
+        />
         <SettingsLinkCard
           title="Profile"
           description="View and edit your name, email, age, and gender."
@@ -87,9 +95,9 @@ export default function SettingsHomeRoute() {
           style={{
             borderRadius: 24,
             borderCurve: 'continuous',
-            backgroundColor: CARD,
+            backgroundColor: theme.colors.card,
             borderWidth: 1,
-            borderColor: BORDER,
+            borderColor: theme.colors.border,
             padding: 18,
           }}
         >
@@ -102,14 +110,14 @@ export default function SettingsHomeRoute() {
               borderCurve: 'continuous',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: loggingOut ? '#ffb480' : ORANGE,
+              backgroundColor: loggingOut ? theme.colors.switchTrackOn : ORANGE,
               opacity: pressed ? 0.92 : 1,
             })}
           >
             {loggingOut ? (
-              <ActivityIndicator color="#ffffff" />
+              <ActivityIndicator color={theme.colors.accentContrast} />
             ) : (
-              <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '900' }}>
+              <Text style={{ color: theme.colors.accentContrast, fontSize: 16, fontWeight: '900' }}>
                 Log Out
               </Text>
             )}

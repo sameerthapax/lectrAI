@@ -1,4 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
+import type { ThemeMode } from './app-theme';
 
 export type ProfileSettings = {
   name: string;
@@ -19,10 +20,15 @@ export type PermissionSettings = {
   notifications: boolean;
 };
 
+export type AppearanceSettings = {
+  themeMode: ThemeMode;
+};
+
 export type UserSettings = {
   profile: ProfileSettings;
   notifications: NotificationSettings;
   permissions: PermissionSettings;
+  appearance: AppearanceSettings;
 };
 
 const SETTINGS_STORAGE_KEY_PREFIX = 'lectrai.settings.user.';
@@ -48,6 +54,9 @@ export function createDefaultUserSettings(input: {
       microphone: false,
       storage: false,
       notifications: false,
+    },
+    appearance: {
+      themeMode: 'system',
     },
   };
 }
