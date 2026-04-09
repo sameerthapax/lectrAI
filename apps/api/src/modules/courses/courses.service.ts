@@ -1,7 +1,10 @@
-import { getDb } from '@lectrai/db';
+import { getDb, getSupabaseAdminClient } from '@lectrai/db';
 import { HttpError } from '../../lib/http-error.js';
 
 type SemesterTerm = 'Winter' | 'Spring' | 'Summer' | 'Fall';
+type CourseFileRelationType = 'lecture_file' | 'module_file' | 'chapter_file' | 'notes' | 'other';
+
+const COURSE_FILES_BUCKET_NAME = 'course-files';
 
 export type CourseInput = {
   courseCode: string;
@@ -29,6 +32,38 @@ export type CourseRecord = {
   updatedAt: string;
 };
 
+export type CourseFileInput = {
+  courseFileId: string;
+  title: string;
+  description: string;
+  relationType: CourseFileRelationType;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  fileBase64: string;
+};
+
+export type CourseFileRecord = {
+  id: string;
+  courseId: string;
+  uploadedByUserId: string;
+  title: string;
+  description: string | null;
+  relationType: CourseFileRelationType;
+  sourceType: 'file';
+  storageProvider: 'gcs' | null;
+  bucketName: string | null;
+  objectPath: string | null;
+  originalFilename: string | null;
+  mimeType: string | null;
+  fileSizeBytes: number | null;
+  fileExtension: string | null;
+  uploadStatus: 'pending' | 'uploaded' | 'failed';
+  uploadedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export function parseCourseInput(payload: unknown): CourseInput {
   const record = readObject(payload);
   const semesterTerm = readSemesterTerm(record.semesterTerm);
@@ -48,6 +83,21 @@ export function parseCourseInput(payload: unknown): CourseInput {
     section: readOptionalString(record.section),
     description: readOptionalString(record.description),
     colorHex,
+  };
+}
+
+export function parseCourseFileInput(payload: unknown): CourseFileInput {
+  const record = readObject(payload);
+
+  return {
+    courseFileId: readUuid(record.courseFileId, 'courseFileId'),
+    title: readRequiredString(record.title, 'title'),
+    description: readOptionalString(record.description),
+    relationType: readCourseFileRelationType(record.relationType),
+    originalFilename: readRequiredString(record.originalFilename, 'originalFilename'),
+    mimeType: readRequiredString(record.mimeType, 'mimeType'),
+    fileSizeBytes: readPositiveInteger(record.fileSizeBytes, 'fileSizeBytes'),
+    fileBase64: readRequiredString(record.fileBase64, 'fileBase64'),
   };
 }
 
@@ -74,6 +124,38 @@ export async function listCoursesForUser(userId: string) {
   `;
 
   return rows.map(mapCourseRow);
+}
+
+export async function listCourseFilesForUser(userId: string, courseId: string) {
+  await assertUserCanViewCourse(userId, courseId);
+
+  const db = getDb();
+  const rows = await db<DbCourseFileRow[]>`
+    select
+      id,
+      course_id,
+      uploaded_by_user_id,
+      title,
+      description,
+      relation_type,
+      source_type,
+      storage_provider,
+      bucket_name,
+      object_path,
+      original_filename,
+      mime_type,
+      file_size_bytes,
+      file_extension,
+      upload_status,
+      uploaded_at,
+      created_at,
+      updated_at
+    from public.course_files
+    where course_id = ${courseId}::uuid
+    order by created_at desc
+  `;
+
+  return rows.map(mapCourseFileRow);
 }
 
 export async function createCourseForUser(userId: string, input: CourseInput) {
@@ -164,6 +246,103 @@ export async function deleteCourseForUser(userId: string, courseId: string) {
   }
 }
 
+export async function createCourseFileForUser(
+  userId: string,
+  courseId: string,
+  input: CourseFileInput
+) {
+  await assertUserCanManageCourse(userId, courseId);
+
+  const objectPath = buildCourseFileObjectPath(userId, courseId, input.courseFileId, input.originalFilename);
+  const fileBytes = Buffer.from(input.fileBase64, 'base64');
+  const supabase = getSupabaseAdminClient();
+  const uploadResult = await supabase.storage.from(COURSE_FILES_BUCKET_NAME).upload(objectPath, fileBytes, {
+    contentType: input.mimeType,
+    upsert: true,
+  });
+
+  if (uploadResult.error) {
+    throw new HttpError(502, 'Failed to store course file.', uploadResult.error.message);
+  }
+
+  const db = getDb();
+  const rows = await db<DbCourseFileRow[]>`
+    insert into public.course_files (
+      id,
+      course_id,
+      uploaded_by_user_id,
+      title,
+      description,
+      relation_type,
+      source_type,
+      storage_provider,
+      bucket_name,
+      object_path,
+      original_filename,
+      mime_type,
+      file_size_bytes,
+      file_extension,
+      upload_status,
+      uploaded_at
+    ) values (
+      ${input.courseFileId}::uuid,
+      ${courseId}::uuid,
+      ${userId}::uuid,
+      ${input.title},
+      ${nullable(input.description)},
+      ${input.relationType},
+      'file',
+      'gcs',
+      ${COURSE_FILES_BUCKET_NAME},
+      ${objectPath},
+      ${input.originalFilename},
+      ${input.mimeType},
+      ${input.fileSizeBytes},
+      ${readFileExtension(input.originalFilename)},
+      'uploaded',
+      timezone('utc', now())
+    )
+    on conflict (id) do update
+    set
+      course_id = excluded.course_id,
+      uploaded_by_user_id = excluded.uploaded_by_user_id,
+      title = excluded.title,
+      description = excluded.description,
+      relation_type = excluded.relation_type,
+      source_type = excluded.source_type,
+      storage_provider = excluded.storage_provider,
+      bucket_name = excluded.bucket_name,
+      object_path = excluded.object_path,
+      original_filename = excluded.original_filename,
+      mime_type = excluded.mime_type,
+      file_size_bytes = excluded.file_size_bytes,
+      file_extension = excluded.file_extension,
+      upload_status = excluded.upload_status,
+      uploaded_at = excluded.uploaded_at
+    returning
+      id,
+      course_id,
+      uploaded_by_user_id,
+      title,
+      description,
+      relation_type,
+      source_type,
+      storage_provider,
+      bucket_name,
+      object_path,
+      original_filename,
+      mime_type,
+      file_size_bytes,
+      file_extension,
+      upload_status,
+      uploaded_at,
+      created_at,
+      updated_at
+  `;
+
+  return mapSingleCourseFile(rows, 'Failed to create course file.');
+}
+
 function mapSingleCourse(rows: DbCourseRow[], message: string, statusCode = 500) {
   const row = rows[0];
 
@@ -215,6 +394,43 @@ function readOptionalString(value: unknown) {
   return value.trim();
 }
 
+function readUuid(value: unknown, fieldName: string) {
+  const normalized = readRequiredString(value, fieldName);
+
+  if (!/^[0-9a-fA-F-]{36}$/.test(normalized)) {
+    throw new HttpError(400, `${fieldName} must be a valid UUID.`);
+  }
+
+  return normalized;
+}
+
+function readPositiveInteger(value: unknown, fieldName: string) {
+  const normalized = typeof value === 'number' ? value : Number(value);
+
+  if (!Number.isInteger(normalized) || normalized < 0) {
+    throw new HttpError(400, `${fieldName} must be a positive integer.`);
+  }
+
+  return normalized;
+}
+
+function readCourseFileRelationType(value: unknown): CourseFileRelationType {
+  if (
+    value === 'lecture_file' ||
+    value === 'module_file' ||
+    value === 'chapter_file' ||
+    value === 'notes' ||
+    value === 'other'
+  ) {
+    return value;
+  }
+
+  throw new HttpError(
+    400,
+    'relationType must be one of: lecture_file, module_file, chapter_file, notes, other.'
+  );
+}
+
 function readSemesterTerm(value: unknown): SemesterTerm {
   if (value === 'Winter' || value === 'Spring' || value === 'Summer' || value === 'Fall') {
     return value;
@@ -241,6 +457,106 @@ function nullable(value: string) {
   return value.length > 0 ? value : null;
 }
 
+function readFileExtension(filename: string) {
+  const match = filename.match(/\.([a-zA-Z0-9]+)$/);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function buildCourseFileObjectPath(
+  userId: string,
+  courseId: string,
+  courseFileId: string,
+  filename: string
+) {
+  return `${userId}/${courseId}/${courseFileId}/${Date.now()}-${sanitizeFilename(filename)}`;
+}
+
+function sanitizeFilename(filename: string) {
+  return filename.replace(/[^a-zA-Z0-9._-]+/g, '-');
+}
+
+async function assertUserCanViewCourse(userId: string, courseId: string) {
+  const db = getDb();
+  const rows = await db<{ id: string }[]>`
+    select c.id
+    from public.courses c
+    where c.id = ${courseId}::uuid
+      and (
+        c.owner_user_id = ${userId}::uuid
+        or exists (
+          select 1
+          from public.course_members cm
+          where cm.course_id = c.id
+            and cm.user_id = ${userId}::uuid
+            and cm.is_active = true
+        )
+      )
+    limit 1
+  `;
+
+  if (rows.length === 0) {
+    throw new HttpError(403, 'You do not have permission to view files for this course.');
+  }
+}
+
+async function assertUserCanManageCourse(userId: string, courseId: string) {
+  const db = getDb();
+  const rows = await db<{ id: string }[]>`
+    select c.id
+    from public.courses c
+    where c.id = ${courseId}::uuid
+      and (
+        c.owner_user_id = ${userId}::uuid
+        or exists (
+          select 1
+          from public.course_members cm
+          where cm.course_id = c.id
+            and cm.user_id = ${userId}::uuid
+            and cm.is_active = true
+            and cm.membership_role in ('instructor', 'ta')
+        )
+      )
+    limit 1
+  `;
+
+  if (rows.length === 0) {
+    throw new HttpError(403, 'You do not have permission to upload files for this course.');
+  }
+}
+
+function mapSingleCourseFile(rows: DbCourseFileRow[], message: string, statusCode = 500) {
+  const row = rows[0];
+
+  if (!row) {
+    throw new HttpError(statusCode, message);
+  }
+
+  return mapCourseFileRow(row);
+}
+
+function mapCourseFileRow(row: DbCourseFileRow): CourseFileRecord {
+  return {
+    id: row.id,
+    courseId: row.course_id,
+    uploadedByUserId: row.uploaded_by_user_id,
+    title: row.title,
+    description: row.description,
+    relationType: row.relation_type,
+    sourceType: row.source_type,
+    storageProvider: row.storage_provider,
+    bucketName: row.bucket_name,
+    objectPath: row.object_path,
+    originalFilename: row.original_filename,
+    mimeType: row.mime_type,
+    fileSizeBytes: row.file_size_bytes,
+    fileExtension: row.file_extension,
+    uploadStatus: row.upload_status,
+    uploadedAt: row.uploaded_at ? row.uploaded_at.toISOString() : null,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
 type DbCourseRow = {
   id: string;
   owner_user_id: string;
@@ -252,6 +568,27 @@ type DbCourseRow = {
   description: string | null;
   color_hex: string | null;
   is_archived: boolean;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type DbCourseFileRow = {
+  id: string;
+  course_id: string;
+  uploaded_by_user_id: string;
+  title: string;
+  description: string | null;
+  relation_type: CourseFileRelationType;
+  source_type: 'file';
+  storage_provider: 'gcs' | null;
+  bucket_name: string | null;
+  object_path: string | null;
+  original_filename: string | null;
+  mime_type: string | null;
+  file_size_bytes: number | null;
+  file_extension: string | null;
+  upload_status: 'pending' | 'uploaded' | 'failed';
+  uploaded_at: Date | null;
   created_at: Date;
   updated_at: Date;
 };

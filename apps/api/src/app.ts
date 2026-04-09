@@ -8,8 +8,8 @@ export function createApp() {
 
   // Cloud Run sits behind Google's proxy, so trust the first forwarded
   app.set('trust proxy', 1);
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
   app.use('/api/auth', authRateLimit);
   app.use('/api', apiRateLimit);
 

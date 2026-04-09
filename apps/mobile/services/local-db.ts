@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 const DATABASE_NAME = 'lectrai-cache.db';
 
-export const LOCAL_CACHE_SCHEMA_VERSION = 4;
+export const LOCAL_CACHE_SCHEMA_VERSION = 5;
 
 const SYNC_STATUS_CHECK = `
 CHECK (sync_status IN ('synced', 'pending_pull', 'pending_push', 'conflict'))
@@ -349,6 +349,31 @@ CREATE TABLE IF NOT EXISTS cached_study_materials (
   last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS cached_course_files (
+  id TEXT PRIMARY KEY NOT NULL,
+  course_id TEXT NOT NULL REFERENCES cached_courses(id) ON DELETE CASCADE,
+  uploaded_by_user_id TEXT REFERENCES cached_users(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  relation_type TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  storage_provider TEXT,
+  bucket_name TEXT,
+  object_path TEXT,
+  external_url TEXT,
+  original_filename TEXT,
+  mime_type TEXT,
+  file_size_bytes INTEGER,
+  file_extension TEXT,
+  upload_status TEXT NOT NULL DEFAULT 'pending',
+  uploaded_at TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
+  dirty_fields_json TEXT,
+  last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS cached_quizzes (
   id TEXT PRIMARY KEY NOT NULL,
   lecture_id TEXT NOT NULL REFERENCES cached_lectures(id) ON DELETE CASCADE,
@@ -523,6 +548,8 @@ CREATE TABLE IF NOT EXISTS cached_chat_citations (
 
 CREATE TABLE IF NOT EXISTS local_upload_queue (
   id TEXT PRIMARY KEY NOT NULL,
+  upload_type TEXT NOT NULL DEFAULT 'audio',
+  course_id TEXT REFERENCES cached_courses(id) ON DELETE SET NULL,
   lecture_id TEXT REFERENCES cached_lectures(id) ON DELETE SET NULL,
   local_uri TEXT NOT NULL,
   original_filename TEXT,
@@ -531,6 +558,7 @@ CREATE TABLE IF NOT EXISTS local_upload_queue (
   checksum_sha256 TEXT,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'uploading', 'uploaded', 'failed')),
   remote_audio_file_id TEXT REFERENCES cached_audio_files(id) ON DELETE SET NULL,
+  remote_course_file_id TEXT REFERENCES cached_course_files(id) ON DELETE SET NULL,
   last_error TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -554,6 +582,7 @@ CREATE INDEX IF NOT EXISTS idx_cached_lecture_summaries_lecture_id ON cached_lec
 CREATE INDEX IF NOT EXISTS idx_cached_key_concepts_lecture_id ON cached_key_concepts(lecture_id);
 CREATE INDEX IF NOT EXISTS idx_cached_timeline_events_lecture_id ON cached_timeline_events(lecture_id);
 CREATE INDEX IF NOT EXISTS idx_cached_study_materials_lecture_id ON cached_study_materials(lecture_id);
+CREATE INDEX IF NOT EXISTS idx_cached_course_files_course_id ON cached_course_files(course_id);
 CREATE INDEX IF NOT EXISTS idx_cached_quizzes_lecture_id ON cached_quizzes(lecture_id);
 CREATE INDEX IF NOT EXISTS idx_cached_quiz_questions_quiz_id ON cached_quiz_questions(quiz_id);
 CREATE INDEX IF NOT EXISTS idx_cached_quiz_options_question_id ON cached_quiz_options(question_id);
@@ -583,6 +612,7 @@ const CLEAR_TABLES = [
   'cached_quiz_questions',
   'cached_quizzes',
   'cached_study_materials',
+  'cached_course_files',
   'cached_timeline_events',
   'cached_key_concepts',
   'cached_lecture_summaries',
@@ -742,6 +772,100 @@ async function migrateLocalDatabase(db: SQLite.SQLiteDatabase) {
     ['sync_status', "TEXT NOT NULL DEFAULT 'synced'"],
     ['dirty_fields_json', 'TEXT'],
     ['last_synced_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+  ]);
+
+  await ensureTableColumns(db, 'cached_lectures', [
+    ['course_id', 'TEXT'],
+    ['created_by_user_id', 'TEXT'],
+    ['title', "TEXT NOT NULL DEFAULT ''"],
+    ['lecture_number', 'INTEGER'],
+    ['lecture_date', 'TEXT'],
+    ['source_type', 'TEXT'],
+    ['status', "TEXT NOT NULL DEFAULT 'draft'"],
+    ['description', 'TEXT'],
+    ['topic', 'TEXT'],
+    ['duration_seconds', 'INTEGER'],
+    ['language_code', 'TEXT'],
+    ['notes', 'TEXT'],
+    ['recorded_at', 'TEXT'],
+    ['created_at', 'TEXT'],
+    ['updated_at', 'TEXT'],
+    ['sync_status', "TEXT NOT NULL DEFAULT 'synced'"],
+    ['dirty_fields_json', 'TEXT'],
+    ['last_synced_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+  ]);
+
+  await ensureTableColumns(db, 'cached_audio_files', [
+    ['lecture_id', 'TEXT'],
+    ['uploaded_by_user_id', 'TEXT'],
+    ['storage_provider', 'TEXT'],
+    ['bucket_name', 'TEXT'],
+    ['object_path', 'TEXT'],
+    ['original_filename', 'TEXT'],
+    ['mime_type', 'TEXT'],
+    ['file_size_bytes', 'INTEGER'],
+    ['duration_seconds', 'INTEGER'],
+    ['sample_rate_hz', 'INTEGER'],
+    ['bitrate_kbps', 'INTEGER'],
+    ['checksum_sha256', 'TEXT'],
+    ['is_primary', 'INTEGER NOT NULL DEFAULT 0'],
+    ['upload_status', "TEXT NOT NULL DEFAULT 'pending'"],
+    ['uploaded_at', 'TEXT'],
+    ['created_at', 'TEXT'],
+    ['sync_status', "TEXT NOT NULL DEFAULT 'synced'"],
+    ['dirty_fields_json', 'TEXT'],
+    ['last_synced_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+  ]);
+
+  await ensureTableColumns(db, 'cached_course_files', [
+    ['course_id', 'TEXT'],
+    ['uploaded_by_user_id', 'TEXT'],
+    ['title', "TEXT NOT NULL DEFAULT ''"],
+    ['description', 'TEXT'],
+    ['relation_type', "TEXT NOT NULL DEFAULT 'other'"],
+    ['source_type', "TEXT NOT NULL DEFAULT 'file'"],
+    ['storage_provider', 'TEXT'],
+    ['bucket_name', 'TEXT'],
+    ['object_path', 'TEXT'],
+    ['external_url', 'TEXT'],
+    ['original_filename', 'TEXT'],
+    ['mime_type', 'TEXT'],
+    ['file_size_bytes', 'INTEGER'],
+    ['file_extension', 'TEXT'],
+    ['upload_status', "TEXT NOT NULL DEFAULT 'pending'"],
+    ['uploaded_at', 'TEXT'],
+    ['created_at', 'TEXT'],
+    ['updated_at', 'TEXT'],
+    ['sync_status', "TEXT NOT NULL DEFAULT 'synced'"],
+    ['dirty_fields_json', 'TEXT'],
+    ['last_synced_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+  ]);
+
+  await ensureTableColumns(db, 'downloaded_assets', [
+    ['remote_uri', 'TEXT'],
+    ['local_uri', "TEXT NOT NULL DEFAULT ''"],
+    ['mime_type', 'TEXT'],
+    ['etag', 'TEXT'],
+    ['byte_size', 'INTEGER'],
+    ['created_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+    ['updated_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+  ]);
+
+  await ensureTableColumns(db, 'local_upload_queue', [
+    ['upload_type', "TEXT NOT NULL DEFAULT 'audio'"],
+    ['course_id', 'TEXT'],
+    ['lecture_id', 'TEXT'],
+    ['local_uri', "TEXT NOT NULL DEFAULT ''"],
+    ['original_filename', 'TEXT'],
+    ['mime_type', 'TEXT'],
+    ['file_size_bytes', 'INTEGER'],
+    ['checksum_sha256', 'TEXT'],
+    ['status', "TEXT NOT NULL DEFAULT 'queued'"],
+    ['remote_audio_file_id', 'TEXT'],
+    ['remote_course_file_id', 'TEXT'],
+    ['last_error', 'TEXT'],
+    ['created_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+    ['updated_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
   ]);
 }
 

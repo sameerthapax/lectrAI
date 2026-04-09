@@ -1,25 +1,75 @@
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { useAppTheme } from '../../providers/settings-provider';
-
-const MOCK_SUMMARY = [
-  'The lecture introduced the core idea of entropy as a way to describe disorder and energy distribution in thermodynamic systems.',
-  'It connected the concept to everyday physical examples so students could distinguish intuition from the formal definition used in class.',
-  'The professor also highlighted why entropy becomes important when predicting whether a process will happen naturally or require outside work.',
-];
-
-const MOCK_TRANSCRIPT = [
-  'Today we are going to focus on entropy, not just as a definition to memorize, but as a pattern that helps explain why some physical changes happen on their own.',
-  'When we say a system becomes more disordered, we are really talking about the number of possible arrangements available to the particles and the energy inside that system.',
-  'That is why entropy is so useful in thermodynamics. It gives us a language for predicting direction, not just describing state.',
-  'As we move forward, keep asking whether a process spreads energy out more broadly, because that question will come back again and again in this course.',
-];
+import {
+  getLatestLectureRecording,
+  getLectureRecording,
+  type LocalLectureRecordingRecord,
+} from '../../services/recordings-repository';
 
 export default function RecordingResultsRoute() {
   const theme = useAppTheme();
+  const params = useLocalSearchParams<{ lectureId?: string }>();
   const [summaryExpanded, setSummaryExpanded] = useState(true);
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
+  const [recording, setRecording] = useState<LocalLectureRecordingRecord | null>(null);
+  const [loading, setLoading] = useState(true);
+  const player = useAudioPlayer(recording?.localUri ?? null, { updateInterval: 250 });
+  const playerStatus = useAudioPlayerStatus(player);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      const loadRecording = async () => {
+        setLoading(true);
+
+        const nextRecording = params.lectureId
+          ? await getLectureRecording(params.lectureId)
+          : await getLatestLectureRecording();
+
+        if (!cancelled) {
+          setRecording(nextRecording);
+          setLoading(false);
+        }
+      };
+
+      void loadRecording();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [params.lectureId])
+  );
+
+  const syncLabel = !recording
+    ? 'No recording loaded'
+    : recording.uploadStatus === 'uploaded' && recording.syncStatus === 'synced'
+      ? 'Uploaded to API'
+      : recording.lastError
+        ? 'Saved locally, upload failed'
+        : 'Saved locally, upload pending';
+  const hasLocalRecordingFile = Boolean(recording?.localUri);
+
+  useEffect(() => {
+    void setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      interruptionMode: 'mixWithOthers',
+      shouldPlayInBackground: false,
+      shouldRouteThroughEarpiece: false,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!recording?.localUri) {
+      return;
+    }
+
+    player.replace(recording.localUri);
+  }, [player, recording?.localUri]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
@@ -69,38 +119,94 @@ export default function RecordingResultsRoute() {
 
         <NotionSection
           theme={theme}
-          title="Summary"
+          title="Recording"
           expanded={summaryExpanded}
           onToggle={() => setSummaryExpanded((current) => !current)}
         >
-          {MOCK_SUMMARY.map((paragraph) => (
-            <Text
-              key={paragraph}
-              style={{ color: theme.colors.text, fontSize: 15, lineHeight: 25, fontWeight: '500' }}
-            >
-              {paragraph}
+          {loading ? (
+            <Text style={{ color: theme.colors.text, fontSize: 15, lineHeight: 25, fontWeight: '500' }}>
+              Loading saved recording...
             </Text>
-          ))}
+          ) : recording ? (
+            <>
+              <Text style={{ color: theme.colors.text, fontSize: 18, lineHeight: 24, fontWeight: '800' }}>
+                {recording.title}
+              </Text>
+              <KeyValueRow label="Status" value={syncLabel} theme={theme} />
+              <KeyValueRow
+                label="Duration"
+                value={formatDuration(recording.durationSeconds)}
+                theme={theme}
+              />
+              <KeyValueRow label="File" value={recording.originalFilename} theme={theme} />
+              <KeyValueRow label="Stored" value={recording.localUri} theme={theme} />
+              {recording.objectPath ? (
+                <KeyValueRow
+                  label="Storage path"
+                  value={`${recording.bucketName}/${recording.objectPath}`}
+                  theme={theme}
+                />
+              ) : null}
+              <Pressable
+                disabled={!hasLocalRecordingFile}
+                onPress={() => {
+                  if (!hasLocalRecordingFile) {
+                    return;
+                  }
+
+                  if (playerStatus.playing) {
+                    player.pause();
+                    return;
+                  }
+
+                  player.play();
+                }}
+                style={({ pressed }) => ({
+                  minHeight: 52,
+                  borderRadius: 16,
+                  borderCurve: 'continuous',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: theme.colors.overlay,
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  opacity: !hasLocalRecordingFile ? 0.55 : pressed ? 0.9 : 1,
+                })}
+              >
+                <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '900' }}>
+                  {!hasLocalRecordingFile
+                    ? 'Recording file is not stored on this device'
+                    : playerStatus.playing
+                    ? `Pause ${formatDuration(Math.round(playerStatus.currentTime))}`
+                    : 'Play Recording'}
+                </Text>
+              </Pressable>
+              {recording.lastError ? (
+                <Text
+                  style={{ color: '#b91c1c', fontSize: 14, lineHeight: 22, fontWeight: '600' }}
+                >
+                  {recording.lastError}
+                </Text>
+              ) : null}
+            </>
+          ) : (
+            <Text style={{ color: theme.colors.text, fontSize: 15, lineHeight: 25, fontWeight: '500' }}>
+              No saved recording found yet.
+            </Text>
+          )}
         </NotionSection>
 
         <NotionSection
           theme={theme}
-          title="Transcript"
+          title="Next Step"
           expanded={transcriptExpanded}
           onToggle={() => setTranscriptExpanded((current) => !current)}
         >
-          {MOCK_TRANSCRIPT.map((paragraph, index) => (
-            <View key={`${index}-${paragraph}`} style={{ gap: 6 }}>
-              <Text style={{ color: theme.colors.textSubtle, fontSize: 12, fontWeight: '800', letterSpacing: 0.8 }}>
-                {`00:0${index + 2}`}
-              </Text>
-              <Text
-                style={{ color: theme.colors.text, fontSize: 15, lineHeight: 25, fontWeight: '500' }}
-              >
-                {paragraph}
-              </Text>
-            </View>
-          ))}
+          <Text style={{ color: theme.colors.text, fontSize: 15, lineHeight: 25, fontWeight: '500' }}>
+            The recording is written into app storage first, then uploaded to the API. The backend
+            stores the file, creates the lecture graph, and queues a placeholder processing job so the
+            next backend pass can attach real transcription and downstream processing.
+          </Text>
         </NotionSection>
       </ScrollView>
 
@@ -140,6 +246,35 @@ export default function RecordingResultsRoute() {
       </View>
     </View>
   );
+}
+
+function KeyValueRow({
+  label,
+  value,
+  theme,
+}: {
+  label: string;
+  value: string;
+  theme: ReturnType<typeof useAppTheme>;
+}) {
+  return (
+    <View style={{ gap: 4 }}>
+      <Text style={{ color: theme.colors.textSubtle, fontSize: 12, fontWeight: '800', letterSpacing: 0.8 }}>
+        {label.toUpperCase()}
+      </Text>
+      <Text style={{ color: theme.colors.text, fontSize: 15, lineHeight: 22, fontWeight: '500' }}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function formatDuration(durationSeconds: number) {
+  const minutes = Math.floor(durationSeconds / 60)
+    .toString()
+    .padStart(2, '0');
+  const seconds = (durationSeconds % 60).toString().padStart(2, '0');
+  return `${minutes}:${seconds}`;
 }
 
 function NotionSection({

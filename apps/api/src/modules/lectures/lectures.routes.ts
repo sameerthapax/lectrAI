@@ -1,16 +1,9 @@
 import { Router } from 'express';
+import { getLectures, postLectureRecording } from './lectures.controller.js';
 
 const lecturesRouter = Router();
 
-lecturesRouter.get('/', (req, res) => {
-  res.json({
-    message: 'Lectures API scaffolded',
-    resource: 'lectures',
-    user: {
-      id: req.authUser?.id ?? null,
-      email: req.authUser?.email ?? null,
-    },
-  });
-});
+lecturesRouter.get('/', getLectures);
+lecturesRouter.post('/recordings', postLectureRecording);
 
 export { lecturesRouter };
