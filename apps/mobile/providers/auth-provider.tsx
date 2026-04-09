@@ -26,6 +26,7 @@ import {
   clearLocalCache,
   initializeLocalDatabase,
 } from '../services/local-db';
+import { bootstrapLocalCacheFromApi } from '../services/bootstrap-sync';
 import { useDelayedLoadingOverlay } from './loading-overlay-provider';
 
 type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
@@ -110,6 +111,34 @@ export function AuthProvider({ children }: PropsWithChildren) {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (status !== 'authenticated' || !user || !session?.accessToken) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const bootstrapCache = async () => {
+      try {
+        const accessToken = await getValidAccessToken();
+
+        if (!accessToken || cancelled) {
+          return;
+        }
+
+        await bootstrapLocalCacheFromApi(user, accessToken);
+      } catch {
+        // Keep existing cached data visible when bootstrap sync fails.
+      }
+    };
+
+    void bootstrapCache();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, user?.id, session?.accessToken]);
 
   const signIn = async (email: string, password: string) => {
     const result = await signInWithEmailAndPassword(email, password);

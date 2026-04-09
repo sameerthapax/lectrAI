@@ -136,7 +136,6 @@ export async function replaceCoursesForUser(user: AuthUser, courses: RemoteCours
   await runSerializedLocalWrite(async (db) => {
     await db.withTransactionAsync(async () => {
       await ensureLocalUser(db, user);
-      await db.runAsync('DELETE FROM cached_courses WHERE owner_user_id = ?', [user.id]);
 
       for (const course of courses) {
         await upsertCourseRecord(db, course);

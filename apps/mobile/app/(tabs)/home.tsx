@@ -39,6 +39,7 @@ import {
   upsertStatsForUser,
   type LocalStatsRecord,
 } from '../../services/stats-repository';
+import { saveRecordedLecture } from '../../services/recordings-repository';
 
 const DIGIT_HEIGHT = 28;
 const DIGIT_WIDTH = 16;
@@ -78,6 +79,10 @@ export default function HomeRoute() {
     'A static chatbot with no lecture context',
   ];
   const courseCards = buildCourseSelectorCards(courses);
+  const selectedCourse = useMemo(
+    () => courses.find((course) => course.id === selectedCourseId) ?? null,
+    [courses, selectedCourseId]
+  );
   const recordingSeconds = Math.max(0, Math.floor((recorderState.durationMillis ?? 0) / 1000));
   const formattedRecordingTime = useMemo(() => {
     const minutes = Math.floor(recordingSeconds / 60)
@@ -316,6 +321,14 @@ export default function HomeRoute() {
     try {
       setRecordingBusy(true);
 
+      if (!selectedCourse || selectedCourseId === NO_CLASS_COURSE_ID) {
+        Alert.alert(
+          'Course required',
+          'Select a course before starting a lecture recording so the file can be stored and synced.'
+        );
+        return;
+      }
+
       if (settingsState.loading || !settingsState.settings?.permissions.microphone) {
         Alert.alert(
           'Microphone disabled',
@@ -364,9 +377,61 @@ export default function HomeRoute() {
   const closeRecording = async (navigateToResults = false) => {
     try {
       setRecordingBusy(true);
+      const durationMillis = recorderState.durationMillis ?? 0;
 
       if (recorderState.isRecording) {
         await recorder.stop();
+      }
+
+      const recordingUri = recorder.uri ?? recorderState.url;
+
+      if (navigateToResults) {
+        if (!auth.user) {
+          throw new Error('You must be signed in to save a recording.');
+        }
+
+        if (!selectedCourse || selectedCourseId === NO_CLASS_COURSE_ID) {
+          throw new Error('Select a course before saving a recording.');
+        }
+
+        if (!recordingUri) {
+          throw new Error('The recorder did not return an audio file.');
+        }
+
+        const accessToken = await auth.getValidAccessToken();
+        const savedRecording = await saveRecordedLecture({
+          user: auth.user,
+          accessToken,
+          courseId: selectedCourse.id,
+          courseName: selectedCourse.courseName,
+          recordingUri,
+          durationMillis,
+        });
+
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+          interruptionMode: 'mixWithOthers',
+          shouldPlayInBackground: false,
+          shouldRouteThroughEarpiece: false,
+        });
+
+        Animated.timing(recordingOverlay, {
+          toValue: 0,
+          duration: 220,
+          easing: Easing.inOut(Easing.cubic),
+          useNativeDriver: true,
+        }).start(() => {
+          setRecordingVisible(false);
+          router.push({
+            pathname: '/recording-results-page',
+            params: {
+              lectureId: savedRecording?.lectureId ?? '',
+            },
+          });
+        });
+
+        return;
       }
 
       await setAudioModeAsync({
@@ -384,9 +449,6 @@ export default function HomeRoute() {
         useNativeDriver: true,
       }).start(() => {
         setRecordingVisible(false);
-        if (navigateToResults) {
-          router.push('/recording-results-page');
-        }
       });
     } catch (error) {
       Alert.alert(
