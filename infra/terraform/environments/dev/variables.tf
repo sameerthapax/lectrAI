@@ -67,3 +67,26 @@ variable "database_url" {
   description = "DATABASE_URL value exposed to the Cloud Run container"
   sensitive   = true
 }
+
+variable "openai_api_key" {
+  type        = string
+  description = "OPENAI_API_KEY value exposed to the Cloud Run container"
+  sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.openai_api_key)) > 0
+    error_message = "openai_api_key must be provided. Set the OPENAI_API_KEY GitHub secret for CI/CD deploys."
+  }
+}
+
+variable "openai_transcription_model" {
+  type        = string
+  description = "OpenAI audio transcription model used by the API"
+  default     = "gpt-4o-transcribe-diarize"
+}
+
+variable "openai_transcript_processing_model" {
+  type        = string
+  description = "OpenAI model used to classify transcript speakers and produce processed transcript JSON"
+  default     = "gpt-4o-2024-08-06"
+}

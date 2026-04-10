@@ -135,3 +135,36 @@ export async function authorizedRequest<TResponse>(
 ) {
   return request<TResponse>(path, init, { accessToken });
 }
+
+export async function authorizedBinaryRequest(
+  path: string,
+  init: RequestInit,
+  accessToken: string
+) {
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', `Bearer ${accessToken}`);
+
+  const response = await fetch(`${requireApiBaseUrl()}${path}`, {
+    ...init,
+    headers,
+  });
+
+  if (!response.ok) {
+    let message = 'Request failed. Please try again.';
+
+    try {
+      const data = (await response.json()) as { error?: string; message?: string };
+      message = data.error ?? data.message ?? message;
+    } catch {
+      // Ignore non-JSON error bodies.
+    }
+
+    throw new Error(message);
+  }
+
+  return {
+    bytes: new Uint8Array(await response.arrayBuffer()),
+    contentType: response.headers.get('Content-Type'),
+    contentDisposition: response.headers.get('Content-Disposition'),
+  };
+}

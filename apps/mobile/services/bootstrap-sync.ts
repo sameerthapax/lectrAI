@@ -17,5 +17,5 @@ export async function bootstrapLocalCacheFromApi(user: AuthUser, accessToken: st
   });
 
   const [lectures] = await Promise.all([lecturesPromise, Promise.all(courseFilesPromises)]);
-  await upsertRemoteLectureRecordings(user, lectures);
+  await upsertRemoteLectureRecordings(user, lectures, accessToken);
 }

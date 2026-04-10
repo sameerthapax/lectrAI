@@ -1,21 +1,30 @@
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from 'react-native';
+import { useAuth } from '../../providers/auth-provider';
 import { useAppTheme } from '../../providers/settings-provider';
 import {
+  ensureLectureAudioDownloadedForCache,
   getLatestLectureRecording,
   getLectureRecording,
+  processLectureTranscriptionForCache,
   type LocalLectureRecordingRecord,
 } from '../../services/recordings-repository';
 
 export default function RecordingResultsRoute() {
   const theme = useAppTheme();
+  const auth = useAuth();
   const params = useLocalSearchParams<{ lectureId?: string }>();
   const [summaryExpanded, setSummaryExpanded] = useState(true);
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const [recording, setRecording] = useState<LocalLectureRecordingRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [audioDownloadLoading, setAudioDownloadLoading] = useState(false);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const downloadingAudioLectureIdRef = useRef<string | null>(null);
+  const processingTranscriptLectureIdRef = useRef<string | null>(null);
   const player = useAudioPlayer(recording?.localUri ?? null, { updateInterval: 250 });
   const playerStatus = useAudioPlayerStatus(player);
 
@@ -70,6 +79,141 @@ export default function RecordingResultsRoute() {
 
     player.replace(recording.localUri);
   }, [player, recording?.localUri]);
+
+  useEffect(() => {
+    const lectureId = recording?.lectureId;
+    const user = auth.user;
+
+    if (
+      loading ||
+      !lectureId ||
+      !recording ||
+      !user ||
+      recording.localUri.length > 0 ||
+      recording.uploadStatus !== 'uploaded' ||
+      recording.syncStatus !== 'synced' ||
+      downloadingAudioLectureIdRef.current === lectureId
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const downloadAudio = async () => {
+      downloadingAudioLectureIdRef.current = lectureId;
+      setAudioDownloadLoading(true);
+
+      try {
+        const accessToken = await auth.getValidAccessToken();
+
+        if (!accessToken) {
+          return;
+        }
+
+        const updatedRecording = await ensureLectureAudioDownloadedForCache(
+          user,
+          lectureId,
+          accessToken
+        );
+
+        if (!cancelled && updatedRecording) {
+          setRecording(updatedRecording);
+        }
+      } finally {
+        if (downloadingAudioLectureIdRef.current === lectureId) {
+          downloadingAudioLectureIdRef.current = null;
+        }
+
+        if (!cancelled) {
+          setAudioDownloadLoading(false);
+        }
+      }
+    };
+
+    void downloadAudio();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    auth,
+    auth.user,
+    loading,
+    recording?.lectureId,
+    recording?.localUri,
+    recording?.syncStatus,
+    recording?.uploadStatus,
+  ]);
+
+  useEffect(() => {
+    const lectureId = recording?.lectureId;
+
+    if (
+      loading ||
+      !lectureId ||
+      !recording ||
+      (recording.transcript?.status === 'ready' && hasCanonicalSpeakerLabels(recording.transcript.fullText)) ||
+      recording.uploadStatus !== 'uploaded' ||
+      recording.syncStatus !== 'synced' ||
+      processingTranscriptLectureIdRef.current === lectureId ||
+      transcriptError
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const processTranscript = async () => {
+      processingTranscriptLectureIdRef.current = lectureId;
+      setTranscriptError(null);
+      setTranscriptLoading(true);
+
+      try {
+        const accessToken = await auth.getValidAccessToken();
+
+        if (!accessToken) {
+          throw new Error('Your session expired before transcription could start.');
+        }
+
+        const updatedRecording = await processLectureTranscriptionForCache(
+          lectureId,
+          accessToken
+        );
+
+        if (!cancelled) {
+          setRecording(updatedRecording);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTranscriptError(
+            error instanceof Error ? error.message : 'Unable to process the transcript.'
+          );
+        }
+      } finally {
+        if (processingTranscriptLectureIdRef.current === lectureId) {
+          processingTranscriptLectureIdRef.current = null;
+        }
+
+        if (!cancelled) {
+          setTranscriptLoading(false);
+        }
+      }
+    };
+
+    void processTranscript();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    auth,
+    loading,
+    recording?.lectureId,
+    recording?.syncStatus,
+    recording?.transcript?.status,
+    recording?.uploadStatus,
+    transcriptError,
+  ]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
@@ -174,7 +318,9 @@ export default function RecordingResultsRoute() {
                 })}
               >
                 <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '900' }}>
-                  {!hasLocalRecordingFile
+                  {audioDownloadLoading
+                    ? 'Downloading recording...'
+                    : !hasLocalRecordingFile
                     ? 'Recording file is not stored on this device'
                     : playerStatus.playing
                     ? `Pause ${formatDuration(Math.round(playerStatus.currentTime))}`
@@ -198,15 +344,64 @@ export default function RecordingResultsRoute() {
 
         <NotionSection
           theme={theme}
-          title="Next Step"
+          title="Transcript"
           expanded={transcriptExpanded}
           onToggle={() => setTranscriptExpanded((current) => !current)}
         >
-          <Text style={{ color: theme.colors.text, fontSize: 15, lineHeight: 25, fontWeight: '500' }}>
-            The recording is written into app storage first, then uploaded to the API. The backend
-            stores the file, creates the lecture graph, and queues a placeholder processing job so the
-            next backend pass can attach real transcription and downstream processing.
-          </Text>
+          {transcriptLoading ? (
+            <TranscriptLoadingState theme={theme} />
+          ) : recording?.transcript?.status === 'ready' &&
+            recording.transcript.fullText &&
+            hasCanonicalSpeakerLabels(recording.transcript.fullText) ? (
+            <>
+              <KeyValueRow
+                label="Model"
+                value={recording.transcript.modelName ?? 'OpenAI transcription'}
+                theme={theme}
+              />
+              <Text
+                style={{
+                  color: theme.colors.text,
+                  fontSize: 15,
+                  lineHeight: 25,
+                  fontWeight: '500',
+                }}
+              >
+                {recording.transcript.fullText}
+              </Text>
+            </>
+          ) : transcriptError ? (
+            <>
+              <Text style={{ color: '#b91c1c', fontSize: 14, lineHeight: 22, fontWeight: '700' }}>
+                {transcriptError}
+              </Text>
+              <Pressable
+                onPress={() => {
+                  setTranscriptError(null);
+                  setRecording((current) => (current ? { ...current, transcript: null } : current));
+                }}
+                style={({ pressed }) => ({
+                  minHeight: 48,
+                  borderRadius: 16,
+                  borderCurve: 'continuous',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: theme.colors.overlay,
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  opacity: pressed ? 0.9 : 1,
+                })}
+              >
+                <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '900' }}>
+                  Try Again
+                </Text>
+              </Pressable>
+            </>
+          ) : (
+            <Text style={{ color: theme.colors.text, fontSize: 15, lineHeight: 25, fontWeight: '500' }}>
+              Transcript processing will start after the recording is uploaded.
+            </Text>
+          )}
         </NotionSection>
       </ScrollView>
 
@@ -248,6 +443,41 @@ export default function RecordingResultsRoute() {
   );
 }
 
+function TranscriptLoadingState({ theme }: { theme: ReturnType<typeof useAppTheme> }) {
+  return (
+    <View
+      style={{
+        minHeight: 170,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 12,
+        borderRadius: 18,
+        borderCurve: 'continuous',
+        backgroundColor: theme.colors.overlay,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+      }}
+    >
+      <ActivityIndicator size="large" color={theme.colors.accent} />
+      <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: '900' }}>
+        Processing transcript
+      </Text>
+      <Text
+        style={{
+          maxWidth: 260,
+          color: theme.colors.textMuted,
+          fontSize: 14,
+          lineHeight: 21,
+          fontWeight: '500',
+          textAlign: 'center',
+        }}
+      >
+        Separating speakers and building the transcript paragraphs.
+      </Text>
+    </View>
+  );
+}
+
 function KeyValueRow({
   label,
   value,
@@ -275,6 +505,14 @@ function formatDuration(durationSeconds: number) {
     .padStart(2, '0');
   const seconds = (durationSeconds % 60).toString().padStart(2, '0');
   return `${minutes}:${seconds}`;
+}
+
+function hasCanonicalSpeakerLabels(fullText: string | null) {
+  if (!fullText) {
+    return false;
+  }
+
+  return /^(Professor|Student [A-Z]|Unknown Speaker [A-Z]):\s+/m.test(fullText);
 }
 
 function NotionSection({

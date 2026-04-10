@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 const DATABASE_NAME = 'lectrai-cache.db';
 
-export const LOCAL_CACHE_SCHEMA_VERSION = 5;
+export const LOCAL_CACHE_SCHEMA_VERSION = 6;
 
 const SYNC_STATUS_CHECK = `
 CHECK (sync_status IN ('synced', 'pending_pull', 'pending_push', 'conflict'))
@@ -276,6 +276,27 @@ CREATE TABLE IF NOT EXISTS cached_transcript_segments (
   dirty_fields_json TEXT,
   last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (transcript_id, segment_index)
+);
+
+CREATE TABLE IF NOT EXISTS cached_processed_transcripts (
+  id TEXT PRIMARY KEY NOT NULL,
+  lecture_id TEXT NOT NULL UNIQUE REFERENCES cached_lectures(id) ON DELETE CASCADE,
+  source_transcript_id TEXT,
+  source_audio_file_id TEXT REFERENCES cached_audio_files(id) ON DELETE SET NULL,
+  processing_job_id TEXT REFERENCES cached_processing_jobs(id) ON DELETE SET NULL,
+  provider_name TEXT,
+  model_name TEXT,
+  language_code TEXT,
+  speaker_map_json TEXT NOT NULL DEFAULT '[]',
+  processed_payload_json TEXT NOT NULL DEFAULT '{}',
+  formatted_text TEXT NOT NULL,
+  status TEXT NOT NULL,
+  generated_at TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
+  dirty_fields_json TEXT,
+  last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS cached_lecture_summaries (
@@ -578,6 +599,8 @@ CREATE INDEX IF NOT EXISTS idx_cached_processing_jobs_lecture_id ON cached_proce
 CREATE INDEX IF NOT EXISTS idx_cached_processing_jobs_status ON cached_processing_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_cached_transcript_segments_transcript_id ON cached_transcript_segments(transcript_id);
 CREATE INDEX IF NOT EXISTS idx_cached_transcript_segments_lecture_id ON cached_transcript_segments(lecture_id);
+CREATE INDEX IF NOT EXISTS idx_cached_processed_transcripts_lecture_id ON cached_processed_transcripts(lecture_id);
+CREATE INDEX IF NOT EXISTS idx_cached_processed_transcripts_source_transcript_id ON cached_processed_transcripts(source_transcript_id);
 CREATE INDEX IF NOT EXISTS idx_cached_lecture_summaries_lecture_id ON cached_lecture_summaries(lecture_id);
 CREATE INDEX IF NOT EXISTS idx_cached_key_concepts_lecture_id ON cached_key_concepts(lecture_id);
 CREATE INDEX IF NOT EXISTS idx_cached_timeline_events_lecture_id ON cached_timeline_events(lecture_id);
@@ -616,6 +639,7 @@ const CLEAR_TABLES = [
   'cached_timeline_events',
   'cached_key_concepts',
   'cached_lecture_summaries',
+  'cached_processed_transcripts',
   'cached_transcript_segments',
   'cached_transcripts',
   'cached_processing_jobs',
@@ -812,6 +836,26 @@ async function migrateLocalDatabase(db: SQLite.SQLiteDatabase) {
     ['upload_status', "TEXT NOT NULL DEFAULT 'pending'"],
     ['uploaded_at', 'TEXT'],
     ['created_at', 'TEXT'],
+    ['sync_status', "TEXT NOT NULL DEFAULT 'synced'"],
+    ['dirty_fields_json', 'TEXT'],
+    ['last_synced_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+  ]);
+
+  await ensureTableColumns(db, 'cached_processed_transcripts', [
+    ['lecture_id', 'TEXT'],
+    ['source_transcript_id', 'TEXT'],
+    ['source_audio_file_id', 'TEXT'],
+    ['processing_job_id', 'TEXT'],
+    ['provider_name', 'TEXT'],
+    ['model_name', 'TEXT'],
+    ['language_code', 'TEXT'],
+    ['speaker_map_json', "TEXT NOT NULL DEFAULT '[]'"],
+    ['processed_payload_json', "TEXT NOT NULL DEFAULT '{}'"],
+    ['formatted_text', "TEXT NOT NULL DEFAULT ''"],
+    ['status', "TEXT NOT NULL DEFAULT 'processing'"],
+    ['generated_at', 'TEXT'],
+    ['created_at', 'TEXT'],
+    ['updated_at', 'TEXT'],
     ['sync_status', "TEXT NOT NULL DEFAULT 'synced'"],
     ['dirty_fields_json', 'TEXT'],
     ['last_synced_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],

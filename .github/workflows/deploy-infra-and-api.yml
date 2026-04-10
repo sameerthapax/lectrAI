@@ -126,7 +126,8 @@ jobs:
         run: terraform validate
 
       - name: Debug Terraform state
-        working-directory: infra/terraform/environments/dev
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform init -reconfigure -input=false
           terraform workspace show
@@ -145,6 +146,9 @@ jobs:
           TF_VAR_supabase_anon_key: ${{ secrets.SUPABASE_ANON_KEY }}
           TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_openai_transcription_model: ${{ secrets.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe-diarize' }}
+          TF_VAR_openai_transcript_processing_model: ${{ secrets.OPENAI_TRANSCRIPT_PROCESSING_MODEL || 'gpt-4o-2024-08-06' }}
           TF_VAR_cloud_run_service_name: lectrai-api-dev
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
           TF_VAR_pubsub_topic_name: lectrai-events-dev
@@ -178,6 +182,9 @@ jobs:
           TF_VAR_supabase_anon_key: ${{ secrets.SUPABASE_ANON_KEY }}
           TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_openai_transcription_model: ${{ secrets.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe-diarize' }}
+          TF_VAR_openai_transcript_processing_model: ${{ secrets.OPENAI_TRANSCRIPT_PROCESSING_MODEL || 'gpt-4o-2024-08-06' }}
           TF_VAR_cloud_run_service_name: lectrai-api-dev
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
           TF_VAR_pubsub_topic_name: lectrai-events-dev
