@@ -8,6 +8,7 @@ import {
   useAudioRecorderState,
 } from 'expo-audio';
 import { router, useFocusEffect } from 'expo-router';
+import LottieView from 'lottie-react-native';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -19,11 +20,12 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import Svg, { Path, Rect } from 'react-native-svg';
 import {
   CurrentCourseCarousel,
   buildCourseSelectorCards,
 } from '../../components/home/current-course-carousel';
+import { AiNextActionCarousel } from '../../components/home/ai-next-action-carousel';
+import micAnimation from '../../assets/animations/mic-animation.json';
 import { useAuth } from '../../providers/auth-provider';
 import {
   getSelectedCourseId,
@@ -47,6 +49,8 @@ const DIGIT_GAP = 1;
 const MIN_STREAK_DIGITS = 2;
 const DIGIT_REPEAT_COUNT = 24;
 const DIGIT_REPEAT_OFFSET = 10;
+const MIC_LOOP_DELAY_MS = 5000;
+const MIC_ANIMATION_IDLE_FRAME = 56;
 
 export default function HomeRoute() {
   const auth = useAuth();
@@ -64,6 +68,8 @@ export default function HomeRoute() {
   const recordingPulse = useRef(new Animated.Value(0)).current;
   const recordingFloat = useRef(new Animated.Value(0)).current;
   const recordingShimmer = useRef(new Animated.Value(0)).current;
+  const recordButtonMicAnimation = useRef<LottieView>(null);
+  const recordButtonMicLoopTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streakValue = useRef(new Animated.Value(0)).current;
   const hasAnimatedInitialStreak = useRef(false);
   const recorder = useAudioRecorder({
@@ -83,6 +89,7 @@ export default function HomeRoute() {
     () => courses.find((course) => course.id === selectedCourseId) ?? null,
     [courses, selectedCourseId]
   );
+  const hasSelectedCourse = selectedCourse !== null;
   const recordingSeconds = Math.max(0, Math.floor((recorderState.durationMillis ?? 0) / 1000));
   const formattedRecordingTime = useMemo(() => {
     const minutes = Math.floor(recordingSeconds / 60)
@@ -128,6 +135,41 @@ export default function HomeRoute() {
       };
     }, [auth.user?.id])
   );
+
+  useEffect(() => {
+    if (recordButtonMicLoopTimeout.current) {
+      clearTimeout(recordButtonMicLoopTimeout.current);
+      recordButtonMicLoopTimeout.current = null;
+    }
+
+    if (hasSelectedCourse) {
+      recordButtonMicAnimation.current?.play();
+      return;
+    }
+
+    recordButtonMicAnimation.current?.play(MIC_ANIMATION_IDLE_FRAME, MIC_ANIMATION_IDLE_FRAME);
+    const pauseFrame = requestAnimationFrame(() => {
+      recordButtonMicAnimation.current?.pause();
+    });
+
+    return () => {
+      cancelAnimationFrame(pauseFrame);
+    };
+  }, [hasSelectedCourse]);
+
+  const handleRecordButtonMicAnimationFinish = useCallback((isCancelled: boolean) => {
+    if (isCancelled || !hasSelectedCourse) {
+      return;
+    }
+
+    if (recordButtonMicLoopTimeout.current) {
+      clearTimeout(recordButtonMicLoopTimeout.current);
+    }
+
+    recordButtonMicLoopTimeout.current = setTimeout(() => {
+      recordButtonMicAnimation.current?.play();
+    }, MIC_LOOP_DELAY_MS);
+  }, [hasSelectedCourse]);
 
   useFocusEffect(
     useCallback(() => {
@@ -531,6 +573,7 @@ export default function HomeRoute() {
         <ScrollView
           scrollEnabled={!recordingVisible}
           contentInsetAdjustmentBehavior="automatic"
+          style={{ backgroundColor: theme.colors.screen }}
           contentContainerStyle={{
             flexGrow: 1,
             padding: 16,
@@ -609,7 +652,11 @@ export default function HomeRoute() {
                 backgroundColor: theme.colors.overlay,
                 borderWidth: 1,
                 borderColor: theme.colors.border,
-                opacity: recordingVisible ? 0.3 : recordingBusy || pressed ? 0.9 : 1,
+                opacity: recordingVisible
+                  ? 0.3
+                  : recordingBusy || pressed
+                    ? 0.9
+                    : 1,
                 boxShadow: pressed
                   ? '0 10px 20px rgba(15, 23, 42, 0.06)'
                   : '0 16px 28px rgba(15, 23, 42, 0.08)',
@@ -636,47 +683,39 @@ export default function HomeRoute() {
                     boxShadow: '0 22px 38px rgba(249, 115, 22, 0.14)',
                   }}
                 >
-                  <Svg width={92} height={92} viewBox="0 0 44 44" fill="none">
-                    <Rect x="14" y="6" width="16" height="21" rx="8" fill="#F97316" />
-                    <Path
-                      d="M11 21.5C11 27.299 15.701 32 21.5 32C27.299 32 32 27.299 32 21.5"
-                      stroke="#F97316"
-                      strokeWidth="3.2"
-                      strokeLinecap="round"
-                    />
-                    <Path
-                      d="M21.5 32V37"
-                      stroke="#F97316"
-                      strokeWidth="3.2"
-                      strokeLinecap="round"
-                    />
-                    <Path
-                      d="M16.5 37H26.5"
-                      stroke="#F97316"
-                      strokeWidth="3.2"
-                      strokeLinecap="round"
-                    />
-                    <Path
-                      d="M8 16.5V26.5"
-                      stroke="#FDBA74"
-                      strokeWidth="2.4"
-                      strokeLinecap="round"
-                    />
-                    <Path
-                      d="M36 16.5V26.5"
-                      stroke="#FDBA74"
-                      strokeWidth="2.4"
-                      strokeLinecap="round"
-                    />
-                  </Svg>
+                  <LottieView
+                    ref={recordButtonMicAnimation}
+                    autoPlay={false}
+                    loop={false}
+                    onAnimationFinish={handleRecordButtonMicAnimationFinish}
+                    source={micAnimation}
+                    style={{ width: 150, height: 150 }}
+                  />
                 </View>
               </View>
 
               <View style={{ gap: 4 }}>
-                <Text selectable style={{ fontSize: 9, letterSpacing: 1.2, color: theme.colors.danger, fontWeight: '800', textTransform: 'uppercase' }}>
+                <Text
+                  selectable
+                  style={{
+                    fontSize: 9,
+                    letterSpacing: 1.2,
+                    color: theme.colors.danger,
+                    fontWeight: '800',
+                    textTransform: 'uppercase',
+                  }}
+                >
                   Recording
                 </Text>
-                <Text selectable style={{ fontSize: 18, lineHeight: 22, color: theme.colors.text, fontWeight: '800' }}>
+                <Text
+                  selectable
+                  style={{
+                    fontSize: 18,
+                    lineHeight: 22,
+                    color: theme.colors.text,
+                    fontWeight: '800',
+                  }}
+                >
                   Record lecture
                 </Text>
               </View>
@@ -690,26 +729,7 @@ export default function HomeRoute() {
                 width={Math.max(152, width * 0.36)}
               />
 
-              <View
-                style={{
-                  flex: 1,
-                  minHeight: 58,
-                  borderRadius: 24,
-                  borderCurve: 'continuous',
-                  padding: 12,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  backgroundColor: theme.colors.overlay,
-                  borderWidth: 1,
-                  borderColor: theme.colors.border,
-                  boxShadow: '0 14px 30px rgba(15, 23, 42, 0.10)',
-                }}
-              >
-                <Text selectable style={{ fontSize: 32, textAlign: 'center' }}>🧠</Text>
-                <Text selectable style={{ marginTop: 4, fontSize: 14, color: theme.colors.textMuted, fontWeight: '700' }}>
-                  Exam review
-                </Text>
-              </View>
+              <AiNextActionCarousel width={Math.max(152, width * 0.36)} />
             </View>
           </View>
 
@@ -726,14 +746,14 @@ export default function HomeRoute() {
               onPress={handleIncrementStreak}
               scale={statsCardScale}
               theme={theme}
-              value={(
+              value={
                 <RollingNumber
                   animatedValue={streakValue}
                   color={theme.colors.text}
                   scale={statsCardScale}
                   value={statsSummary.streakDays}
                 />
-              )}
+              }
             />
             <StatCard
               icon="📈"
@@ -796,9 +816,20 @@ export default function HomeRoute() {
             }}
           >
             <View
-              style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
             >
-              <Text selectable style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800' }}>
+              <Text
+                selectable
+                style={{
+                  color: theme.colors.text,
+                  fontSize: 22,
+                  fontWeight: '800',
+                }}
+              >
                 Quick quiz
               </Text>
               <View
@@ -811,7 +842,12 @@ export default function HomeRoute() {
               >
                 <Text
                   selectable
-                  style={{ color: theme.colors.accentMuted, fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}
+                  style={{
+                    color: theme.colors.accentMuted,
+                    fontSize: 12,
+                    fontWeight: '800',
+                    fontVariant: ['tabular-nums'],
+                  }}
                 >
                   04/10
                 </Text>
@@ -842,7 +878,8 @@ export default function HomeRoute() {
                   fontWeight: '800',
                 }}
               >
-                Which LectrAI component retrieves relevant lecture segments before generating a grounded answer?
+                Which LectrAI component retrieves relevant lecture segments
+                before generating a grounded answer?
               </Text>
             </View>
 
@@ -859,9 +896,15 @@ export default function HomeRoute() {
                     flexDirection: 'row',
                     gap: 10,
                     alignItems: 'center',
-                    backgroundColor: index === 1 ? theme.colors.successSoft : theme.colors.neutralSoft,
+                    backgroundColor:
+                      index === 1
+                        ? theme.colors.successSoft
+                        : theme.colors.neutralSoft,
                     borderWidth: 1,
-                    borderColor: index === 1 ? theme.colors.successBorder : theme.colors.neutralBorder,
+                    borderColor:
+                      index === 1
+                        ? theme.colors.successBorder
+                        : theme.colors.neutralBorder,
                   }}
                 >
                   <View
@@ -871,10 +914,20 @@ export default function HomeRoute() {
                       borderRadius: 14,
                       alignItems: 'center',
                       justifyContent: 'center',
-                      backgroundColor: index === 1 ? theme.colors.success : theme.colors.neutralBorder,
+                      backgroundColor:
+                        index === 1
+                          ? theme.colors.success
+                          : theme.colors.neutralBorder,
                     }}
                   >
-                    <Text selectable style={{ color: index === 1 ? '#ffffff' : theme.colors.textMuted, fontSize: 13, fontWeight: '800' }}>
+                    <Text
+                      selectable
+                      style={{
+                        color: index === 1 ? '#ffffff' : theme.colors.textMuted,
+                        fontSize: 13,
+                        fontWeight: '800',
+                      }}
+                    >
                       {String.fromCharCode(65 + index)}
                     </Text>
                   </View>
@@ -897,7 +950,6 @@ export default function HomeRoute() {
               ))}
             </View>
           </View>
-
         </ScrollView>
       </Animated.View>
 
@@ -918,7 +970,10 @@ export default function HomeRoute() {
             style={{
               position: 'absolute',
               inset: 0,
-              backgroundColor: theme.resolvedMode === 'dark' ? 'rgba(10, 13, 16, 0.54)' : 'rgba(248, 250, 252, 0.36)',
+              backgroundColor:
+                theme.resolvedMode === 'dark'
+                  ? 'rgba(10, 13, 16, 0.54)'
+                  : 'rgba(248, 250, 252, 0.36)',
             }}
           />
 
@@ -934,7 +989,10 @@ export default function HomeRoute() {
               alignItems: 'center',
               gap: 18,
               boxShadow: '0 24px 48px rgba(15, 23, 42, 0.18)',
-              transform: [{ translateY: overlayTranslateY }, { scale: overlayScale }],
+              transform: [
+                { translateY: overlayTranslateY },
+                { scale: overlayScale },
+              ],
             }}
           >
             <View
@@ -960,12 +1018,27 @@ export default function HomeRoute() {
                   }),
                 }}
               />
-              <Text style={{ fontSize: 11, letterSpacing: 1.4, color: theme.colors.danger, fontWeight: '900', textTransform: 'uppercase' }}>
+              <Text
+                style={{
+                  fontSize: 11,
+                  letterSpacing: 1.4,
+                  color: theme.colors.danger,
+                  fontWeight: '900',
+                  textTransform: 'uppercase',
+                }}
+              >
                 Recording in progress
               </Text>
             </View>
 
-            <View style={{ alignItems: 'center', justifyContent: 'center', width: 180, height: 180 }}>
+            <View
+              style={{
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 180,
+                height: 180,
+              }}
+            >
               <Animated.View
                 style={{
                   position: 'absolute',
@@ -1014,7 +1087,10 @@ export default function HomeRoute() {
                     width: 38,
                     height: 150,
                     backgroundColor: 'rgba(255,255,255,0.22)',
-                    transform: [{ translateX: shimmerTranslateX }, { rotate: '-18deg' }],
+                    transform: [
+                      { translateX: shimmerTranslateX },
+                      { rotate: '-18deg' },
+                    ],
                   }}
                 />
                 <View
@@ -1071,7 +1147,14 @@ export default function HomeRoute() {
               </Text>
             </View>
 
-            <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: 50 }}>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'flex-end',
+                gap: 6,
+                height: 50,
+              }}
+            >
               {waveformHeights.map((height, index) => (
                 <View
                   key={`wave-${index}`}
@@ -1112,7 +1195,15 @@ export default function HomeRoute() {
                   opacity: pressed ? 0.92 : 1,
                 })}
               >
-                <Text style={{ color: theme.colors.textMuted, fontSize: 15, fontWeight: '800' }}>Cancel</Text>
+                <Text
+                  style={{
+                    color: theme.colors.textMuted,
+                    fontSize: 15,
+                    fontWeight: '800',
+                  }}
+                >
+                  Cancel
+                </Text>
               </Pressable>
 
               <Pressable
@@ -1131,7 +1222,11 @@ export default function HomeRoute() {
                   opacity: pressed ? 0.92 : 1,
                 })}
               >
-                <Text style={{ color: '#ffffff', fontSize: 15, fontWeight: '800' }}>Done</Text>
+                <Text
+                  style={{ color: '#ffffff', fontSize: 15, fontWeight: '800' }}
+                >
+                  Done
+                </Text>
               </Pressable>
             </View>
           </Animated.View>

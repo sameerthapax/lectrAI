@@ -22,13 +22,14 @@ export default function AiAssistanceRoute() {
 
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={{
-        flexGrow: 1,
-        padding: 16,
-        gap: 12,
-        paddingBottom: 18,
-        backgroundColor: theme.colors.screen,
-      }}
+        style={{ backgroundColor: theme.colors.screen }}
+        contentContainerStyle={{
+          flexGrow: 1,
+          padding: 16,
+          gap: 12,
+          paddingBottom: 18,
+          backgroundColor: theme.colors.screen,
+        }}
       >
         <View
           pointerEvents="none"

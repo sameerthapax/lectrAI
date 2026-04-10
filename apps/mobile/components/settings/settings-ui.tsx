@@ -35,6 +35,7 @@ export function SettingsScreen({
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
+      style={{ backgroundColor: theme.colors.screen }}
       contentContainerStyle={{
         flexGrow: 1,
         paddingHorizontal: 16,

@@ -56,6 +56,7 @@ export function AuthScreen({
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       keyboardShouldPersistTaps="handled"
+      style={{ backgroundColor: theme.colors.screen }}
       contentContainerStyle={{
         minHeight: '100%',
         padding: 16,

@@ -238,6 +238,7 @@ export default function CourseDetailRoute() {
       <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
+          style={{ backgroundColor: theme.colors.screen }}
           contentContainerStyle={{
             flexGrow: 1,
             padding: 16,
