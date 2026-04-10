@@ -1,4 +1,4 @@
-import { authorizedRequest } from './auth-api';
+import { authorizedBinaryRequest, authorizedRequest } from './auth-api';
 
 export type RemoteRecordingSyncPayload = {
   lectureId: string;
@@ -29,6 +29,49 @@ export type RemoteRecordingSyncResult = {
     jobType: string;
     status: string;
   };
+  transcript: RemoteLectureTranscript | null;
+};
+
+export type RemoteLectureTranscriptSegment = {
+  id: string;
+  segmentIndex: number;
+  startTimeSeconds: number | null;
+  endTimeSeconds: number | null;
+  rawText: string | null;
+  cleanedText: string | null;
+  speakerLabel: string | null;
+  confidenceScore: number | null;
+  tokenCountEstimate: number | null;
+  isKeyMoment: boolean;
+  createdAt: string | null;
+};
+
+export type RemoteLectureTranscript = {
+  id: string;
+  lectureId: string;
+  sourceTranscriptId: string | null;
+  sourceAudioFileId: string | null;
+  processingJobId: string | null;
+  transcriptionProvider: string | null;
+  modelName: string | null;
+  languageCode: string | null;
+  fullText: string | null;
+  confidenceAvg: number | null;
+  totalSegments: number | null;
+  totalTokensEstimate: number | null;
+  status: string;
+  generatedAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  speakerMap: Array<{
+    originalLabel: string;
+    role: 'professor' | 'student' | 'unknown';
+    displayName: string;
+    confidence: number;
+    rationale: string;
+  }>;
+  processedPayload: unknown;
+  segments: RemoteLectureTranscriptSegment[];
 };
 
 export type RemoteLectureRecordingRecord = {
@@ -56,6 +99,7 @@ export type RemoteLectureRecordingRecord = {
     uploadedAt: string | null;
     createdAt: string | null;
   } | null;
+  transcript: RemoteLectureTranscript | null;
 };
 
 export function uploadLectureRecording(
@@ -83,4 +127,30 @@ export async function fetchLectureRecordings(accessToken: string, courseId?: str
   );
 
   return response.lectures;
+}
+
+export async function processLectureTranscription(lectureId: string, accessToken: string) {
+  return authorizedRequest<{
+    lecture: {
+      id: string;
+      status: string;
+    };
+    transcript: RemoteLectureTranscript;
+  }>(
+    `/lectures/${encodeURIComponent(lectureId)}/transcription`,
+    {
+      method: 'POST',
+    },
+    accessToken
+  );
+}
+
+export function downloadLectureAudio(lectureId: string, accessToken: string) {
+  return authorizedBinaryRequest(
+    `/lectures/${encodeURIComponent(lectureId)}/audio`,
+    {
+      method: 'GET',
+    },
+    accessToken
+  );
 }
