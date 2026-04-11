@@ -5,8 +5,10 @@ export function errorHandler(
   error: unknown,
   _req: Request,
   res: Response,
-  _next: NextFunction
+  next: NextFunction
 ) {
+  void next;
+
   if (error instanceof HttpError) {
     res.status(error.statusCode).json({
       error: error.message,

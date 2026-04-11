@@ -1431,7 +1431,7 @@ function truncateText(value: string, maxChars: number) {
 }
 
 function cleanText(value: string) {
-  return value.replace(/\r\n/g, '\n').replace(/\u0000/g, '').trim();
+  return value.replace(/\r\n/g, '\n').split('\u0000').join('').trim();
 }
 
 function nullable(value: string | null) {
