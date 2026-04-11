@@ -77,7 +77,7 @@
   ],
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
-    "expo": "~55.0.13",
+    "expo": "~55.0.14",
     "expo-audio": "~55.0.13",
     "expo-gl": "~55.0.13",
     "expo-secure-store": "~55.0.13",

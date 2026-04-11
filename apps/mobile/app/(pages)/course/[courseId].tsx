@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useAuth } from '../../../providers/auth-provider';
-import { useAppTheme } from '../../../providers/settings-provider';
+import { useAppTheme, useSettings } from '../../../providers/settings-provider';
 import { listCoursesForUser, type LocalCourseRecord } from '../../../services/courses-repository';
 import {
   listCourseFilesForCourse,
@@ -47,6 +47,7 @@ export default function CourseDetailRoute() {
   const { courseId } = useLocalSearchParams<{ courseId?: string }>();
   const auth = useAuth();
   const theme = useAppTheme();
+  const settingsState = useSettings();
   const [course, setCourse] = useState<LocalCourseRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploadMode, setUploadMode] = useState<UploadInputMode>('file');
@@ -167,6 +168,14 @@ export default function CourseDetailRoute() {
   const latestUploads = courseFiles.slice(0, uploadPanelExpanded ? 6 : 4).map(mapCourseFileToCard);
 
   const handleChooseFile = async () => {
+    if (!settingsState.settings?.permissions.storage) {
+      Alert.alert(
+        'File access disabled',
+        'Turn on Allow file access in Settings before importing course files.'
+      );
+      return;
+    }
+
     const result = await getDocumentAsync({
       multiple: false,
       copyToCacheDirectory: true,

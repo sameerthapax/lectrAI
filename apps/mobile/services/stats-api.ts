@@ -19,13 +19,3 @@ export async function fetchStatsOverview(accessToken: string) {
 
   return response.stats;
 }
-
-export async function incrementStreak(accessToken: string) {
-  const response = await authorizedRequest<{ stats: RemoteStatsRecord }>(
-    '/stats/streaks/increment',
-    { method: 'POST' },
-    accessToken
-  );
-
-  return response.stats;
-}

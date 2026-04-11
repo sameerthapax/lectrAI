@@ -14,7 +14,7 @@ export type StatsOverviewRecord = {
 export async function getStatsOverviewForUser(userId: string) {
   const db = getDb();
   const currentSemester = getCurrentSemesterWindow(new Date());
-  const statsRow = await ensureUserStatsRow(userId);
+  const statsRow = await refreshDailyQuizStreakForUser(userId);
   const courseCountRows = await db<{ count: string }[]>`
     select count(*)::text as count
     from public.courses
@@ -24,51 +24,6 @@ export async function getStatsOverviewForUser(userId: string) {
   `;
 
   return mapStatsRecord(statsRow, Number(courseCountRows[0]?.count ?? '0'), currentSemester);
-}
-
-export async function incrementStreakForUser(userId: string) {
-  const db = getDb();
-  const today = toDateOnlyString(new Date());
-
-  const rows = await db<DbUserStatsRow[]>`
-    insert into public.user_stats (
-      user_id,
-      streak_days,
-      last_incremented_on
-    ) values (
-      ${userId},
-      1,
-      ${today}
-    )
-    on conflict (user_id) do update
-    set
-      streak_days = public.user_stats.streak_days + 1,
-      last_incremented_on = ${today}
-    returning
-      id,
-      user_id,
-      streak_days,
-      last_incremented_on,
-      created_at,
-      updated_at
-  `;
-
-  const row = rows[0];
-
-  if (!row) {
-    throw new HttpError(500, 'Failed to update streak.');
-  }
-
-  const currentSemester = getCurrentSemesterWindow(new Date());
-  const courseCountRows = await db<{ count: string }[]>`
-    select count(*)::text as count
-    from public.courses
-    where owner_user_id = ${userId}
-      and is_archived = false
-      and semester = ${currentSemester.label}
-  `;
-
-  return mapStatsRecord(row, Number(courseCountRows[0]?.count ?? '0'), currentSemester);
 }
 
 async function ensureUserStatsRow(userId: string) {
@@ -94,6 +49,46 @@ async function ensureUserStatsRow(userId: string) {
 
   if (!row) {
     throw new HttpError(500, 'Failed to initialize user stats.');
+  }
+
+  return row;
+}
+
+export async function refreshDailyQuizStreakForUser(userId: string) {
+  const db = getDb();
+  await ensureUserStatsRow(userId);
+
+  const streakRows = await db<DbComputedDailyQuizStreakRow[]>`
+    select
+      streak_days as "streakDays",
+      last_completed_on::text as "lastCompletedOn"
+    from public.compute_daily_quiz_streak(${userId}::uuid)
+  `;
+
+  const streak = streakRows[0] ?? {
+    streakDays: 0,
+    lastCompletedOn: null,
+  };
+
+  const updatedRows = await db<DbUserStatsRow[]>`
+    update public.user_stats
+    set
+      streak_days = ${streak.streakDays},
+      last_incremented_on = ${streak.lastCompletedOn}::date
+    where user_id = ${userId}::uuid
+    returning
+      id,
+      user_id,
+      streak_days,
+      last_incremented_on,
+      created_at,
+      updated_at
+  `;
+
+  const row = updatedRows[0];
+
+  if (!row) {
+    throw new HttpError(500, 'Failed to refresh daily quiz streak.');
   }
 
   return row;
@@ -166,10 +161,6 @@ function getCurrentSemesterWindow(now: Date): SemesterWindow {
   };
 }
 
-function toDateOnlyString(value: Date) {
-  return value.toISOString().slice(0, 10);
-}
-
 type SemesterWindow = {
   label: string;
   startDate: Date;
@@ -183,4 +174,9 @@ type DbUserStatsRow = {
   last_incremented_on: string | null;
   created_at: Date;
   updated_at: Date;
+};
+
+type DbComputedDailyQuizStreakRow = {
+  streakDays: number;
+  lastCompletedOn: string | null;
 };

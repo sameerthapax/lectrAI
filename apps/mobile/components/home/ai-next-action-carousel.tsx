@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useIsFocused } from 'expo-router';
 import {
   FlatList,
   Pressable,
@@ -13,8 +14,6 @@ import examReviewAnimation from '../../assets/animations/exam-review.json';
 import quickQuizAnimation from '../../assets/animations/quick-quiz.json';
 import relaxAnimation from '../../assets/animations/relax.json';
 import { useAppTheme } from '../../providers/settings-provider';
-
-const AI_NEXT_ACTION_LOOP_DELAY_MS = 5000;
 
 type AiNextActionCarouselProps = {
   width: number;
@@ -56,6 +55,7 @@ const AI_NEXT_ACTION_CARDS: AiNextActionCard[] = [
 
 export function AiNextActionCarousel({ width }: AiNextActionCarouselProps) {
   const theme = useAppTheme();
+  const isFocused = useIsFocused();
   const flatListRef = useRef<FlatList<AiNextActionCard>>(null);
   const [didMountList, setDidMountList] = useState(false);
   const [selectedActionId, setSelectedActionId] = useState(AI_NEXT_ACTION_CARDS[0]?.id ?? '');
@@ -162,6 +162,7 @@ export function AiNextActionCarousel({ width }: AiNextActionCarouselProps) {
             card={item}
             cardWidth={cardWidth}
             isActive={item.id === selectedActionId}
+            isFocused={isFocused}
             onPress={handlePressCard}
           />
         )}
@@ -202,6 +203,7 @@ type AiNextActionCarouselCardProps = {
   card: AiNextActionCard;
   cardWidth: number;
   isActive: boolean;
+  isFocused: boolean;
   onPress: (cardId: string) => void;
 };
 
@@ -209,49 +211,21 @@ function AiNextActionCarouselCard({
   card,
   cardWidth,
   isActive,
+  isFocused,
   onPress,
 }: AiNextActionCarouselCardProps) {
   const theme = useAppTheme();
   const animationRef = useRef<LottieView>(null);
-  const loopTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (loopTimeout.current) {
-      clearTimeout(loopTimeout.current);
-      loopTimeout.current = null;
-    }
-
-    if (isActive) {
+    if (isActive && isFocused) {
       animationRef.current?.reset();
       animationRef.current?.play();
       return;
     }
 
     animationRef.current?.reset();
-  }, [isActive]);
-
-  useEffect(() => {
-    return () => {
-      if (loopTimeout.current) {
-        clearTimeout(loopTimeout.current);
-        loopTimeout.current = null;
-      }
-    };
-  }, []);
-
-  const handleAnimationFinish = useCallback((isCancelled: boolean) => {
-    if (isCancelled || !isActive) {
-      return;
-    }
-
-    if (loopTimeout.current) {
-      clearTimeout(loopTimeout.current);
-    }
-
-    loopTimeout.current = setTimeout(() => {
-      animationRef.current?.play();
-    }, AI_NEXT_ACTION_LOOP_DELAY_MS);
-  }, [isActive]);
+  }, [isActive, isFocused]);
 
   return (
     <View
@@ -289,7 +263,6 @@ function AiNextActionCarouselCard({
             ref={animationRef}
             autoPlay={false}
             loop={false}
-            onAnimationFinish={handleAnimationFinish}
             source={card.animation}
             style={{ width: 70, height: 90 }}
           />

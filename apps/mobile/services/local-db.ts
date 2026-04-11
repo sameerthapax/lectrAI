@@ -429,6 +429,7 @@ CREATE TABLE IF NOT EXISTS cached_quiz_questions (
   source_segment_index INTEGER,
   difficulty TEXT,
   points REAL,
+  is_related_to_any_course INTEGER NOT NULL DEFAULT 1 CHECK (is_related_to_any_course IN (0, 1)),
   created_at TEXT,
   sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
   dirty_fields_json TEXT,
@@ -924,6 +925,9 @@ export async function ensureDailyQuickQuizCacheReady(db?: SQLite.SQLiteDatabase)
     ['scope', "TEXT NOT NULL DEFAULT 'lecture'"],
     ['available_on', 'TEXT'],
   ]);
+  await ensureTableColumns(database, 'cached_quiz_questions', [
+    ['is_related_to_any_course', 'INTEGER NOT NULL DEFAULT 1'],
+  ]);
 
   await ensureDailyQuickQuizTables(database);
   await database.execAsync(
@@ -1025,6 +1029,7 @@ async function ensureDailyQuickQuizTables(db: SQLite.SQLiteDatabase) {
           source_segment_index INTEGER,
           difficulty TEXT,
           points REAL,
+          is_related_to_any_course INTEGER NOT NULL DEFAULT 1 CHECK (is_related_to_any_course IN (0, 1)),
           created_at TEXT,
           sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
           dirty_fields_json TEXT,
@@ -1138,6 +1143,7 @@ async function ensureDailyQuickQuizTables(db: SQLite.SQLiteDatabase) {
           source_segment_index,
           difficulty,
           points,
+          is_related_to_any_course,
           created_at,
           sync_status,
           dirty_fields_json,
@@ -1155,6 +1161,7 @@ async function ensureDailyQuickQuizTables(db: SQLite.SQLiteDatabase) {
           source_segment_index,
           difficulty,
           points,
+          1,
           created_at,
           sync_status,
           dirty_fields_json,

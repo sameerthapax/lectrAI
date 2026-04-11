@@ -2,6 +2,7 @@ import {
   getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
 } from 'expo-audio';
+import { getDocumentAsync } from 'expo-document-picker';
 import { useFocusEffect } from 'expo-router';
 import { useCallback } from 'react';
 import { Alert } from 'react-native';
@@ -21,19 +22,28 @@ export default function SettingsPermissionsRoute() {
     useCallback(() => {
       let cancelled = false;
 
-      const syncMicrophonePermission = async () => {
+      const syncPermissions = async () => {
         try {
-          const permission = await getRecordingPermissionsAsync();
+          const microphonePermission = await getRecordingPermissionsAsync();
 
-          if (!cancelled && settings?.permissions.microphone && !permission.granted) {
+          if (!cancelled && settings?.permissions.microphone && !microphonePermission.granted) {
             updatePermissionSetting('microphone', false);
+          }
+
+          const notificationsModule = await loadNotificationsModule();
+          const notificationPermission = notificationsModule
+            ? await notificationsModule.getPermissionsAsync()
+            : null;
+
+          if (!cancelled && settings?.permissions.notifications && !notificationPermission?.granted) {
+            updatePermissionSetting('notifications', false);
           }
         } catch {
           // Keep the current toggle state if the platform cannot resolve permission status.
         }
       };
 
-      void syncMicrophonePermission();
+      void syncPermissions();
 
       return () => {
         cancelled = true;
@@ -84,6 +94,85 @@ export default function SettingsPermissionsRoute() {
     }
   };
 
+  const onFileAccessToggle = async (value: boolean) => {
+    if (!value) {
+      updatePermissionSetting('storage', false);
+      return;
+    }
+
+    try {
+      const result = await getDocumentAsync({
+        multiple: false,
+        copyToCacheDirectory: false,
+      });
+
+      if (result.canceled) {
+        updatePermissionSetting('storage', false);
+        Alert.alert(
+          'File access not granted',
+          'Choose a file when prompted to allow file access in LectrAI.'
+        );
+        return;
+      }
+
+      updatePermissionSetting('storage', true);
+    } catch (error) {
+      updatePermissionSetting('storage', false);
+      Alert.alert(
+        'File access failed',
+        error instanceof Error ? error.message : 'Unable to verify file access right now.'
+      );
+    }
+  };
+
+  const onNotificationsToggle = async (value: boolean) => {
+    if (!value) {
+      updatePermissionSetting('notifications', false);
+      return;
+    }
+
+    try {
+      const notificationsModule = await loadNotificationsModule();
+
+      if (!notificationsModule) {
+        updatePermissionSetting('notifications', false);
+        Alert.alert(
+          'Notifications unavailable',
+          'expo-notifications is not installed in this build yet.'
+        );
+        return;
+      }
+
+      const currentPermission = await notificationsModule.getPermissionsAsync();
+
+      if (currentPermission.granted) {
+        updatePermissionSetting('notifications', true);
+        return;
+      }
+
+      const requestedPermission = await notificationsModule.requestPermissionsAsync();
+
+      if (requestedPermission.granted) {
+        updatePermissionSetting('notifications', true);
+        return;
+      }
+
+      updatePermissionSetting('notifications', false);
+      Alert.alert(
+        'Notification permission denied',
+        requestedPermission.canAskAgain
+          ? 'LectrAI needs notification permission to deliver alerts and reminders.'
+          : 'Notification access is blocked on this device. Enable it in system settings to receive alerts and reminders.'
+      );
+    } catch (error) {
+      updatePermissionSetting('notifications', false);
+      Alert.alert(
+        'Permission check failed',
+        error instanceof Error ? error.message : 'Unable to verify notification access right now.'
+      );
+    }
+  };
+
   return (
     <SettingsScreen
       title="Permissions"
@@ -102,19 +191,38 @@ export default function SettingsPermissionsRoute() {
         />
         <Divider />
         <ToggleRow
-          title="Storage access"
-          description="Required for managing lecture audio files stored on your device."
+          title="Allow file access"
+          description="Lets LectrAI open the system file picker so you can import course files."
           value={settings.permissions.storage}
-          onValueChange={(value) => updatePermissionSetting('storage', value)}
+          onValueChange={(value) => {
+            void onFileAccessToggle(value);
+          }}
         />
         <Divider />
         <ToggleRow
           title="Notification permission"
           description="Allows LectrAI to surface reminders and lecture updates immediately."
           value={settings.permissions.notifications}
-          onValueChange={(value) => updatePermissionSetting('notifications', value)}
+          onValueChange={(value) => {
+            void onNotificationsToggle(value);
+          }}
+        />
+        <Divider />
+        <ToggleRow
+          title="Sound effects"
+          description="Controls button taps, celebration sounds, and other sound effects across the app."
+          value={settings.permissions.soundFx}
+          onValueChange={(value) => updatePermissionSetting('soundFx', value)}
         />
       </SectionCard>
     </SettingsScreen>
   );
+}
+
+async function loadNotificationsModule() {
+  try {
+    return await import('expo-notifications');
+  } catch {
+    return null;
+  }
 }
