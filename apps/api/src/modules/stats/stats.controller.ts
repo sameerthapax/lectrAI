@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { getStatsOverviewForUser, incrementStreakForUser } from './stats.service.js';
+import { getStatsOverviewForUser } from './stats.service.js';
 
 function requireAuthUserId(request: Request) {
   const userId = request.authUser?.id;
@@ -13,10 +13,5 @@ function requireAuthUserId(request: Request) {
 
 export async function getStatsOverview(request: Request, response: Response) {
   const stats = await getStatsOverviewForUser(requireAuthUserId(request));
-  response.status(200).json({ stats });
-}
-
-export async function postIncrementStreak(request: Request, response: Response) {
-  const stats = await incrementStreakForUser(requireAuthUserId(request));
   response.status(200).json({ stats });
 }

@@ -92,6 +92,14 @@ export function SettingsProvider({ children }: PropsWithChildren) {
                 ...defaultSettings.appearance,
                 ...storedSettings.appearance,
               },
+              permissions: {
+                ...defaultSettings.permissions,
+                ...storedSettings.permissions,
+              },
+              notifications: {
+                ...defaultSettings.notifications,
+                ...storedSettings.notifications,
+              },
             }
           : defaultSettings;
 

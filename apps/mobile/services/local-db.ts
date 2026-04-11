@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 const DATABASE_NAME = 'lectrai-cache.db';
 
-export const LOCAL_CACHE_SCHEMA_VERSION = 6;
+export const LOCAL_CACHE_SCHEMA_VERSION = 8;
 
 const SYNC_STATUS_CHECK = `
 CHECK (sync_status IN ('synced', 'pending_pull', 'pending_push', 'conflict'))
@@ -397,7 +397,7 @@ CREATE TABLE IF NOT EXISTS cached_course_files (
 
 CREATE TABLE IF NOT EXISTS cached_quizzes (
   id TEXT PRIMARY KEY NOT NULL,
-  lecture_id TEXT NOT NULL REFERENCES cached_lectures(id) ON DELETE CASCADE,
+  lecture_id TEXT REFERENCES cached_lectures(id) ON DELETE CASCADE,
   generated_by_user_id TEXT REFERENCES cached_users(id) ON DELETE SET NULL,
   processing_job_id TEXT REFERENCES cached_processing_jobs(id) ON DELETE SET NULL,
   title TEXT,
@@ -408,6 +408,8 @@ CREATE TABLE IF NOT EXISTS cached_quizzes (
   is_ai_generated INTEGER NOT NULL DEFAULT 1 CHECK (is_ai_generated IN (0, 1)),
   is_published INTEGER NOT NULL DEFAULT 0 CHECK (is_published IN (0, 1)),
   version_no INTEGER NOT NULL DEFAULT 1,
+  scope TEXT NOT NULL DEFAULT 'lecture',
+  available_on TEXT,
   created_at TEXT,
   updated_at TEXT,
   sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
@@ -418,7 +420,7 @@ CREATE TABLE IF NOT EXISTS cached_quizzes (
 CREATE TABLE IF NOT EXISTS cached_quiz_questions (
   id TEXT PRIMARY KEY NOT NULL,
   quiz_id TEXT NOT NULL REFERENCES cached_quizzes(id) ON DELETE CASCADE,
-  lecture_id TEXT NOT NULL REFERENCES cached_lectures(id) ON DELETE CASCADE,
+  lecture_id TEXT REFERENCES cached_lectures(id) ON DELETE CASCADE,
   question_order INTEGER NOT NULL,
   question_type TEXT NOT NULL,
   question_text TEXT NOT NULL,
@@ -427,6 +429,7 @@ CREATE TABLE IF NOT EXISTS cached_quiz_questions (
   source_segment_index INTEGER,
   difficulty TEXT,
   points REAL,
+  is_related_to_any_course INTEGER NOT NULL DEFAULT 1 CHECK (is_related_to_any_course IN (0, 1)),
   created_at TEXT,
   sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
   dirty_fields_json TEXT,
@@ -911,6 +914,25 @@ async function migrateLocalDatabase(db: SQLite.SQLiteDatabase) {
     ['created_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
     ['updated_at', "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"],
   ]);
+
+  await ensureDailyQuickQuizCacheReady(db);
+}
+
+export async function ensureDailyQuickQuizCacheReady(db?: SQLite.SQLiteDatabase) {
+  const database = db ?? (await getLocalDatabase());
+
+  await ensureTableColumns(database, 'cached_quizzes', [
+    ['scope', "TEXT NOT NULL DEFAULT 'lecture'"],
+    ['available_on', 'TEXT'],
+  ]);
+  await ensureTableColumns(database, 'cached_quiz_questions', [
+    ['is_related_to_any_course', 'INTEGER NOT NULL DEFAULT 1'],
+  ]);
+
+  await ensureDailyQuickQuizTables(database);
+  await database.execAsync(
+    'CREATE INDEX IF NOT EXISTS idx_cached_quizzes_scope_available_on ON cached_quizzes(scope, available_on);'
+  );
 }
 
 async function ensureTableColumns(
@@ -936,4 +958,327 @@ async function getLocalDatabase() {
   }
 
   return databasePromise;
+}
+
+async function ensureDailyQuickQuizTables(db: SQLite.SQLiteDatabase) {
+  const cachedQuizColumns = await db.getAllAsync<{
+    name: string;
+    notnull: number;
+  }>('PRAGMA table_info(cached_quizzes);');
+  const cachedQuestionColumns = await db.getAllAsync<{
+    name: string;
+    notnull: number;
+  }>('PRAGMA table_info(cached_quiz_questions);');
+
+  const quizLectureId = cachedQuizColumns.find((column) => column.name === 'lecture_id');
+  const questionLectureId = cachedQuestionColumns.find((column) => column.name === 'lecture_id');
+  const hasScopeColumn = cachedQuizColumns.some((column) => column.name === 'scope');
+  const hasAvailableOnColumn = cachedQuizColumns.some((column) => column.name === 'available_on');
+
+  if (
+    quizLectureId?.notnull !== 1 &&
+    questionLectureId?.notnull !== 1 &&
+    hasScopeColumn &&
+    hasAvailableOnColumn
+  ) {
+    return;
+  }
+
+  await db.execAsync('PRAGMA foreign_keys = OFF;');
+
+  try {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(`
+        ALTER TABLE local_quiz_attempt_answers RENAME TO local_quiz_attempt_answers_legacy;
+        ALTER TABLE local_quiz_attempts RENAME TO local_quiz_attempts_legacy;
+        ALTER TABLE cached_quiz_options RENAME TO cached_quiz_options_legacy;
+        ALTER TABLE cached_quiz_questions RENAME TO cached_quiz_questions_legacy;
+        ALTER TABLE cached_quizzes RENAME TO cached_quizzes_legacy;
+
+        CREATE TABLE cached_quizzes (
+          id TEXT PRIMARY KEY NOT NULL,
+          lecture_id TEXT REFERENCES cached_lectures(id) ON DELETE CASCADE,
+          generated_by_user_id TEXT REFERENCES cached_users(id) ON DELETE SET NULL,
+          processing_job_id TEXT REFERENCES cached_processing_jobs(id) ON DELETE SET NULL,
+          title TEXT,
+          quiz_type TEXT NOT NULL,
+          difficulty TEXT NOT NULL,
+          question_count INTEGER,
+          estimated_minutes INTEGER,
+          is_ai_generated INTEGER NOT NULL DEFAULT 1 CHECK (is_ai_generated IN (0, 1)),
+          is_published INTEGER NOT NULL DEFAULT 0 CHECK (is_published IN (0, 1)),
+          version_no INTEGER NOT NULL DEFAULT 1,
+          scope TEXT NOT NULL DEFAULT 'lecture',
+          available_on TEXT,
+          created_at TEXT,
+          updated_at TEXT,
+          sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
+          dirty_fields_json TEXT,
+          last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE cached_quiz_questions (
+          id TEXT PRIMARY KEY NOT NULL,
+          quiz_id TEXT NOT NULL REFERENCES cached_quizzes(id) ON DELETE CASCADE,
+          lecture_id TEXT REFERENCES cached_lectures(id) ON DELETE CASCADE,
+          question_order INTEGER NOT NULL,
+          question_type TEXT NOT NULL,
+          question_text TEXT NOT NULL,
+          explanation TEXT,
+          source_excerpt TEXT,
+          source_segment_index INTEGER,
+          difficulty TEXT,
+          points REAL,
+          is_related_to_any_course INTEGER NOT NULL DEFAULT 1 CHECK (is_related_to_any_course IN (0, 1)),
+          created_at TEXT,
+          sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
+          dirty_fields_json TEXT,
+          last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (quiz_id, question_order)
+        );
+
+        CREATE TABLE cached_quiz_options (
+          id TEXT PRIMARY KEY NOT NULL,
+          question_id TEXT NOT NULL REFERENCES cached_quiz_questions(id) ON DELETE CASCADE,
+          option_label TEXT,
+          option_text TEXT NOT NULL,
+          is_correct INTEGER NOT NULL DEFAULT 0 CHECK (is_correct IN (0, 1)),
+          option_order INTEGER NOT NULL,
+          created_at TEXT,
+          sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
+          dirty_fields_json TEXT,
+          last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (question_id, option_order)
+        );
+
+        CREATE TABLE local_quiz_attempts (
+          id TEXT PRIMARY KEY NOT NULL,
+          server_id TEXT,
+          quiz_id TEXT NOT NULL REFERENCES cached_quizzes(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES cached_users(id) ON DELETE CASCADE,
+          score INTEGER,
+          max_score INTEGER,
+          percentage_score REAL,
+          time_spent_seconds INTEGER,
+          is_completed INTEGER NOT NULL DEFAULT 0 CHECK (is_completed IN (0, 1)),
+          started_at TEXT,
+          submitted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          sync_status TEXT NOT NULL DEFAULT 'pending_push' ${SYNC_STATUS_CHECK},
+          dirty_fields_json TEXT,
+          last_synced_at TEXT
+        );
+
+        CREATE TABLE local_quiz_attempt_answers (
+          id TEXT PRIMARY KEY NOT NULL,
+          server_id TEXT,
+          quiz_attempt_id TEXT NOT NULL REFERENCES local_quiz_attempts(id) ON DELETE CASCADE,
+          question_id TEXT NOT NULL REFERENCES cached_quiz_questions(id) ON DELETE CASCADE,
+          selected_option_id TEXT REFERENCES cached_quiz_options(id) ON DELETE SET NULL,
+          short_answer_text TEXT,
+          is_correct INTEGER CHECK (is_correct IN (0, 1)),
+          awarded_points REAL,
+          answered_at TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          sync_status TEXT NOT NULL DEFAULT 'pending_push' ${SYNC_STATUS_CHECK},
+          dirty_fields_json TEXT,
+          last_synced_at TEXT,
+          UNIQUE (quiz_attempt_id, question_id)
+        );
+
+        INSERT INTO cached_quizzes (
+          id,
+          lecture_id,
+          generated_by_user_id,
+          processing_job_id,
+          title,
+          quiz_type,
+          difficulty,
+          question_count,
+          estimated_minutes,
+          is_ai_generated,
+          is_published,
+          version_no,
+          scope,
+          available_on,
+          created_at,
+          updated_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        )
+        SELECT
+          id,
+          lecture_id,
+          generated_by_user_id,
+          processing_job_id,
+          title,
+          quiz_type,
+          difficulty,
+          question_count,
+          estimated_minutes,
+          is_ai_generated,
+          is_published,
+          version_no,
+          'lecture',
+          null,
+          created_at,
+          updated_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        FROM cached_quizzes_legacy;
+
+        INSERT INTO cached_quiz_questions (
+          id,
+          quiz_id,
+          lecture_id,
+          question_order,
+          question_type,
+          question_text,
+          explanation,
+          source_excerpt,
+          source_segment_index,
+          difficulty,
+          points,
+          is_related_to_any_course,
+          created_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        )
+        SELECT
+          id,
+          quiz_id,
+          lecture_id,
+          question_order,
+          question_type,
+          question_text,
+          explanation,
+          source_excerpt,
+          source_segment_index,
+          difficulty,
+          points,
+          1,
+          created_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        FROM cached_quiz_questions_legacy;
+
+        INSERT INTO cached_quiz_options (
+          id,
+          question_id,
+          option_label,
+          option_text,
+          is_correct,
+          option_order,
+          created_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        )
+        SELECT
+          id,
+          question_id,
+          option_label,
+          option_text,
+          is_correct,
+          option_order,
+          created_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        FROM cached_quiz_options_legacy;
+
+        INSERT INTO local_quiz_attempts (
+          id,
+          server_id,
+          quiz_id,
+          user_id,
+          score,
+          max_score,
+          percentage_score,
+          time_spent_seconds,
+          is_completed,
+          started_at,
+          submitted_at,
+          created_at,
+          updated_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        )
+        SELECT
+          id,
+          server_id,
+          quiz_id,
+          user_id,
+          score,
+          max_score,
+          percentage_score,
+          time_spent_seconds,
+          is_completed,
+          started_at,
+          submitted_at,
+          created_at,
+          updated_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        FROM local_quiz_attempts_legacy;
+
+        INSERT INTO local_quiz_attempt_answers (
+          id,
+          server_id,
+          quiz_attempt_id,
+          question_id,
+          selected_option_id,
+          short_answer_text,
+          is_correct,
+          awarded_points,
+          answered_at,
+          created_at,
+          updated_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        )
+        SELECT
+          id,
+          server_id,
+          quiz_attempt_id,
+          question_id,
+          selected_option_id,
+          short_answer_text,
+          is_correct,
+          awarded_points,
+          answered_at,
+          created_at,
+          updated_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        FROM local_quiz_attempt_answers_legacy;
+
+        DROP TABLE local_quiz_attempt_answers_legacy;
+        DROP TABLE local_quiz_attempts_legacy;
+        DROP TABLE cached_quiz_options_legacy;
+        DROP TABLE cached_quiz_questions_legacy;
+        DROP TABLE cached_quizzes_legacy;
+
+        CREATE INDEX IF NOT EXISTS idx_cached_quizzes_lecture_id ON cached_quizzes(lecture_id);
+        CREATE INDEX IF NOT EXISTS idx_cached_quizzes_scope_available_on ON cached_quizzes(scope, available_on);
+        CREATE INDEX IF NOT EXISTS idx_cached_quiz_questions_quiz_id ON cached_quiz_questions(quiz_id);
+        CREATE INDEX IF NOT EXISTS idx_cached_quiz_options_question_id ON cached_quiz_options(question_id);
+        CREATE INDEX IF NOT EXISTS idx_local_quiz_attempts_quiz_id ON local_quiz_attempts(quiz_id);
+        CREATE INDEX IF NOT EXISTS idx_local_quiz_attempts_sync_status ON local_quiz_attempts(sync_status);
+        CREATE INDEX IF NOT EXISTS idx_local_quiz_attempt_answers_attempt_id ON local_quiz_attempt_answers(quiz_attempt_id);
+      `);
+    });
+  } finally {
+    await db.execAsync('PRAGMA foreign_keys = ON;');
+  }
 }

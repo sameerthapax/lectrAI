@@ -43,6 +43,7 @@ export default function SettingsHomeRoute() {
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
+      style={{ backgroundColor: theme.colors.screen }}
       contentContainerStyle={{
         flexGrow: 1,
         padding: 16,
@@ -88,7 +89,7 @@ export default function SettingsHomeRoute() {
         />
         <SettingsLinkCard
           title="Permissions"
-          description="Control microphone, storage, and notification access."
+          description="Control microphone, file access, notification access, and sound effects."
           onPress={() => router.push('/(tabs)/settings/permissions')}
         />
         <View

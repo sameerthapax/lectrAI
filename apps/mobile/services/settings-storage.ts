@@ -18,6 +18,7 @@ export type PermissionSettings = {
   microphone: boolean;
   storage: boolean;
   notifications: boolean;
+  soundFx: boolean;
 };
 
 export type AppearanceSettings = {
@@ -54,6 +55,7 @@ export function createDefaultUserSettings(input: {
       microphone: false,
       storage: false,
       notifications: false,
+      soundFx: true,
     },
     appearance: {
       themeMode: 'system',
