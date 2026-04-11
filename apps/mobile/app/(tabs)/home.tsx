@@ -26,6 +26,7 @@ import {
 } from '../../components/home/current-course-carousel';
 import { AiNextActionCarousel } from '../../components/home/ai-next-action-carousel';
 import micAnimation from '../../assets/animations/mic-animation.json';
+import notFoundAnimation from '../../assets/animations/not-found.json';
 import { useAuth } from '../../providers/auth-provider';
 import {
   getSelectedCourseId,
@@ -41,6 +42,12 @@ import {
   upsertStatsForUser,
   type LocalStatsRecord,
 } from '../../services/stats-repository';
+import { fetchDailyQuickQuiz } from '../../services/quick-quiz-api';
+import {
+  getCachedDailyQuickQuiz,
+  upsertDailyQuickQuiz,
+  type LocalDailyQuickQuizRecord,
+} from '../../services/quick-quiz-repository';
 import { saveRecordedLecture } from '../../services/recordings-repository';
 
 const DIGIT_HEIGHT = 28;
@@ -64,6 +71,8 @@ export default function HomeRoute() {
   const [recordingVisible, setRecordingVisible] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [streakBusy, setStreakBusy] = useState(false);
+  const [quickQuiz, setQuickQuiz] = useState<LocalDailyQuickQuizRecord | null>(null);
+  const [quickQuizLoading, setQuickQuizLoading] = useState(false);
   const recordingOverlay = useRef(new Animated.Value(0)).current;
   const recordingPulse = useRef(new Animated.Value(0)).current;
   const recordingFloat = useRef(new Animated.Value(0)).current;
@@ -78,12 +87,6 @@ export default function HomeRoute() {
   });
   const recorderState = useAudioRecorderState(recorder, 120);
 
-  const quizOptions = [
-    'A system that stores every lecture as raw audio only',
-    'A grounded answer pipeline built from transcript embeddings',
-    'A reminder tool that replaces note-taking entirely',
-    'A static chatbot with no lecture context',
-  ];
   const courseCards = buildCourseSelectorCards(courses);
   const selectedCourse = useMemo(
     () => courses.find((course) => course.id === selectedCourseId) ?? null,
@@ -98,6 +101,12 @@ export default function HomeRoute() {
     const seconds = (recordingSeconds % 60).toString().padStart(2, '0');
     return `${minutes}:${seconds}`;
   }, [recordingSeconds]);
+  const quickQuizQuestion = quickQuiz?.questions[0] ?? null;
+  const quickQuizDateLabel = useMemo(
+    () => formatQuickQuizDateLabel(quickQuiz?.availableOn ?? null),
+    [quickQuiz?.availableOn]
+  );
+  const hasAnyCourses = courses.length > 0;
 
   useFocusEffect(
     useCallback(() => {
@@ -136,6 +145,61 @@ export default function HomeRoute() {
     }, [auth.user?.id])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      const user = auth.user;
+      let cancelled = false;
+
+      const loadQuickQuiz = async () => {
+        if (!user) {
+          if (!cancelled) {
+            setQuickQuiz(null);
+            setQuickQuizLoading(false);
+          }
+          return;
+        }
+
+        const todayKey = getDateKeyForTimezone(user.timezone);
+        const cachedQuiz = await getCachedDailyQuickQuiz(todayKey);
+
+        if (!cancelled) {
+          setQuickQuiz(cachedQuiz);
+          setQuickQuizLoading(true);
+        }
+
+        try {
+          const accessToken = await auth.getValidAccessToken();
+
+          if (!accessToken) {
+            throw new Error('Your session expired. Please sign in again.');
+          }
+
+          const remoteQuiz = await fetchDailyQuickQuiz(accessToken);
+
+          if (remoteQuiz) {
+            await upsertDailyQuickQuiz(remoteQuiz);
+          }
+
+          if (!cancelled) {
+            setQuickQuiz(remoteQuiz ? mapRemoteQuizToLocal(remoteQuiz) : cachedQuiz);
+          }
+        } catch (error) {
+          console.warn('Failed to refresh daily quick quiz.', error);
+        } finally {
+          if (!cancelled) {
+            setQuickQuizLoading(false);
+          }
+        }
+      };
+
+      void loadQuickQuiz();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [auth.user?.id, auth.user?.timezone, auth.getValidAccessToken])
+  );
+
   useEffect(() => {
     if (recordButtonMicLoopTimeout.current) {
       clearTimeout(recordButtonMicLoopTimeout.current);
@@ -170,6 +234,10 @@ export default function HomeRoute() {
       recordButtonMicAnimation.current?.play();
     }, MIC_LOOP_DELAY_MS);
   }, [hasSelectedCourse]);
+
+  const handleGenerateQuickQuiz = useCallback(() => {
+    Alert.alert('Generation not available yet', 'Daily quick quiz generation will be wired up next.');
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -849,106 +917,173 @@ export default function HomeRoute() {
                     fontVariant: ['tabular-nums'],
                   }}
                 >
-                  04/10
+                  {quickQuizDateLabel}
                 </Text>
               </View>
             </View>
 
-            <View
-              style={{
-                height: 94,
-                borderRadius: 22,
-                borderCurve: 'continuous',
-                padding: 14,
-                justifyContent: 'center',
-                backgroundColor: theme.colors.cardMuted,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-              }}
-            >
-              <Text
-                selectable
-                adjustsFontSizeToFit
-                minimumFontScale={0.72}
-                numberOfLines={3}
-                style={{
-                  color: theme.colors.text,
-                  fontSize: isCompact ? 20 : 22,
-                  lineHeight: isCompact ? 24 : 26,
-                  fontWeight: '800',
-                }}
-              >
-                Which LectrAI component retrieves relevant lecture segments
-                before generating a grounded answer?
-              </Text>
-            </View>
-
-            <View style={{ gap: 8 }}>
-              {quizOptions.map((option, index) => (
+            {quickQuizQuestion ? (
+              <>
                 <View
-                  key={option}
                   style={{
-                    minHeight: 58,
-                    borderRadius: 18,
+                    height: 94,
+                    borderRadius: 22,
                     borderCurve: 'continuous',
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    flexDirection: 'row',
-                    gap: 10,
-                    alignItems: 'center',
-                    backgroundColor:
-                      index === 1
-                        ? theme.colors.successSoft
-                        : theme.colors.neutralSoft,
+                    padding: 14,
+                    justifyContent: 'center',
+                    backgroundColor: theme.colors.cardMuted,
                     borderWidth: 1,
-                    borderColor:
-                      index === 1
-                        ? theme.colors.successBorder
-                        : theme.colors.neutralBorder,
+                    borderColor: theme.colors.border,
                   }}
                 >
-                  <View
+                  <Text
+                    selectable
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.72}
+                    numberOfLines={3}
                     style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 14,
+                      color: theme.colors.text,
+                      fontSize: isCompact ? 20 : 22,
+                      lineHeight: isCompact ? 24 : 26,
+                      fontWeight: '800',
+                    }}
+                  >
+                    {quickQuizQuestion.questionText}
+                  </Text>
+                </View>
+
+                <View style={{ gap: 8 }}>
+                  {quickQuizQuestion.options.map((option, index) => (
+                    <View
+                      key={option.id ?? `${option.optionText}-${index}`}
+                      style={{
+                        minHeight: 58,
+                        borderRadius: 18,
+                        borderCurve: 'continuous',
+                        paddingHorizontal: 12,
+                        paddingVertical: 10,
+                        flexDirection: 'row',
+                        gap: 10,
+                        alignItems: 'center',
+                        backgroundColor:
+                          option.isCorrect
+                            ? theme.colors.successSoft
+                            : theme.colors.neutralSoft,
+                        borderWidth: 1,
+                        borderColor:
+                          option.isCorrect
+                            ? theme.colors.successBorder
+                            : theme.colors.neutralBorder,
+                      }}
+                    >
+                      <View
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: 14,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor:
+                            option.isCorrect
+                              ? theme.colors.success
+                              : theme.colors.neutralBorder,
+                        }}
+                      >
+                        <Text
+                          selectable
+                          style={{
+                            color: option.isCorrect ? '#ffffff' : theme.colors.textMuted,
+                            fontSize: 13,
+                            fontWeight: '800',
+                          }}
+                        >
+                          {option.optionLabel ?? String.fromCharCode(65 + index)}
+                        </Text>
+                      </View>
+                      <Text
+                        selectable
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.82}
+                        numberOfLines={2}
+                        style={{
+                          flex: 1,
+                          color: theme.colors.text,
+                          fontSize: 14,
+                          lineHeight: 18,
+                          fontWeight: option.isCorrect ? '700' : '600',
+                        }}
+                      >
+                        {option.optionText}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            ) : (
+              <View
+                style={{
+                  borderRadius: 22,
+                  borderCurve: 'continuous',
+                  paddingHorizontal: 16,
+                  paddingVertical: 18,
+                  alignItems: 'center',
+                  gap: 12,
+                  backgroundColor: theme.colors.cardMuted,
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                }}
+              >
+                <LottieView
+                  autoPlay
+                  loop
+                  source={notFoundAnimation}
+                  style={{ width: 180, height: 180 }}
+                />
+                <Text
+                  selectable
+                  style={{
+                    color: theme.colors.text,
+                    fontSize: 18,
+                    lineHeight: 24,
+                    fontWeight: '800',
+                    textAlign: 'center',
+                  }}
+                >
+                  {quickQuizLoading
+                    ? "Loading today's quick quiz..."
+                    : hasAnyCourses
+                      ? 'Daily quiz not generated yet'
+                      : 'Add course to generate daily quiz feature'}
+                </Text>
+                {hasAnyCourses && !quickQuizLoading ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={handleGenerateQuickQuiz}
+                    style={({ pressed }) => ({
+                      minHeight: 48,
+                      minWidth: 150,
+                      borderRadius: 999,
+                      paddingHorizontal: 22,
+                      paddingVertical: 12,
                       alignItems: 'center',
                       justifyContent: 'center',
-                      backgroundColor:
-                        index === 1
-                          ? theme.colors.success
-                          : theme.colors.neutralBorder,
-                    }}
+                      backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
+                    })}
                   >
                     <Text
                       selectable
                       style={{
-                        color: index === 1 ? '#ffffff' : theme.colors.textMuted,
-                        fontSize: 13,
+                        color: '#ffffff',
+                        fontSize: 15,
                         fontWeight: '800',
                       }}
                     >
-                      {String.fromCharCode(65 + index)}
+                      Generate quiz
                     </Text>
-                  </View>
-                  <Text
-                    selectable
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.82}
-                    numberOfLines={2}
-                    style={{
-                      flex: 1,
-                      color: theme.colors.text,
-                      fontSize: 14,
-                      lineHeight: 18,
-                      fontWeight: index === 1 ? '700' : '600',
-                    }}
-                  >
-                    {option}
-                  </Text>
-                </View>
-              ))}
-            </View>
+                  </Pressable>
+                ) : null}
+              </View>
+            )}
           </View>
         </ScrollView>
       </Animated.View>
@@ -1234,6 +1369,79 @@ export default function HomeRoute() {
       ) : null}
     </View>
   );
+}
+
+function formatQuickQuizDateLabel(value: string | null) {
+  if (!value) {
+    return '--/--';
+  }
+
+  const date = new Date(`${value}T12:00:00.000Z`);
+
+  if (Number.isNaN(date.getTime())) {
+    return '--/--';
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+function getDateKeyForTimezone(timezone: string | null) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone || undefined,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+
+    const year = parts.find((part) => part.type === 'year')?.value;
+    const month = parts.find((part) => part.type === 'month')?.value;
+    const day = parts.find((part) => part.type === 'day')?.value;
+
+    if (year && month && day) {
+      return `${year}-${month}-${day}`;
+    }
+  } catch {
+    // Fall back to the device-local date when the saved timezone is invalid.
+  }
+
+  return new Date().toISOString().slice(0, 10);
+}
+
+function mapRemoteQuizToLocal(
+  quiz: import('../../services/quick-quiz-api').RemoteDailyQuickQuizRecord
+): LocalDailyQuickQuizRecord {
+  return {
+    id: quiz.id,
+    title: quiz.title,
+    quizType: quiz.quizType,
+    difficulty: quiz.difficulty,
+    questionCount: quiz.questionCount,
+    estimatedMinutes: quiz.estimatedMinutes,
+    availableOn: quiz.availableOn,
+    createdAt: quiz.createdAt,
+    updatedAt: quiz.updatedAt,
+    questions: quiz.questions.map((question) => ({
+      id: question.id,
+      questionOrder: question.questionOrder,
+      questionType: question.questionType,
+      questionText: question.questionText,
+      explanation: question.explanation,
+      difficulty: question.difficulty,
+      createdAt: question.createdAt,
+      options: question.options.map((option) => ({
+        id: option.id,
+        optionLabel: option.optionLabel,
+        optionText: option.optionText,
+        isCorrect: option.isCorrect,
+        optionOrder: option.optionOrder,
+        createdAt: option.createdAt,
+      })),
+    })),
+  };
 }
 
 const EMPTY_STATS: LocalStatsRecord = {
