@@ -225,15 +225,6 @@ export default function HomeRoute() {
           return;
         }
 
-        if (!hasAnyCourses) {
-          if (!cancelled) {
-            setQuickQuiz(null);
-            setQuickQuizAttempt(null);
-            setQuickQuizLoading(false);
-          }
-          return;
-        }
-
         const todayKey = getDateKeyForTimezone(user.timezone);
         const cachedBundle = await getCachedDailyQuickQuiz(todayKey, user.id);
 
@@ -241,6 +232,13 @@ export default function HomeRoute() {
           setQuickQuiz(cachedBundle?.quiz ?? null);
           setQuickQuizAttempt(cachedBundle?.attempt ?? null);
           setQuickQuizLoading(true);
+        }
+
+        if (!hasAnyCourses) {
+          if (!cancelled) {
+            setQuickQuizLoading(false);
+          }
+          return;
         }
 
         try {
@@ -257,8 +255,8 @@ export default function HomeRoute() {
           const remoteBundle = await fetchDailyQuickQuiz(accessToken);
           if (!remoteBundle.quiz) {
             if (!cancelled) {
-              setQuickQuiz(null);
-              setQuickQuizAttempt(null);
+              setQuickQuiz(cachedBundle?.quiz ?? null);
+              setQuickQuizAttempt(cachedBundle?.attempt ?? null);
             }
             return;
           }
