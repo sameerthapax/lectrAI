@@ -219,6 +219,50 @@ export async function upsertDailyQuickQuiz(bundle: RemoteDailyQuickQuizBundle) {
   await runSerializedLocalWrite(async (db) => {
     await ensureDailyQuickQuizCacheReady(db);
     await db.withTransactionAsync(async () => {
+      const existingQuizForDate = await db.getFirstAsync<{ id: string }>(
+        `SELECT id
+         FROM cached_quizzes
+         WHERE scope = 'daily_quick'
+           AND available_on = ?
+         LIMIT 1`,
+        [bundle.quiz.availableOn]
+      );
+
+      const incompleteAttemptForDate = await db.getFirstAsync<{
+        id: string;
+        quiz_id: string;
+      }>(
+        `SELECT
+           local_quiz_attempts.id,
+           local_quiz_attempts.quiz_id
+         FROM local_quiz_attempts
+         INNER JOIN cached_quizzes
+           ON cached_quizzes.id = local_quiz_attempts.quiz_id
+         WHERE cached_quizzes.scope = 'daily_quick'
+           AND cached_quizzes.available_on = ?
+           AND local_quiz_attempts.is_completed = 0
+         LIMIT 1`,
+        [bundle.quiz.availableOn]
+      );
+
+      // Keep the in-progress local quiz stable until the user finishes it.
+      // Refreshing cached questions/options is destructive because local answers
+      // reference those rows and get cascaded away if we delete them.
+      if (
+        incompleteAttemptForDate &&
+        (!existingQuizForDate || existingQuizForDate.id === incompleteAttemptForDate.quiz_id)
+      ) {
+        return;
+      }
+
+      if (
+        existingQuizForDate &&
+        existingQuizForDate.id !== bundle.quiz.id &&
+        incompleteAttemptForDate
+      ) {
+        return;
+      }
+
       await db.runAsync(
         `DELETE FROM cached_quizzes
          WHERE scope = 'daily_quick'
