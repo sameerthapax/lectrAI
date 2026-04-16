@@ -2,6 +2,8 @@ import { getDb, getSupabaseAdminClient } from '@lectrai/db';
 import { HttpError } from '../../lib/http-error.js';
 
 type SemesterTerm = 'Winter' | 'Spring' | 'Summer' | 'Fall';
+type CourseType = 'in_person' | 'online' | 'zoom';
+type CourseMeetingDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
 type CourseFileRelationType = 'lecture_file' | 'module_file' | 'chapter_file' | 'notes' | 'other';
 
 const COURSE_FILES_BUCKET_NAME = 'course-files';
@@ -13,8 +15,16 @@ export type CourseInput = {
   semesterTerm: SemesterTerm;
   semesterYear: number;
   section: string;
+  courseType: CourseType;
+  meetingSchedule: CourseMeeting[];
   description: string;
   colorHex: string;
+};
+
+export type CourseMeeting = {
+  dayOfWeek: CourseMeetingDay;
+  startTime: string;
+  endTime: string;
 };
 
 export type CourseRecord = {
@@ -25,6 +35,8 @@ export type CourseRecord = {
   instructorName: string | null;
   semester: string | null;
   section: string | null;
+  courseType: CourseType;
+  meetingSchedule: CourseMeeting[];
   description: string | null;
   colorHex: string | null;
   isArchived: boolean;
@@ -68,6 +80,8 @@ export function parseCourseInput(payload: unknown): CourseInput {
   const record = readObject(payload);
   const semesterTerm = readSemesterTerm(record.semesterTerm);
   const semesterYear = readSemesterYear(record.semesterYear);
+  const courseType = readCourseType(record.courseType);
+  const meetingSchedule = readCourseMeetingSchedule(record.meetingSchedule, courseType);
   const colorHex = readRequiredString(record.colorHex, 'colorHex');
 
   if (!/^#[0-9A-Fa-f]{6}$/.test(colorHex)) {
@@ -81,6 +95,8 @@ export function parseCourseInput(payload: unknown): CourseInput {
     semesterTerm,
     semesterYear,
     section: readOptionalString(record.section),
+    courseType,
+    meetingSchedule,
     description: readOptionalString(record.description),
     colorHex,
   };
@@ -112,6 +128,8 @@ export async function listCoursesForUser(userId: string) {
       instructor_name,
       semester,
       section,
+      course_type,
+      meeting_schedule_json,
       description,
       color_hex,
       is_archived,
@@ -161,6 +179,7 @@ export async function listCourseFilesForUser(userId: string, courseId: string) {
 export async function createCourseForUser(userId: string, input: CourseInput) {
   const db = getDb();
   const semester = formatSemester(input.semesterTerm, input.semesterYear);
+  await assertNoOverlappingCourseSchedule(userId, semester, input);
   const rows = await db<DbCourseRow[]>`
     insert into public.courses (
       owner_user_id,
@@ -169,6 +188,8 @@ export async function createCourseForUser(userId: string, input: CourseInput) {
       instructor_name,
       semester,
       section,
+      course_type,
+      meeting_schedule_json,
       description,
       color_hex
     ) values (
@@ -178,6 +199,8 @@ export async function createCourseForUser(userId: string, input: CourseInput) {
       ${nullable(input.instructorName)},
       ${semester},
       ${nullable(input.section)},
+      ${input.courseType},
+      ${db.json(input.meetingSchedule)},
       ${nullable(input.description)},
       ${input.colorHex}
     )
@@ -189,6 +212,8 @@ export async function createCourseForUser(userId: string, input: CourseInput) {
       instructor_name,
       semester,
       section,
+      course_type,
+      meeting_schedule_json,
       description,
       color_hex,
       is_archived,
@@ -202,6 +227,7 @@ export async function createCourseForUser(userId: string, input: CourseInput) {
 export async function updateCourseForUser(userId: string, courseId: string, input: CourseInput) {
   const db = getDb();
   const semester = formatSemester(input.semesterTerm, input.semesterYear);
+  await assertNoOverlappingCourseSchedule(userId, semester, input, courseId);
   const rows = await db<DbCourseRow[]>`
     update public.courses
     set
@@ -210,6 +236,8 @@ export async function updateCourseForUser(userId: string, courseId: string, inpu
       instructor_name = ${nullable(input.instructorName)},
       semester = ${semester},
       section = ${nullable(input.section)},
+      course_type = ${input.courseType},
+      meeting_schedule_json = ${db.json(input.meetingSchedule)},
       description = ${nullable(input.description)},
       color_hex = ${input.colorHex}
     where id = ${courseId}
@@ -222,6 +250,8 @@ export async function updateCourseForUser(userId: string, courseId: string, inpu
       instructor_name,
       semester,
       section,
+      course_type,
+      meeting_schedule_json,
       description,
       color_hex,
       is_archived,
@@ -362,6 +392,8 @@ function mapCourseRow(row: DbCourseRow): CourseRecord {
     instructorName: row.instructor_name,
     semester: row.semester,
     section: row.section,
+    courseType: row.course_type,
+    meetingSchedule: normalizeDbMeetingSchedule(row.meeting_schedule_json),
     description: row.description,
     colorHex: row.color_hex,
     isArchived: row.is_archived,
@@ -449,12 +481,226 @@ function readSemesterYear(value: unknown) {
   return year;
 }
 
+function readCourseType(value: unknown): CourseType {
+  if (value === 'in_person' || value === 'online' || value === 'zoom') {
+    return value;
+  }
+
+  throw new HttpError(400, 'courseType must be one of: in_person, online, zoom.');
+}
+
+function readCourseMeetingSchedule(value: unknown, courseType: CourseType) {
+  const parsed = normalizeMeetingSchedule(value);
+
+  if (courseType === 'in_person' && parsed.length === 0) {
+    throw new HttpError(400, 'meetingSchedule is required for in-person courses.');
+  }
+
+  if (courseType !== 'in_person' && parsed.length > 0) {
+    throw new HttpError(400, 'meetingSchedule must be empty for online or zoom courses.');
+  }
+
+  return parsed;
+}
+
+function normalizeMeetingSchedule(value: unknown): CourseMeeting[] {
+  if (value == null) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new HttpError(400, 'meetingSchedule must be an array.');
+  }
+
+  const seenDays = new Set<CourseMeetingDay>();
+  const normalized = value.map((entry, index) => {
+    const record = readObject(entry);
+    const dayOfWeek = readCourseMeetingDay(record.dayOfWeek, `meetingSchedule[${index}].dayOfWeek`);
+    const startTime = readCourseMeetingTime(record.startTime, `meetingSchedule[${index}].startTime`);
+    const endTime = readCourseMeetingTime(record.endTime, `meetingSchedule[${index}].endTime`);
+
+    if (seenDays.has(dayOfWeek)) {
+      throw new HttpError(400, `meetingSchedule contains a duplicate day: ${dayOfWeek}.`);
+    }
+
+    if (compareMeetingTimes(startTime, endTime) >= 0) {
+      throw new HttpError(400, `meetingSchedule[${index}] must have an endTime after startTime.`);
+    }
+
+    seenDays.add(dayOfWeek);
+    return { dayOfWeek, startTime, endTime };
+  });
+
+  return normalized.sort((left, right) => COURSE_MEETING_DAY_ORDER.indexOf(left.dayOfWeek) - COURSE_MEETING_DAY_ORDER.indexOf(right.dayOfWeek));
+}
+
+function readCourseMeetingDay(value: unknown, fieldName: string): CourseMeetingDay {
+  if (
+    value === 'monday' ||
+    value === 'tuesday' ||
+    value === 'wednesday' ||
+    value === 'thursday' ||
+    value === 'friday' ||
+    value === 'saturday' ||
+    value === 'sunday'
+  ) {
+    return value;
+  }
+
+  throw new HttpError(
+    400,
+    `${fieldName} must be one of: monday, tuesday, wednesday, thursday, friday, saturday, sunday.`
+  );
+}
+
+function readCourseMeetingTime(value: unknown, fieldName: string) {
+  if (typeof value !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+    throw new HttpError(400, `${fieldName} must use HH:mm 24-hour time.`);
+  }
+
+  return value;
+}
+
+function compareMeetingTimes(left: string, right: string) {
+  return left.localeCompare(right);
+}
+
 function formatSemester(term: SemesterTerm, year: number) {
   return `${term} ${year}`;
 }
 
 function nullable(value: string) {
   return value.length > 0 ? value : null;
+}
+
+function normalizeDbMeetingSchedule(value: unknown): CourseMeeting[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized: CourseMeeting[] = [];
+  const seenDays = new Set<CourseMeetingDay>();
+
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const record = entry as Partial<CourseMeeting> & { time?: unknown };
+    const dayOfWeek = normalizeOptionalCourseMeetingDay(record.dayOfWeek);
+    const startTime = normalizeOptionalCourseMeetingTime(record.startTime) ?? normalizeOptionalCourseMeetingTime(record.time);
+    const endTime =
+      normalizeOptionalCourseMeetingTime(record.endTime) ??
+      (startTime ? addHourToMeetingTime(startTime) : null);
+
+    if (
+      !dayOfWeek ||
+      !startTime ||
+      !endTime ||
+      compareMeetingTimes(startTime, endTime) >= 0 ||
+      seenDays.has(dayOfWeek)
+    ) {
+      continue;
+    }
+
+    seenDays.add(dayOfWeek);
+    normalized.push({ dayOfWeek, startTime, endTime });
+  }
+
+  return normalized.sort(
+    (left, right) =>
+      COURSE_MEETING_DAY_ORDER.indexOf(left.dayOfWeek) - COURSE_MEETING_DAY_ORDER.indexOf(right.dayOfWeek)
+  );
+}
+
+async function assertNoOverlappingCourseSchedule(
+  userId: string,
+  semester: string,
+  input: CourseInput,
+  excludedCourseId?: string
+) {
+  if (input.courseType !== 'in_person' || input.meetingSchedule.length === 0) {
+    return;
+  }
+
+  const db = getDb();
+  const rows = await db<Pick<DbCourseRow, 'id' | 'course_name' | 'meeting_schedule_json'>[]>`
+    select
+      id,
+      course_name,
+      meeting_schedule_json
+    from public.courses
+    where owner_user_id = ${userId}::uuid
+      and semester = ${semester}
+      and course_type = 'in_person'
+      and is_archived = false
+      and (${excludedCourseId ?? null}::uuid is null or id <> ${excludedCourseId ?? null}::uuid)
+  `;
+
+  for (const row of rows) {
+    const existingSchedule = normalizeDbMeetingSchedule(row.meeting_schedule_json);
+    const conflictingDay = findOverlappingMeetingDay(input.meetingSchedule, existingSchedule);
+
+    if (!conflictingDay) {
+      continue;
+    }
+
+    throw new HttpError(
+      409,
+      `This in-person schedule overlaps with ${row.course_name} on ${formatCourseMeetingDayLabel(conflictingDay)} in ${semester}.`
+    );
+  }
+}
+
+function findOverlappingMeetingDay(left: CourseMeeting[], right: CourseMeeting[]) {
+  for (const leftMeeting of left) {
+    const rightMeeting = right.find((entry) => entry.dayOfWeek === leftMeeting.dayOfWeek);
+
+    if (!rightMeeting) {
+      continue;
+    }
+
+    if (meetingTimesOverlap(leftMeeting, rightMeeting)) {
+      return leftMeeting.dayOfWeek;
+    }
+  }
+
+  return null;
+}
+
+function meetingTimesOverlap(left: CourseMeeting, right: CourseMeeting) {
+  return compareMeetingTimes(left.startTime, right.endTime) < 0 && compareMeetingTimes(right.startTime, left.endTime) < 0;
+}
+
+function formatCourseMeetingDayLabel(dayOfWeek: CourseMeetingDay) {
+  return `${dayOfWeek.slice(0, 1).toUpperCase()}${dayOfWeek.slice(1)}`;
+}
+
+function normalizeOptionalCourseMeetingDay(value: unknown): CourseMeetingDay | null {
+  return (
+    value === 'monday' ||
+    value === 'tuesday' ||
+    value === 'wednesday' ||
+    value === 'thursday' ||
+    value === 'friday' ||
+    value === 'saturday' ||
+    value === 'sunday'
+  )
+    ? value
+    : null;
+}
+
+function normalizeOptionalCourseMeetingTime(value: unknown) {
+  return typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : null;
+}
+
+function addHourToMeetingTime(value: string) {
+  const [hours, minutes] = value.split(':').map(Number);
+  const totalMinutes = Math.min(hours * 60 + minutes + 60, 23 * 60 + 59);
+  const nextHours = Math.floor(totalMinutes / 60);
+  const nextMinutes = totalMinutes % 60;
+
+  return `${String(nextHours).padStart(2, '0')}:${String(nextMinutes).padStart(2, '0')}`;
 }
 
 function readFileExtension(filename: string) {
@@ -565,12 +811,24 @@ type DbCourseRow = {
   instructor_name: string | null;
   semester: string | null;
   section: string | null;
+  course_type: CourseType;
+  meeting_schedule_json: unknown;
   description: string | null;
   color_hex: string | null;
   is_archived: boolean;
   created_at: Date;
   updated_at: Date;
 };
+
+const COURSE_MEETING_DAY_ORDER: CourseMeetingDay[] = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
 
 type DbCourseFileRow = {
   id: string;

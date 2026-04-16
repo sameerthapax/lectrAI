@@ -1,10 +1,19 @@
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useState } from 'react';
-import { Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useAppTheme } from '../../providers/settings-provider';
 import {
   COURSE_COLOR_WHEEL,
+  COURSE_MEETING_DAY_OPTIONS,
+  COURSE_TYPE_OPTIONS,
+  createMeetingDate,
+  formatCourseTypeLabel,
+  formatMeetingTimeLabel,
+  formatMeetingTimeValue,
   getSemesterYearOptions,
   type CourseDraft,
+  type CourseMeetingDay,
+  type CourseType,
   type SemesterTerm,
 } from '../../services/courses-repository';
 
@@ -12,7 +21,11 @@ type CourseFormModalProps = {
   draft: CourseDraft;
   errorMessage: string | null;
   mode: 'create' | 'edit';
-  onChange: (field: keyof CourseDraft, value: string) => void;
+  onChangeField: (field: keyof CourseDraft, value: string) => void;
+  onChangeCourseType: (value: CourseType) => void;
+  onToggleMeetingDay: (dayOfWeek: CourseMeetingDay) => void;
+  onChangeMeetingStartTime: (dayOfWeek: CourseMeetingDay, time: string) => void;
+  onChangeMeetingEndTime: (dayOfWeek: CourseMeetingDay, time: string) => void;
   onClose: () => void;
   onSubmit: () => void;
   saving: boolean;
@@ -25,15 +38,28 @@ export function CourseFormModal({
   draft,
   errorMessage,
   mode,
-  onChange,
+  onChangeField,
+  onChangeCourseType,
+  onToggleMeetingDay,
+  onChangeMeetingStartTime,
+  onChangeMeetingEndTime,
   onClose,
   onSubmit,
   saving,
   visible,
 }: CourseFormModalProps) {
   const theme = useAppTheme();
+  const { width: windowWidth } = useWindowDimensions();
   const [openDropdown, setOpenDropdown] = useState<'term' | 'year' | null>(null);
+  const [activeMeetingEditor, setActiveMeetingEditor] = useState<
+    Partial<Record<CourseMeetingDay, 'start' | 'end'>>
+  >({});
   const yearOptions = getSemesterYearOptions();
+  const selectedMeetingDays = COURSE_MEETING_DAY_OPTIONS.filter((option) =>
+    draft.meetingSchedule.some((meeting) => meeting.dayOfWeek === option.value)
+  );
+  const pickerWidth = Math.min(Math.max(windowWidth - 110, 220), 320);
+  const pickerHeight = windowWidth < 380 ? 132 : 144;
 
   return (
     <Modal
@@ -53,7 +79,7 @@ export function CourseFormModal({
       >
         <View
           style={{
-            maxHeight: '90%',
+            maxHeight: '92%',
             borderRadius: 28,
             borderCurve: 'continuous',
             backgroundColor: theme.colors.card,
@@ -65,23 +91,24 @@ export function CourseFormModal({
           }}
         >
           <View style={{ gap: 4 }}>
-            <Text style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800' }}>
+            <Text selectable style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800' }}>
               {mode === 'create' ? 'Add course' : 'Edit course'}
             </Text>
-            <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20 }}>
-              Changes save to the main database immediately, then refresh the local cache.
+            <Text selectable style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20 }}>
+              Save course info, delivery type, and any in-person meeting schedule in one place.
             </Text>
           </View>
 
           <ScrollView
+            contentInsetAdjustmentBehavior="automatic"
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ gap: 14 }}
+            contentContainerStyle={{ gap: 14, paddingBottom: 6 }}
           >
             <Field label="Course name">
               <TextInput
                 autoCapitalize="words"
                 autoCorrect={false}
-                onChangeText={(value) => onChange('courseName', value)}
+                onChangeText={(value) => onChangeField('courseName', value)}
                 placeholder="Artificial Intelligence"
                 placeholderTextColor={theme.colors.inputPlaceholder}
                 style={getInputStyle(theme)}
@@ -94,7 +121,7 @@ export function CourseFormModal({
                 <TextInput
                   autoCapitalize="characters"
                   autoCorrect={false}
-                  onChangeText={(value) => onChange('courseCode', value)}
+                  onChangeText={(value) => onChangeField('courseCode', value)}
                   placeholder="CSC 430"
                   placeholderTextColor={theme.colors.inputPlaceholder}
                   style={getInputStyle(theme)}
@@ -106,7 +133,7 @@ export function CourseFormModal({
                 <TextInput
                   autoCapitalize="characters"
                   autoCorrect={false}
-                  onChangeText={(value) => onChange('section', value)}
+                  onChangeText={(value) => onChangeField('section', value)}
                   placeholder="B"
                   placeholderTextColor={theme.colors.inputPlaceholder}
                   style={getInputStyle(theme)}
@@ -119,7 +146,7 @@ export function CourseFormModal({
               <TextInput
                 autoCapitalize="words"
                 autoCorrect={false}
-                onChangeText={(value) => onChange('instructorName', value)}
+                onChangeText={(value) => onChangeField('instructorName', value)}
                 placeholder="Prof. Nguyen"
                 placeholderTextColor={theme.colors.inputPlaceholder}
                 style={getInputStyle(theme)}
@@ -140,7 +167,7 @@ export function CourseFormModal({
                     theme={theme}
                     options={SEMESTER_TERMS}
                     onSelect={(value) => {
-                      onChange('semesterTerm', value);
+                      onChangeField('semesterTerm', value);
                       setOpenDropdown(null);
                     }}
                     selectedValue={draft.semesterTerm}
@@ -160,7 +187,7 @@ export function CourseFormModal({
                     theme={theme}
                     options={yearOptions}
                     onSelect={(value) => {
-                      onChange('semesterYear', value);
+                      onChangeField('semesterYear', value);
                       setOpenDropdown(null);
                     }}
                     selectedValue={draft.semesterYear}
@@ -169,9 +196,292 @@ export function CourseFormModal({
               </Field>
             </View>
 
+            <Field label="Course type">
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {COURSE_TYPE_OPTIONS.map((option) => {
+                  const selected = draft.courseType === option.value;
+
+                  return (
+                    <Pressable
+                      key={option.value}
+                      onPress={() => onChangeCourseType(option.value)}
+                      style={({ pressed }) => ({
+                        flex: 1,
+                        minHeight: 46,
+                        borderRadius: 16,
+                        borderCurve: 'continuous',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: selected
+                          ? theme.colors.accent
+                          : pressed
+                            ? theme.colors.neutralBorder
+                            : theme.colors.neutralSoft,
+                        borderWidth: 1,
+                        borderColor: selected ? theme.colors.accent : theme.colors.neutralBorder,
+                      })}
+                    >
+                      <Text
+                        selectable
+                        style={{
+                          color: selected ? theme.colors.accentContrast : theme.colors.textMuted,
+                          fontSize: 14,
+                          fontWeight: '800',
+                        }}
+                      >
+                        {option.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </Field>
+
+            {draft.courseType === 'in_person' ? (
+              <Field label="Meeting schedule">
+                <View
+                  style={{
+                    borderRadius: 20,
+                    borderCurve: 'continuous',
+                    borderWidth: 1,
+                    borderColor: theme.colors.border,
+                    backgroundColor: theme.colors.overlay,
+                    padding: 14,
+                    gap: 14,
+                  }}
+                >
+                  <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
+                    Choose each day your class meets, then set its start and end time with the iOS spinner below.
+                  </Text>
+
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {COURSE_MEETING_DAY_OPTIONS.map((option) => {
+                      const selected = selectedMeetingDays.some((day) => day.value === option.value);
+
+                      return (
+                        <Pressable
+                          key={option.value}
+                          onPress={() => onToggleMeetingDay(option.value)}
+                          style={({ pressed }) => ({
+                            minWidth: 68,
+                            minHeight: 38,
+                            paddingHorizontal: 12,
+                            borderRadius: 999,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: selected
+                              ? `${theme.colors.accent}18`
+                              : pressed
+                                ? theme.colors.neutralBorder
+                                : theme.colors.card,
+                            borderWidth: 1,
+                            borderColor: selected ? theme.colors.accent : theme.colors.border,
+                          })}
+                        >
+                          <Text
+                            selectable
+                            style={{
+                              color: selected ? theme.colors.accent : theme.colors.textMuted,
+                              fontSize: 13,
+                              fontWeight: '800',
+                            }}
+                          >
+                            {option.shortLabel}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  {selectedMeetingDays.length === 0 ? (
+                    <View
+                      style={{
+                        borderRadius: 16,
+                        borderCurve: 'continuous',
+                        paddingHorizontal: 12,
+                        paddingVertical: 10,
+                        backgroundColor: theme.colors.card,
+                        borderWidth: 1,
+                        borderColor: theme.colors.border,
+                      }}
+                    >
+                      <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
+                        Select at least one meeting day to define the in-person schedule.
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={{ gap: 12 }}>
+                      {selectedMeetingDays.map((option) => {
+                        const meeting = draft.meetingSchedule.find(
+                          (entry) => entry.dayOfWeek === option.value
+                        );
+                        const activeEditor = activeMeetingEditor[option.value] ?? 'start';
+
+                        if (!meeting) {
+                          return null;
+                        }
+
+                        return (
+                          <View
+                            key={option.value}
+                            style={{
+                              borderRadius: 18,
+                              borderCurve: 'continuous',
+                              padding: 12,
+                              backgroundColor: theme.colors.card,
+                              borderWidth: 1,
+                              borderColor: theme.colors.border,
+                              gap: 10,
+                            }}
+                          >
+                            <View
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                              }}
+                            >
+                              <Text selectable style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>
+                                {option.label}
+                              </Text>
+                              <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '700' }}>
+                                {formatMeetingTimeLabel(meeting.startTime)} - {formatMeetingTimeLabel(meeting.endTime)}
+                              </Text>
+                            </View>
+
+                            <View style={{ flexDirection: 'row', gap: 10 }}>
+                              <Pressable
+                                onPress={() =>
+                                  setActiveMeetingEditor((current) => ({ ...current, [option.value]: 'start' }))
+                                }
+                                style={({ pressed }) => ({
+                                  flex: 1,
+                                  borderRadius: 14,
+                                  borderCurve: 'continuous',
+                                  paddingHorizontal: 12,
+                                  paddingVertical: 10,
+                                  borderWidth: 1,
+                                  borderColor:
+                                    activeEditor === 'start' ? theme.colors.accent : theme.colors.border,
+                                  backgroundColor:
+                                    activeEditor === 'start'
+                                      ? `${theme.colors.accent}14`
+                                      : pressed
+                                        ? theme.colors.overlay
+                                        : theme.colors.card,
+                                  gap: 2,
+                                })}
+                              >
+                                <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, fontWeight: '700' }}>
+                                  Start
+                                </Text>
+                                <Text selectable style={{ color: theme.colors.text, fontSize: 16, fontWeight: '800' }}>
+                                  {formatMeetingTimeLabel(meeting.startTime)}
+                                </Text>
+                              </Pressable>
+
+                              <Pressable
+                                onPress={() =>
+                                  setActiveMeetingEditor((current) => ({ ...current, [option.value]: 'end' }))
+                                }
+                                style={({ pressed }) => ({
+                                  flex: 1,
+                                  borderRadius: 14,
+                                  borderCurve: 'continuous',
+                                  paddingHorizontal: 12,
+                                  paddingVertical: 10,
+                                  borderWidth: 1,
+                                  borderColor:
+                                    activeEditor === 'end' ? theme.colors.accent : theme.colors.border,
+                                  backgroundColor:
+                                    activeEditor === 'end'
+                                      ? `${theme.colors.accent}14`
+                                      : pressed
+                                        ? theme.colors.overlay
+                                        : theme.colors.card,
+                                  gap: 2,
+                                })}
+                              >
+                                <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, fontWeight: '700' }}>
+                                  End
+                                </Text>
+                                <Text selectable style={{ color: theme.colors.text, fontSize: 16, fontWeight: '800' }}>
+                                  {formatMeetingTimeLabel(meeting.endTime)}
+                                </Text>
+                              </Pressable>
+                            </View>
+
+                            <View
+                              style={{
+                                alignItems: 'center',
+                                borderRadius: 16,
+                                borderCurve: 'continuous',
+                                backgroundColor: theme.colors.overlay,
+                                paddingTop: 6,
+                                paddingBottom: 2,
+                                overflow: 'hidden',
+                              }}
+                            >
+                              <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, fontWeight: '700' }}>
+                                {activeEditor === 'start' ? 'Adjust start time' : 'Adjust end time'}
+                              </Text>
+                              <DateTimePicker
+                                display="spinner"
+                                minuteInterval={5}
+                                mode="time"
+                                value={createMeetingDate(
+                                  activeEditor === 'start' ? meeting.startTime : meeting.endTime
+                                )}
+                                onChange={(_, selectedDate) => {
+                                  if (!selectedDate) {
+                                    return;
+                                  }
+
+                                  const formatted = formatMeetingTimeValue(selectedDate);
+
+                                  if (activeEditor === 'start') {
+                                    onChangeMeetingStartTime(option.value, formatted);
+                                    return;
+                                  }
+
+                                  onChangeMeetingEndTime(option.value, formatted);
+                                }}
+                                style={{ width: pickerWidth, height: pickerHeight }}
+                              />
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              </Field>
+            ) : (
+              <Field label="Meeting schedule">
+                <View
+                  style={{
+                    borderRadius: 18,
+                    borderCurve: 'continuous',
+                    padding: 14,
+                    backgroundColor: theme.colors.overlay,
+                    borderWidth: 1,
+                    borderColor: theme.colors.border,
+                    gap: 6,
+                  }}
+                >
+                  <Text selectable style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
+                    {formatCourseTypeLabel(draft.courseType)} courses do not require an in-person class time.
+                  </Text>
+                  <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
+                    This schedule will be stored as empty until you switch the course back to In-person.
+                  </Text>
+                </View>
+              </Field>
+            )}
+
             <Field label="Color">
               <ColorWheel
-                onSelect={(value) => onChange('colorHex', value)}
+                onSelect={(value) => onChangeField('colorHex', value)}
                 selectedColor={draft.colorHex}
                 theme={theme}
               />
@@ -182,7 +492,7 @@ export function CourseFormModal({
                 autoCapitalize="sentences"
                 multiline
                 numberOfLines={4}
-                onChangeText={(value) => onChange('description', value)}
+                onChangeText={(value) => onChangeField('description', value)}
                 placeholder="Short note about the course focus, format, or study goals."
                 placeholderTextColor={theme.colors.inputPlaceholder}
                 style={[getInputStyle(theme), styles.multilineInput]}
@@ -203,7 +513,9 @@ export function CourseFormModal({
                 borderColor: theme.colors.dangerBorder,
               }}
             >
-              <Text style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '700' }}>{errorMessage}</Text>
+              <Text selectable style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '700' }}>
+                {errorMessage}
+              </Text>
             </View>
           ) : null}
 
@@ -215,7 +527,7 @@ export function CourseFormModal({
                 pressed && getSecondaryButtonPressedStyle(theme),
               ]}
             >
-              <Text style={getSecondaryButtonTextStyle(theme)}>Cancel</Text>
+              <Text selectable style={getSecondaryButtonTextStyle(theme)}>Cancel</Text>
             </Pressable>
 
             <Pressable
@@ -228,7 +540,7 @@ export function CourseFormModal({
                   : pressed && getPrimaryButtonPressedStyle(theme),
               ]}
             >
-              <Text style={styles.primaryButtonText}>
+              <Text selectable style={styles.primaryButtonText}>
                 {saving ? 'Saving…' : mode === 'create' ? 'Create' : 'Save'}
               </Text>
             </Pressable>
@@ -252,7 +564,9 @@ function Field({
 
   return (
     <View style={[{ gap: 6 }, style]}>
-      <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '700' }}>{label}</Text>
+      <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '700' }}>
+        {label}
+      </Text>
       {children}
     </View>
   );
@@ -278,8 +592,12 @@ function DropdownField({
         isOpen && { borderColor: theme.colors.accent },
       ]}
     >
-      <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '600' }}>{label}</Text>
-      <Text style={{ color: theme.colors.textMuted, fontSize: 16, fontWeight: '700' }}>{isOpen ? '−' : '+'}</Text>
+      <Text selectable style={{ color: theme.colors.text, fontSize: 15, fontWeight: '600' }}>
+        {label}
+      </Text>
+      <Text selectable style={{ color: theme.colors.textMuted, fontSize: 16, fontWeight: '700' }}>
+        {isOpen ? '−' : '+'}
+      </Text>
     </Pressable>
   );
 }
@@ -319,6 +637,7 @@ function DropdownList({
           })}
         >
           <Text
+            selectable
             style={{
               color: option === selectedValue ? theme.colors.success : theme.colors.textMuted,
               fontSize: 14,
@@ -382,7 +701,7 @@ function ColorWheel({
                   : '0 6px 12px rgba(15, 23, 42, 0.10)',
               }}
             >
-              {selected ? <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '900' }}>✓</Text> : null}
+              {selected ? <Text selectable style={{ color: '#ffffff', fontSize: 16, fontWeight: '900' }}>✓</Text> : null}
             </Pressable>
           );
         })}
@@ -403,7 +722,7 @@ function ColorWheel({
             boxShadow: '0 12px 22px rgba(15, 23, 42, 0.16)',
           }}
         >
-          <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
+          <Text selectable style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
             {selectedColor.toUpperCase()}
           </Text>
         </View>
@@ -532,6 +851,7 @@ function getPrimaryButtonPressedStyle(theme: ReturnType<typeof useAppTheme>) {
 
 function getPrimaryButtonDisabledStyle(theme: ReturnType<typeof useAppTheme>) {
   return {
-    backgroundColor: theme.resolvedMode === 'dark' ? '#5b6472' : '#94a3b8',
+    ...styles.primaryButtonDisabled,
+    backgroundColor: theme.colors.neutralBorder,
   };
 }
