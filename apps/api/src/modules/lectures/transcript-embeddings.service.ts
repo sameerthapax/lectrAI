@@ -248,6 +248,7 @@ export async function searchTranscriptChunks(input: {
   lectureId?: string;
   transcriptId?: string;
   courseId?: string;
+  userId?: string;
 }): Promise<TranscriptChunkSearchResult[]> {
   const query = input.query.trim();
 
@@ -305,6 +306,7 @@ export async function searchTranscriptChunks(input: {
       ${input.transcriptId ? db`and tc.transcript_id = ${input.transcriptId}::uuid` : db``}
       ${input.lectureId ? db`and pt.lecture_id = ${input.lectureId}::uuid` : db``}
       ${input.courseId ? db`and l.course_id = ${input.courseId}::uuid` : db``}
+      ${input.userId ? db`and c.owner_user_id = ${input.userId}::uuid` : db``}
     order by tc.embedding operator(extensions.<=>) ${vectorLiteral}::extensions.vector
     limit ${topK}
   `;
