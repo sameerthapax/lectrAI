@@ -82,6 +82,17 @@ variable "openai_api_key" {
   }
 }
 
+variable "elevenlabs_api_key" {
+  type        = string
+  description = "ELEVENLABS_API_KEY value exposed to the Cloud Run container"
+  sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.elevenlabs_api_key)) > 0
+    error_message = "elevenlabs_api_key must be provided. Set the ELEVENLABS_API_KEY GitHub secret for CI/CD deploys."
+  }
+}
+
 variable "openai_transcription_model" {
   type        = string
   description = "OpenAI audio transcription model used by the API"

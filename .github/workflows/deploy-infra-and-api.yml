@@ -147,6 +147,7 @@ jobs:
           TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
           TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_elevenlabs_api_key: ${{ secrets.ELEVENLABS_API_KEY }}
           TF_VAR_openai_transcription_model: ${{ secrets.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe-diarize' }}
           TF_VAR_openai_transcript_processing_model: ${{ secrets.OPENAI_TRANSCRIPT_PROCESSING_MODEL || 'gpt-4o-2024-08-06' }}
           TF_VAR_cloud_run_service_name: lectrai-api-dev
@@ -183,6 +184,7 @@ jobs:
           TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
           TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_elevenlabs_api_key: ${{ secrets.ELEVENLABS_API_KEY }}
           TF_VAR_openai_transcription_model: ${{ secrets.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe-diarize' }}
           TF_VAR_openai_transcript_processing_model: ${{ secrets.OPENAI_TRANSCRIPT_PROCESSING_MODEL || 'gpt-4o-2024-08-06' }}
           TF_VAR_cloud_run_service_name: lectrai-api-dev
