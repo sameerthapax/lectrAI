@@ -89,7 +89,7 @@ export default function SettingsHomeRoute() {
         />
         <SettingsLinkCard
           title="Permissions"
-          description="Control microphone, file access, notification access, and sound effects."
+          description="Control microphone, file uploads, notification access, and sound effects."
           onPress={() => router.push('/(tabs)/settings/permissions')}
         />
         <View

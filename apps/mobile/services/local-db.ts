@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 const DATABASE_NAME = 'lectrai-cache.db';
 
-export const LOCAL_CACHE_SCHEMA_VERSION = 8;
+export const LOCAL_CACHE_SCHEMA_VERSION = 9;
 
 const SYNC_STATUS_CHECK = `
 CHECK (sync_status IN ('synced', 'pending_pull', 'pending_push', 'conflict'))
@@ -135,6 +135,8 @@ CREATE TABLE IF NOT EXISTS cached_courses (
   instructor_name TEXT,
   semester TEXT,
   section TEXT,
+  course_type TEXT NOT NULL DEFAULT 'in_person',
+  meeting_schedule_json TEXT NOT NULL DEFAULT '[]',
   description TEXT,
   color_hex TEXT,
   is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1)),
@@ -791,6 +793,8 @@ async function migrateLocalDatabase(db: SQLite.SQLiteDatabase) {
     ['instructor_name', 'TEXT'],
     ['semester', 'TEXT'],
     ['section', 'TEXT'],
+    ['course_type', "TEXT NOT NULL DEFAULT 'in_person'"],
+    ['meeting_schedule_json', "TEXT NOT NULL DEFAULT '[]'"],
     ['description', 'TEXT'],
     ['color_hex', 'TEXT'],
     ['is_archived', 'INTEGER NOT NULL DEFAULT 0'],

@@ -7,6 +7,12 @@ export type RemoteCoursePayload = {
   semesterTerm: 'Winter' | 'Spring' | 'Summer' | 'Fall';
   semesterYear: number;
   section: string;
+  courseType: 'in_person' | 'online' | 'zoom';
+  meetingSchedule: Array<{
+    dayOfWeek: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+    startTime: string;
+    endTime: string;
+  }>;
   description: string;
   colorHex: string;
 };
@@ -19,6 +25,12 @@ export type RemoteCourseRecord = {
   instructorName: string | null;
   semester: string | null;
   section: string | null;
+  courseType: 'in_person' | 'online' | 'zoom';
+  meetingSchedule: Array<{
+    dayOfWeek: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+    startTime: string;
+    endTime: string;
+  }>;
   description: string | null;
   colorHex: string | null;
   isArchived: boolean;

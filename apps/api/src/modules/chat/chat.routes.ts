@@ -1,16 +1,18 @@
 import { Router } from 'express';
+import {
+  getAssistantMessageAudio,
+  getChatSession,
+  getChatSessions,
+  postChatReply,
+  postChatTranscription,
+} from './chat.controller.js';
 
 const chatRouter = Router();
 
-chatRouter.get('/', (req, res) => {
-  res.json({
-    message: 'Chat API scaffolded',
-    resource: 'chat',
-    user: {
-      id: req.authUser?.id ?? null,
-      email: req.authUser?.email ?? null,
-    },
-  });
-});
+chatRouter.get('/sessions', getChatSessions);
+chatRouter.get('/sessions/:sessionId', getChatSession);
+chatRouter.post('/transcribe', postChatTranscription);
+chatRouter.post('/reply', postChatReply);
+chatRouter.get('/messages/:messageId/audio', getAssistantMessageAudio);
 
 export { chatRouter };

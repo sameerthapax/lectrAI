@@ -1,6 +1,7 @@
 import { getDb, getSupabaseAdminClient } from '@lectrai/db';
 import { HttpError } from '../../lib/http-error.js';
 import { transcribeLectureAudio, type TranscriptionSegment } from './audio-transcription.service.js';
+import { persistProcessedTranscriptWithChunks } from './transcript-embeddings.service.js';
 import {
   processTranscriptSpeakers,
   type ProcessedTranscriptPayload,
@@ -494,7 +495,7 @@ export async function processLectureTranscriptionForUser(userId: string, lecture
       formattedTextPreview: buildLogPreview(processedTranscriptResult.formattedText),
     });
 
-    const transcript = await saveProcessedLectureTranscription({
+    const persistedTranscript = await persistProcessedTranscriptWithChunks({
       lectureId,
       rawTranscriptId: rawTranscript.id,
       audioFileId: lecture.audio_file_id,
@@ -502,11 +503,19 @@ export async function processLectureTranscriptionForUser(userId: string, lecture
       processing: processedTranscriptResult,
     });
 
+    const transcript = await getProcessedTranscriptForLecture(lectureId);
+
+    if (!transcript) {
+      throw new HttpError(500, 'Failed to load saved processed lecture transcription.');
+    }
+
     logTranscriptionStep('Updating transcription job as completed.', {
       lectureId,
       userId,
       processingJobId: processingJob.id,
       transcriptId: transcript.id,
+      chunkCount: persistedTranscript.chunkCount,
+      embeddingModel: persistedTranscript.embeddingModel,
     });
 
     await db`
@@ -519,6 +528,11 @@ export async function processLectureTranscriptionForUser(userId: string, lecture
           totalTokensEstimate: transcription.totalTokensEstimate,
           rawResponse: transcription.rawResponse,
           processedTranscript: processedTranscriptResult.payload,
+          transcriptChunks: {
+            chunkCount: persistedTranscript.chunkCount,
+            embeddingModel: persistedTranscript.embeddingModel,
+            embeddingDimensions: persistedTranscript.embeddingDimensions,
+          },
         })}::jsonb,
         completed_at = timezone('utc', now()),
         error_message = null
@@ -866,68 +880,6 @@ async function saveLectureTranscription(input: {
 
   if (!transcript) {
     throw new HttpError(500, 'Failed to load saved lecture transcription.');
-  }
-
-  return transcript;
-}
-
-async function saveProcessedLectureTranscription(input: {
-  lectureId: string;
-  rawTranscriptId: string;
-  audioFileId: string;
-  processingJobId: string;
-  processing: Awaited<ReturnType<typeof processTranscriptSpeakers>>;
-}) {
-  const db = getDb();
-  const rows = await db<{ id: string }[]>`
-    insert into public.processed_transcripts (
-      lecture_id,
-      source_transcript_id,
-      source_audio_file_id,
-      processing_job_id,
-      provider_name,
-      model_name,
-      speaker_map,
-      processed_payload,
-      formatted_text,
-      status,
-      generated_at
-    ) values (
-      ${input.lectureId}::uuid,
-      ${input.rawTranscriptId}::uuid,
-      ${input.audioFileId}::uuid,
-      ${input.processingJobId}::uuid,
-      ${input.processing.providerName},
-      ${input.processing.modelName},
-      ${JSON.stringify(input.processing.speakerMap)}::jsonb,
-      ${JSON.stringify(input.processing.payload)}::jsonb,
-      ${input.processing.formattedText},
-      'ready',
-      timezone('utc', now())
-    )
-    on conflict (lecture_id) do update
-    set
-      source_transcript_id = excluded.source_transcript_id,
-      source_audio_file_id = excluded.source_audio_file_id,
-      processing_job_id = excluded.processing_job_id,
-      provider_name = excluded.provider_name,
-      model_name = excluded.model_name,
-      speaker_map = excluded.speaker_map,
-      processed_payload = excluded.processed_payload,
-      formatted_text = excluded.formatted_text,
-      status = excluded.status,
-      generated_at = excluded.generated_at
-    returning id
-  `;
-
-  if (!rows[0]?.id) {
-    throw new HttpError(500, 'Failed to save processed lecture transcription.');
-  }
-
-  const transcript = await getProcessedTranscriptForLecture(input.lectureId);
-
-  if (!transcript) {
-    throw new HttpError(500, 'Failed to load saved processed lecture transcription.');
   }
 
   return transcript;

@@ -1,109 +1,131 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 
-const DEMO_DURATION_MS = 10000;
+export type LokiVisualizerMode = 'idle' | 'listening' | 'waiting' | 'speaking';
 
-type Status = 'loading' | 'rendering' | 'complete';
+type LokiNativeVoiceVisualizerProps = {
+  mode?: LokiVisualizerMode;
+  speechLevel?: number;
+  playbackTimeSeconds?: number;
+};
 
-function pulseAt(progress: number, center: number, width: number, amplitude: number) {
-  const distance = Math.abs(progress - center);
-  if (distance >= width) {
-    return 0;
-  }
+function getSpeechEnvelope(playbackTimeSeconds: number, speechLevel: number) {
+  const rapidCarrier = (Math.sin(playbackTimeSeconds * 20) * 0.5 + 0.5) * 0.26;
+  const midCarrier = (Math.sin(playbackTimeSeconds * 11.5 + 0.8) * 0.5 + 0.5) * 0.22;
+  const shimmer = (Math.sin(playbackTimeSeconds * 31) * 0.5 + 0.5) * 0.12;
 
-  const normalized = 1 - distance / width;
-  return Math.sin(normalized * Math.PI * 0.5) * amplitude;
+  return Math.min(1, 0.08 + speechLevel * 0.92 + rapidCarrier + midCarrier + shimmer);
 }
 
-function getEnvelope(progress: number) {
-  const phraseBed =
-    pulseAt(progress, 0.11, 0.09, 0.2) +
-    pulseAt(progress, 0.29, 0.11, 0.34) +
-    pulseAt(progress, 0.51, 0.13, 0.5) +
-    pulseAt(progress, 0.79, 0.12, 0.42);
-
-  const syllables = [
-    [0.05, 0.018, 0.18],
-    [0.09, 0.02, 0.28],
-    [0.13, 0.016, 0.16],
-    [0.22, 0.02, 0.22],
-    [0.27, 0.022, 0.36],
-    [0.33, 0.018, 0.22],
-    [0.39, 0.02, 0.2],
-    [0.45, 0.022, 0.42],
-    [0.5, 0.018, 0.24],
-    [0.56, 0.024, 0.48],
-    [0.61, 0.02, 0.28],
-    [0.67, 0.02, 0.22],
-    [0.74, 0.024, 0.34],
-    [0.8, 0.02, 0.26],
-    [0.85, 0.02, 0.3],
-    [0.9, 0.018, 0.22],
-    [0.95, 0.016, 0.18],
-  ] as const;
-
-  const articulation = syllables.reduce(
-    (total, [center, width, amplitude]) => total + pulseAt(progress, center, width, amplitude),
-    0
-  );
-
-  const microVibrato =
-    (Math.sin(progress * Math.PI * 34) * 0.5 + 0.5) *
-    (0.035 + phraseBed * 0.025);
-
-  return 0.08 + phraseBed + articulation + microVibrato;
-}
-
-export default function LokiNativeVoiceVisualizer() {
-  const progress = useRef(new Animated.Value(0)).current;
-  const [status, setStatus] = useState<Status>('loading');
-  const [progressValue, setProgressValue] = useState(0);
+export default function LokiNativeVoiceVisualizer({
+  mode = 'idle',
+  speechLevel = 0,
+  playbackTimeSeconds = 0,
+}: LokiNativeVoiceVisualizerProps) {
+  const waitingFloat = useRef(new Animated.Value(0)).current;
+  const waitingPulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    setStatus('loading');
-    progress.setValue(0);
+    if (mode !== 'waiting') {
+      waitingFloat.stopAnimation();
+      waitingPulse.stopAnimation();
+      waitingFloat.setValue(0);
+      waitingPulse.setValue(0);
+      return;
+    }
 
-    let isMounted = true;
-    const listenerId = progress.addListener(({ value }) => {
-      if (!isMounted) {
-        return;
-      }
+    const floatLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(waitingFloat, {
+          toValue: 1,
+          duration: 1800,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: false,
+        }),
+        Animated.timing(waitingFloat, {
+          toValue: 0,
+          duration: 1800,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: false,
+        }),
+      ])
+    );
 
-      setProgressValue(value);
-      setStatus(value < 0.02 ? 'loading' : value < 1 ? 'rendering' : 'complete');
-    });
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(waitingPulse, {
+          toValue: 1,
+          duration: 1400,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }),
+        Animated.timing(waitingPulse, {
+          toValue: 0,
+          duration: 1400,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }),
+      ])
+    );
 
-    const timeout = setTimeout(() => {
-      Animated.timing(progress, {
-        toValue: 1,
-        duration: DEMO_DURATION_MS,
-        easing: Easing.linear,
-        useNativeDriver: false,
-      }).start(({ finished }) => {
-        if (finished && isMounted) {
-          setProgressValue(1);
-          setStatus('complete');
-        }
-      });
-    }, 120);
+    floatLoop.start();
+    pulseLoop.start();
 
     return () => {
-      isMounted = false;
-      clearTimeout(timeout);
-      progress.removeListener(listenerId);
-      progress.stopAnimation();
+      floatLoop.stop();
+      pulseLoop.stop();
     };
-  }, [progress]);
+  }, [mode, waitingFloat, waitingPulse]);
 
-  const envelope = getEnvelope(progressValue);
-  const orbScale = 0.9 + envelope * 0.72;
-  const coreScale = 0.96 + envelope * 0.3;
-  const haloScale = 1.02 + envelope * 0.68;
-  const orbRotate = `${-12 + progressValue * 22 + Math.sin(progressValue * Math.PI * 8) * 4}deg`;
-  const haloRotate = `${14 - progressValue * 36}deg`;
-  const shimmerOffset = -60 + progressValue * 120;
+  const normalizedSpeechLevel = Math.min(1, Math.max(0, speechLevel));
+  const speakingEnvelope = getSpeechEnvelope(playbackTimeSeconds, normalizedSpeechLevel);
+
+  const intensity =
+    mode === 'speaking'
+      ? 0.22 + speakingEnvelope * 1.05
+      : mode === 'listening'
+        ? 0.14
+        : mode === 'waiting'
+          ? 0.18
+          : 0.08;
+
+  const waitingLift = waitingFloat.interpolate({
+    inputRange: [0, 1],
+    outputRange: [5, -8],
+  });
+  const waitingHaloLift = waitingFloat.interpolate({
+    inputRange: [0, 1],
+    outputRange: [9, -12],
+  });
+  const waitingPulseScale = waitingPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.08],
+  });
+
+  const orbScale = 0.92 + intensity * 0.52;
+  const coreScale = 0.98 + intensity * 0.24;
+  const haloScale = 1.02 + intensity * 0.72;
+  const orbRotate =
+    mode === 'speaking'
+      ? `${Math.sin(playbackTimeSeconds * 7.5) * 10}deg`
+      : mode === 'waiting'
+        ? '0deg'
+        : '-4deg';
+  const haloRotate = mode === 'speaking' ? `${Math.sin(playbackTimeSeconds * 4.5) * -18}deg` : '14deg';
+  const shimmerOffset =
+    mode === 'speaking'
+      ? -52 + Math.sin(playbackTimeSeconds * 9.5) * 48
+      : mode === 'waiting'
+        ? -16
+        : -40;
   const badgeLabel =
-    status === 'loading' ? 'Loading' : status === 'rendering' ? 'Rendering' : 'Animation Complete';
+    mode === 'listening'
+      ? 'Listening'
+      : mode === 'waiting'
+        ? 'Thinking'
+        : mode === 'speaking'
+          ? 'Speaking'
+          : 'Ready';
 
   return (
     <View style={styles.frame}>
@@ -112,8 +134,12 @@ export default function LokiNativeVoiceVisualizer() {
           style={[
             styles.halo,
             {
-              transform: [{ scale: haloScale }, { rotate: haloRotate }],
-              opacity: 0.24 + envelope * 0.42,
+              transform: [
+                { translateY: mode === 'waiting' ? waitingHaloLift : 0 },
+                { scale: mode === 'waiting' ? waitingPulseScale : haloScale },
+                { rotate: haloRotate },
+              ],
+              opacity: 0.2 + intensity * 0.28,
             },
           ]}
         />
@@ -121,8 +147,12 @@ export default function LokiNativeVoiceVisualizer() {
           style={[
             styles.orbShell,
             {
-              transform: [{ scale: orbScale }, { rotate: orbRotate }],
-              shadowOpacity: 0.24 + envelope * 0.18,
+              transform: [
+                { translateY: mode === 'waiting' ? waitingLift : 0 },
+                { scale: orbScale },
+                { rotate: orbRotate },
+              ],
+              shadowOpacity: 0.22 + intensity * 0.16,
             },
           ]}
         >
@@ -131,7 +161,7 @@ export default function LokiNativeVoiceVisualizer() {
               styles.orbCore,
               {
                 transform: [{ scale: coreScale }],
-                opacity: 0.88 + envelope * 0.1,
+                opacity: 0.88 + intensity * 0.1,
               },
             ]}
           >
@@ -141,7 +171,7 @@ export default function LokiNativeVoiceVisualizer() {
                 styles.shimmer,
                 {
                   transform: [{ translateX: shimmerOffset }, { rotate: '-18deg' }],
-                  opacity: 0.18 + envelope * 0.1,
+                  opacity: 0.18 + intensity * 0.1,
                 },
               ]}
             />
@@ -167,11 +197,13 @@ export default function LokiNativeVoiceVisualizer() {
           <View
             style={[
               styles.statusDot,
-              status === 'loading'
-                ? styles.statusDotLoading
-                : status === 'rendering'
-                  ? styles.statusDotRendering
-                  : styles.statusDotComplete,
+              mode === 'waiting'
+                ? styles.statusDotWaiting
+                : mode === 'speaking'
+                  ? styles.statusDotSpeaking
+                  : mode === 'listening'
+                    ? styles.statusDotListening
+                    : styles.statusDotIdle,
             ]}
           />
           <Text selectable style={styles.statusLabel}>
@@ -258,64 +290,78 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(255, 245, 235, 0.08)',
+    backgroundColor: 'rgba(17, 12, 8, 0.58)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 237, 213, 0.08)',
   },
   badgeCompact: {
-    minWidth: 34,
+    width: 34,
     justifyContent: 'center',
+    paddingHorizontal: 0,
   },
   badgeDot: {
     width: 8,
     height: 8,
     borderRadius: 999,
-    backgroundColor: '#ff8a3d',
+    backgroundColor: '#fb923c',
+  },
+  badgeLinePrimary: {
+    width: 40,
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 237, 213, 0.74)',
+  },
+  badgeLineSecondary: {
+    width: 24,
+    height: 4,
+    borderRadius: 999,
+    marginTop: 4,
+    backgroundColor: 'rgba(255, 237, 213, 0.24)',
   },
   badgeGlow: {
     width: 10,
     height: 10,
     borderRadius: 999,
-    backgroundColor: '#ff8a3d',
-  },
-  badgeLinePrimary: {
-    width: 54,
-    height: 4,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255, 237, 213, 0.95)',
-  },
-  badgeLineSecondary: {
-    width: 34,
-    height: 4,
-    borderRadius: 999,
-    marginTop: 4,
-    backgroundColor: 'rgba(255, 154, 75, 0.52)',
+    backgroundColor: '#fb923c',
+    shadowColor: '#fb923c',
+    shadowOpacity: 0.65,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
   },
   statusBadge: {
     alignSelf: 'center',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(255, 245, 235, 0.12)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(17, 12, 8, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 237, 213, 0.08)',
   },
   statusDot: {
     width: 8,
     height: 8,
     borderRadius: 999,
   },
-  statusDotLoading: {
-    backgroundColor: '#fbbf24',
+  statusDotIdle: {
+    backgroundColor: '#f59e0b',
   },
-  statusDotRendering: {
-    backgroundColor: '#fb923c',
+  statusDotListening: {
+    backgroundColor: '#ef4444',
   },
-  statusDotComplete: {
+  statusDotWaiting: {
+    backgroundColor: '#f97316',
+  },
+  statusDotSpeaking: {
     backgroundColor: '#22c55e',
   },
   statusLabel: {
     color: '#fff7ed',
     fontSize: 12,
     fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
   },
 });

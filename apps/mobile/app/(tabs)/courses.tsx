@@ -13,11 +13,17 @@ import {
 import {
   createCourseDraftFromRecord,
   createEmptyCourseDraft,
+  findSemesterScheduleConflict,
+  formatMeetingScheduleSummary,
   getSemesterYearOptions,
   listCoursesForUser,
   removeCachedCourseForUser,
   replaceCoursesForUser,
+  setMeetingEndTimeInDraft,
+  setMeetingStartTimeInDraft,
+  toggleMeetingDayInDraft,
   toRemoteCoursePayload,
+  type CourseMeetingDay,
   type CourseDraft,
   type LocalCourseRecord,
   type SemesterTerm,
@@ -210,6 +216,26 @@ export default function CoursesRoute() {
     setFormDraft((currentDraft) => ({ ...currentDraft, [field]: value }));
   };
 
+  const handleChangeCourseType = (value: CourseDraft['courseType']) => {
+    setFormDraft((currentDraft) => ({
+      ...currentDraft,
+      courseType: value,
+      meetingSchedule: value === 'in_person' ? currentDraft.meetingSchedule : [],
+    }));
+  };
+
+  const handleToggleMeetingDay = (dayOfWeek: CourseMeetingDay) => {
+    setFormDraft((currentDraft) => toggleMeetingDayInDraft(currentDraft, dayOfWeek));
+  };
+
+  const handleChangeMeetingStartTime = (dayOfWeek: CourseMeetingDay, time: string) => {
+    setFormDraft((currentDraft) => setMeetingStartTimeInDraft(currentDraft, dayOfWeek, time));
+  };
+
+  const handleChangeMeetingEndTime = (dayOfWeek: CourseMeetingDay, time: string) => {
+    setFormDraft((currentDraft) => setMeetingEndTimeInDraft(currentDraft, dayOfWeek, time));
+  };
+
   const handleSubmitForm = async () => {
     if (!auth.user) {
       return;
@@ -222,6 +248,22 @@ export default function CoursesRoute() {
 
     if (!/^\d{4}$/.test(formDraft.semesterYear.trim())) {
       setFormError('Choose a valid year.');
+      return;
+    }
+
+    if (formDraft.courseType === 'in_person' && formDraft.meetingSchedule.length === 0) {
+      setFormError('Select at least one day plus a start and end time for an in-person course.');
+      return;
+    }
+
+    const scheduleConflict = findSemesterScheduleConflict(formDraft, courses, selectedCourseId);
+
+    if (scheduleConflict) {
+      const dayLabel =
+        scheduleConflict.dayOfWeek.slice(0, 1).toUpperCase() + scheduleConflict.dayOfWeek.slice(1);
+      setFormError(
+        `This in-person schedule overlaps with ${scheduleConflict.courseName} on ${dayLabel} in ${scheduleConflict.semester}.`
+      );
       return;
     }
 
@@ -241,10 +283,17 @@ export default function CoursesRoute() {
       }
 
       const payload = toRemoteCoursePayload(formDraft);
-      const course =
-        formMode === 'create'
-          ? await createCourse(accessToken, payload)
-          : await updateCourse(accessToken, selectedCourseId, payload);
+      let course;
+
+      if (formMode === 'create') {
+        course = await createCourse(accessToken, payload);
+      } else {
+        if (!selectedCourseId) {
+          throw new Error('Choose a course before saving edits.');
+        }
+
+        course = await updateCourse(accessToken, selectedCourseId, payload);
+      }
 
       await upsertCourseForUser(course);
       const nextCourses = await listCoursesForUser(auth.user);
@@ -303,7 +352,12 @@ export default function CoursesRoute() {
   };
 
   const renderCourseDetail = (course: LocalCourseRecord) => {
-    const details = [course.semester, course.section ? `Section ${course.section}` : '', course.instructorName]
+    const details = [
+      course.semester,
+      course.section ? `Section ${course.section}` : '',
+      course.instructorName,
+      formatMeetingScheduleSummary(course.courseType, course.meetingSchedule),
+    ]
       .filter(Boolean)
       .join(' • ');
 
@@ -680,7 +734,11 @@ export default function CoursesRoute() {
         draft={formDraft}
         errorMessage={formError}
         mode={formMode}
-        onChange={handleChangeDraft}
+        onChangeField={handleChangeDraft}
+        onChangeCourseType={handleChangeCourseType}
+        onToggleMeetingDay={handleToggleMeetingDay}
+        onChangeMeetingStartTime={handleChangeMeetingStartTime}
+        onChangeMeetingEndTime={handleChangeMeetingEndTime}
         onClose={handleCloseForm}
         onSubmit={handleSubmitForm}
         saving={isSaving}

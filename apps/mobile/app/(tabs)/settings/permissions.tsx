@@ -2,7 +2,6 @@ import {
   getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
 } from 'expo-audio';
-import { getDocumentAsync } from 'expo-document-picker';
 import { useFocusEffect } from 'expo-router';
 import { useCallback } from 'react';
 import { Alert } from 'react-native';
@@ -94,35 +93,8 @@ export default function SettingsPermissionsRoute() {
     }
   };
 
-  const onFileAccessToggle = async (value: boolean) => {
-    if (!value) {
-      updatePermissionSetting('storage', false);
-      return;
-    }
-
-    try {
-      const result = await getDocumentAsync({
-        multiple: false,
-        copyToCacheDirectory: false,
-      });
-
-      if (result.canceled) {
-        updatePermissionSetting('storage', false);
-        Alert.alert(
-          'File access not granted',
-          'Choose a file when prompted to allow file access in LectrAI.'
-        );
-        return;
-      }
-
-      updatePermissionSetting('storage', true);
-    } catch (error) {
-      updatePermissionSetting('storage', false);
-      Alert.alert(
-        'File access failed',
-        error instanceof Error ? error.message : 'Unable to verify file access right now.'
-      );
-    }
+  const onFileAccessToggle = (value: boolean) => {
+    updatePermissionSetting('storage', value);
   };
 
   const onNotificationsToggle = async (value: boolean) => {
@@ -176,7 +148,7 @@ export default function SettingsPermissionsRoute() {
   return (
     <SettingsScreen
       title="Permissions"
-      subtitle="Control the app access used for recording, files, and alerts."
+      subtitle="Control device permissions and app features used for recording, uploads, and alerts."
     >
       <SectionCard
         title="Permission Controls"
@@ -191,11 +163,11 @@ export default function SettingsPermissionsRoute() {
         />
         <Divider />
         <ToggleRow
-          title="Allow file access"
-          description="Lets LectrAI open the system file picker so you can import course files."
+          title="Enable file uploads"
+          description="Controls whether importing files into LectrAI is available inside the app."
           value={settings.permissions.storage}
           onValueChange={(value) => {
-            void onFileAccessToggle(value);
+            onFileAccessToggle(value);
           }}
         />
         <Divider />

@@ -13,6 +13,7 @@ const REQUIRED_TABLES = [
   'lectures',
   'transcripts',
   'embedding_documents',
+  'transcript_chunks',
 ] as const;
 
 export async function getDatabaseHealth(): Promise<DatabaseHealth> {
@@ -29,7 +30,8 @@ export async function getDatabaseHealth(): Promise<DatabaseHealth> {
           'courses',
           'lectures',
           'transcripts',
-          'embedding_documents'
+          'embedding_documents',
+          'transcript_chunks'
         )
     `
   );

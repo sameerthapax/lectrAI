@@ -8,8 +8,38 @@ import {
 } from './local-db';
 
 export type SemesterTerm = 'Winter' | 'Spring' | 'Summer' | 'Fall';
+export type CourseType = 'in_person' | 'online' | 'zoom';
+export type CourseMeetingDay =
+  | 'monday'
+  | 'tuesday'
+  | 'wednesday'
+  | 'thursday'
+  | 'friday'
+  | 'saturday'
+  | 'sunday';
+export type CourseMeeting = {
+  dayOfWeek: CourseMeetingDay;
+  startTime: string;
+  endTime: string;
+};
 export const NO_CLASS_COURSE_ID = 'no-class';
 const CURRENT_COURSE_META_KEY = 'current_course_id';
+
+export const COURSE_TYPE_OPTIONS: Array<{ value: CourseType; label: string }> = [
+  { value: 'in_person', label: 'In-person' },
+  { value: 'online', label: 'Online' },
+  { value: 'zoom', label: 'Zoom' },
+];
+
+export const COURSE_MEETING_DAY_OPTIONS: Array<{ value: CourseMeetingDay; label: string; shortLabel: string }> = [
+  { value: 'monday', label: 'Monday', shortLabel: 'Mon' },
+  { value: 'tuesday', label: 'Tuesday', shortLabel: 'Tue' },
+  { value: 'wednesday', label: 'Wednesday', shortLabel: 'Wed' },
+  { value: 'thursday', label: 'Thursday', shortLabel: 'Thu' },
+  { value: 'friday', label: 'Friday', shortLabel: 'Fri' },
+  { value: 'saturday', label: 'Saturday', shortLabel: 'Sat' },
+  { value: 'sunday', label: 'Sunday', shortLabel: 'Sun' },
+];
 
 export type CourseDraft = {
   courseCode: string;
@@ -18,6 +48,8 @@ export type CourseDraft = {
   semesterTerm: SemesterTerm;
   semesterYear: string;
   section: string;
+  courseType: CourseType;
+  meetingSchedule: CourseMeeting[];
   description: string;
   colorHex: string;
 };
@@ -32,6 +64,8 @@ export type LocalCourseRecord = {
   semesterTerm: SemesterTerm;
   semesterYear: number;
   section: string;
+  courseType: CourseType;
+  meetingSchedule: CourseMeeting[];
   description: string;
   colorHex: string;
   isArchived: boolean;
@@ -65,6 +99,8 @@ export function createEmptyCourseDraft(): CourseDraft {
     semesterTerm: currentSemester.term,
     semesterYear: String(currentSemester.year),
     section: '',
+    courseType: 'in_person',
+    meetingSchedule: [],
     description: '',
     colorHex: COURSE_COLOR_WHEEL[6],
   };
@@ -78,6 +114,8 @@ export function createCourseDraftFromRecord(course: LocalCourseRecord): CourseDr
     semesterTerm: course.semesterTerm,
     semesterYear: String(course.semesterYear),
     section: course.section,
+    courseType: course.courseType,
+    meetingSchedule: course.meetingSchedule,
     description: course.description,
     colorHex: course.colorHex,
   };
@@ -102,6 +140,8 @@ export async function listCoursesForUser(user: AuthUser) {
     instructor_name: string | null;
     semester: string | null;
     section: string | null;
+    course_type: CourseType | null;
+    meeting_schedule_json: string | null;
     description: string | null;
     color_hex: string | null;
     is_archived: number;
@@ -117,6 +157,8 @@ export async function listCoursesForUser(user: AuthUser) {
        instructor_name,
        semester,
        section,
+       course_type,
+       meeting_schedule_json,
        description,
        color_hex,
        is_archived,
@@ -179,6 +221,8 @@ export function toRemoteCoursePayload(draft: CourseDraft): RemoteCoursePayload {
     semesterTerm: normalized.semesterTerm,
     semesterYear: Number(normalized.semesterYear),
     section: normalized.section,
+    courseType: normalized.courseType,
+    meetingSchedule: normalized.meetingSchedule,
     description: normalized.description,
     colorHex: normalized.colorHex,
   };
@@ -197,6 +241,8 @@ async function upsertCourseRecord(
        instructor_name,
        semester,
        section,
+       course_type,
+       meeting_schedule_json,
        description,
        color_hex,
        is_archived,
@@ -205,7 +251,7 @@ async function upsertCourseRecord(
        sync_status,
        dirty_fields_json,
        last_synced_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, CURRENT_TIMESTAMP)
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, CURRENT_TIMESTAMP)
      ON CONFLICT(id) DO UPDATE SET
        owner_user_id = excluded.owner_user_id,
        course_code = excluded.course_code,
@@ -213,6 +259,8 @@ async function upsertCourseRecord(
        instructor_name = excluded.instructor_name,
        semester = excluded.semester,
        section = excluded.section,
+       course_type = excluded.course_type,
+       meeting_schedule_json = excluded.meeting_schedule_json,
        description = excluded.description,
        color_hex = excluded.color_hex,
        is_archived = excluded.is_archived,
@@ -229,6 +277,8 @@ async function upsertCourseRecord(
       course.instructorName,
       course.semester,
       course.section,
+      course.courseType,
+      JSON.stringify(normalizeMeetingSchedule(course.meetingSchedule)),
       course.description,
       normalizeColor(course.colorHex),
       course.isArchived ? 1 : 0,
@@ -293,6 +343,8 @@ function mapRow(row: {
   instructor_name: string | null;
   semester: string | null;
   section: string | null;
+  course_type: CourseType | null;
+  meeting_schedule_json: string | null;
   description: string | null;
   color_hex: string | null;
   is_archived: number;
@@ -313,6 +365,8 @@ function mapRow(row: {
     semesterTerm: parsedSemester.term,
     semesterYear: parsedSemester.year,
     section: row.section ?? '',
+    courseType: normalizeCourseType(row.course_type),
+    meetingSchedule: parseMeetingSchedule(row.meeting_schedule_json),
     description: row.description ?? '',
     colorHex: normalizeColor(row.color_hex),
     isArchived: row.is_archived === 1,
@@ -332,9 +386,279 @@ function normalizeDraft(draft: CourseDraft): CourseDraft {
     semesterTerm: draft.semesterTerm,
     semesterYear: year,
     section: draft.section.trim(),
+    courseType: draft.courseType,
+    meetingSchedule:
+      draft.courseType === 'in_person' ? normalizeMeetingSchedule(draft.meetingSchedule) : [],
     description: draft.description.trim(),
     colorHex: normalizeColor(draft.colorHex),
   };
+}
+
+export function toggleMeetingDayInDraft(draft: CourseDraft, dayOfWeek: CourseMeetingDay): CourseDraft {
+  const currentSchedule = normalizeMeetingSchedule(draft.meetingSchedule);
+  const existingMeeting = currentSchedule.find((meeting) => meeting.dayOfWeek === dayOfWeek);
+
+  return {
+    ...draft,
+    meetingSchedule: existingMeeting
+      ? currentSchedule.filter((meeting) => meeting.dayOfWeek !== dayOfWeek)
+      : normalizeMeetingSchedule([...currentSchedule, { dayOfWeek, startTime: '09:00', endTime: '10:00' }]),
+  };
+}
+
+export function setMeetingStartTimeInDraft(
+  draft: CourseDraft,
+  dayOfWeek: CourseMeetingDay,
+  startTime: string
+): CourseDraft {
+  return {
+    ...draft,
+    meetingSchedule: normalizeMeetingSchedule(
+      draft.meetingSchedule.map((meeting) =>
+        meeting.dayOfWeek === dayOfWeek ? { ...meeting, startTime } : meeting
+      )
+    ),
+  };
+}
+
+export function setMeetingEndTimeInDraft(
+  draft: CourseDraft,
+  dayOfWeek: CourseMeetingDay,
+  endTime: string
+): CourseDraft {
+  return {
+    ...draft,
+    meetingSchedule: normalizeMeetingSchedule(
+      draft.meetingSchedule.map((meeting) =>
+        meeting.dayOfWeek === dayOfWeek ? { ...meeting, endTime } : meeting
+      )
+    ),
+  };
+}
+
+export function formatCourseTypeLabel(courseType: CourseType) {
+  return COURSE_TYPE_OPTIONS.find((option) => option.value === courseType)?.label ?? 'In-person';
+}
+
+export function formatMeetingTimeLabel(time: string) {
+  const match = time.match(/^(\d{2}):(\d{2})$/);
+
+  if (!match) {
+    return time;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = match[2];
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours % 12 === 0 ? 12 : hours % 12;
+  return `${displayHours}:${minutes} ${suffix}`;
+}
+
+export function formatMeetingScheduleSummary(courseType: CourseType, schedule: CourseMeeting[]) {
+  const typeLabel = formatCourseTypeLabel(courseType);
+
+  if (courseType !== 'in_person') {
+    return typeLabel;
+  }
+
+  const normalized = normalizeMeetingSchedule(schedule);
+
+  if (normalized.length === 0) {
+    return `${typeLabel} • Schedule pending`;
+  }
+
+  const items = normalized.map((meeting) => {
+    const dayLabel =
+      COURSE_MEETING_DAY_OPTIONS.find((option) => option.value === meeting.dayOfWeek)?.shortLabel ??
+      meeting.dayOfWeek;
+    return `${dayLabel} ${formatMeetingTimeLabel(meeting.startTime)}-${formatMeetingTimeLabel(meeting.endTime)}`;
+  });
+
+  return `${typeLabel} • ${items.join(' • ')}`;
+}
+
+export function findSemesterScheduleConflict(
+  draft: CourseDraft,
+  courses: LocalCourseRecord[],
+  excludedCourseId?: string | null
+) {
+  const normalizedDraft = normalizeDraft(draft);
+
+  if (normalizedDraft.courseType !== 'in_person' || normalizedDraft.meetingSchedule.length === 0) {
+    return null;
+  }
+
+  const semester = `${normalizedDraft.semesterTerm} ${normalizedDraft.semesterYear}`;
+
+  for (const course of courses) {
+    if (
+      course.id === excludedCourseId ||
+      course.isArchived ||
+      course.courseType !== 'in_person' ||
+      course.semester !== semester
+    ) {
+      continue;
+    }
+
+    const conflictingDay = findOverlappingMeetingDay(normalizedDraft.meetingSchedule, course.meetingSchedule);
+
+    if (!conflictingDay) {
+      continue;
+    }
+
+    return {
+      courseId: course.id,
+      courseName: course.courseName,
+      dayOfWeek: conflictingDay,
+      semester,
+    };
+  }
+
+  return null;
+}
+
+export function createMeetingDate(time: string) {
+  const match = time.match(/^(\d{2}):(\d{2})$/);
+  const date = new Date();
+
+  if (!match) {
+    date.setHours(9, 0, 0, 0);
+    return date;
+  }
+
+  date.setHours(Number(match[1]), Number(match[2]), 0, 0);
+  return date;
+}
+
+export function formatMeetingTimeValue(date: Date) {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function normalizeCourseType(value: string | null | undefined): CourseType {
+  if (value === 'online' || value === 'zoom' || value === 'in_person') {
+    return value;
+  }
+
+  return 'in_person';
+}
+
+function parseMeetingSchedule(value: string | null | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    return normalizeMeetingSchedule(JSON.parse(value));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeMeetingSchedule(value: unknown): CourseMeeting[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seenDays = new Set<CourseMeetingDay>();
+  const normalized: CourseMeeting[] = [];
+
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const record = entry as Partial<CourseMeeting>;
+    const dayOfWeek = normalizeMeetingDay(record.dayOfWeek);
+    const startTime = normalizeMeetingTime(record.startTime);
+    const endTime = normalizeMeetingTime(record.endTime);
+    const legacyTime =
+      typeof (entry as { time?: unknown }).time === 'string'
+        ? normalizeMeetingTime((entry as { time?: string }).time)
+        : null;
+
+    const resolvedStartTime = startTime ?? legacyTime;
+    const resolvedEndTime = endTime ?? (legacyTime ? addMinutesToTime(legacyTime, 60) : null);
+
+    if (
+      !dayOfWeek ||
+      !resolvedStartTime ||
+      !resolvedEndTime ||
+      compareMeetingTimes(resolvedStartTime, resolvedEndTime) >= 0 ||
+      seenDays.has(dayOfWeek)
+    ) {
+      continue;
+    }
+
+    seenDays.add(dayOfWeek);
+    normalized.push({ dayOfWeek, startTime: resolvedStartTime, endTime: resolvedEndTime });
+  }
+
+  return normalized.sort(
+    (left, right) =>
+      COURSE_MEETING_DAY_OPTIONS.findIndex((option) => option.value === left.dayOfWeek) -
+      COURSE_MEETING_DAY_OPTIONS.findIndex((option) => option.value === right.dayOfWeek)
+  );
+}
+
+function findOverlappingMeetingDay(left: CourseMeeting[], right: CourseMeeting[]) {
+  const normalizedRight = normalizeMeetingSchedule(right);
+
+  for (const leftMeeting of left) {
+    const rightMeeting = normalizedRight.find((entry) => entry.dayOfWeek === leftMeeting.dayOfWeek);
+
+    if (!rightMeeting) {
+      continue;
+    }
+
+    if (meetingTimesOverlap(leftMeeting, rightMeeting)) {
+      return leftMeeting.dayOfWeek;
+    }
+  }
+
+  return null;
+}
+
+function meetingTimesOverlap(left: CourseMeeting, right: CourseMeeting) {
+  return compareMeetingTimes(left.startTime, right.endTime) < 0 && compareMeetingTimes(right.startTime, left.endTime) < 0;
+}
+
+function normalizeMeetingDay(value: unknown): CourseMeetingDay | null {
+  if (
+    value === 'monday' ||
+    value === 'tuesday' ||
+    value === 'wednesday' ||
+    value === 'thursday' ||
+    value === 'friday' ||
+    value === 'saturday' ||
+    value === 'sunday'
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
+function normalizeMeetingTime(value: unknown) {
+  return typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : null;
+}
+
+function compareMeetingTimes(left: string, right: string) {
+  return left.localeCompare(right);
+}
+
+function addMinutesToTime(value: string, minutesToAdd: number) {
+  const match = value.match(/^(\d{2}):(\d{2})$/);
+
+  if (!match) {
+    return '10:00';
+  }
+
+  const startMinutes = Number(match[1]) * 60 + Number(match[2]);
+  const totalMinutes = Math.min(startMinutes + minutesToAdd, 23 * 60 + 59);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
 function normalizeColor(value: string | null | undefined) {

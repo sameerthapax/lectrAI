@@ -11,7 +11,11 @@ import {
 } from 'react-native';
 import { useAuth } from '../../../providers/auth-provider';
 import { useAppTheme, useSettings } from '../../../providers/settings-provider';
-import { listCoursesForUser, type LocalCourseRecord } from '../../../services/courses-repository';
+import {
+  formatMeetingScheduleSummary,
+  listCoursesForUser,
+  type LocalCourseRecord,
+} from '../../../services/courses-repository';
 import {
   listCourseFilesForCourse,
   saveCourseFile,
@@ -161,7 +165,12 @@ export default function CourseDetailRoute() {
   );
 
   const courseMeta = course
-    ? [course.semester, course.section ? `Section ${course.section}` : '', course.instructorName]
+    ? [
+        course.semester,
+        course.section ? `Section ${course.section}` : '',
+        course.instructorName,
+        formatMeetingScheduleSummary(course.courseType, course.meetingSchedule),
+      ]
         .filter(Boolean)
         .join(' • ')
     : '';
@@ -170,8 +179,8 @@ export default function CourseDetailRoute() {
   const handleChooseFile = async () => {
     if (!settingsState.settings?.permissions.storage) {
       Alert.alert(
-        'File access disabled',
-        'Turn on Allow file access in Settings before importing course files.'
+        'File uploads disabled',
+        'Turn on Enable file uploads in Settings before importing course files.'
       );
       return;
     }
