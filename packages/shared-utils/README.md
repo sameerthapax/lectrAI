@@ -1,6 +1,6 @@
 # shared-utils
 
-This library was generated with [Nx](https://nx.dev).
+Shared utility helpers used across the LectrAI monorepo.
 
 ## Building
 

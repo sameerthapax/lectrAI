@@ -28,14 +28,43 @@ jobs:
       # Cache node_modules
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: 'npm'
+          cache-dependency-path: package-lock.json
 
       - run: npm ci
 
+      - name: Resolve Nx base/head
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+
+            if [[ "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+              BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+            fi
+          fi
+
+          echo "NX_BASE=$BASE_SHA" >> "$GITHUB_ENV"
+          echo "NX_HEAD=$HEAD_SHA" >> "$GITHUB_ENV"
+
+      - name: Setup Terraform
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform fmt (check)
+        if: ${{ github.event_name == 'pull_request' }}
+        run: terraform fmt -check -recursive infra/terraform
+
       # Prepend any command with "nx record --" to record its logs to Nx Cloud
       # - run: npx nx record -- echo Hello World
-      - run: npx nx run-many -t lint test build typecheck
-      # Nx Cloud recommends fixes for failures to help you get CI green faster. Learn more: https://nx.dev/ci/features/self-healing-ci
-      - run: npx nx fix-ci
-        if: always()
+      - run: npx nx affected -t lint --base="$NX_BASE" --head="$NX_HEAD" --outputStyle=static
+      - run: npx nx affected -t build --base="$NX_BASE" --head="$NX_HEAD" --exclude=mobile --outputStyle=static

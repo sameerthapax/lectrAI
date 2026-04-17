@@ -1,6 +1,6 @@
 # shared-types
 
-This library was generated with [Nx](https://nx.dev).
+Shared TypeScript types used across the LectrAI monorepo.
 
 ## Building
 

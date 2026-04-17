@@ -1,0 +1,23 @@
+{
+  "name": "@lectrai/db",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@lectrai/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "postgres": "^3.4.7",
+    "tslib": "^2.3.0"
+  }
+}

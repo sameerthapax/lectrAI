@@ -1,14 +1,23 @@
-import express from 'express';
+import { env } from './config/env.js';
+import { createApp } from './app.js';
+import { getDatabaseHealth } from './services/db-health.service.js';
 
-const host = process.env.HOST ?? 'localhost';
-const port = process.env.PORT ? Number(process.env.PORT) : 3000;
+async function bootstrap() {
+  const app = createApp();
 
-const app = express();
+  try {
+    const database = await getDatabaseHealth();
+    console.log(
+      `[ db ] Database connection OK (source=${database.source}, supabaseUrl=${database.supabaseUrl ?? 'unset'}). schema check succeeded (key tables found: ${database.keyTablesFound}/${database.keyTablesExpected}).`
+    );
+  } catch (error) {
+    console.error('[ db ] Database connection failed.', error);
+    process.exit(1);
+  }
 
-app.get('/', (req, res) => {
-  res.send({ message: 'Hello API' });
-});
+  app.listen(env.port, env.host, () => {
+    console.log(`[ ready ] http://${env.host}:${env.port}`);
+  });
+}
 
-app.listen(port, host, () => {
-  console.log(`[ ready ] http://${host}:${port}`);
-});
+void bootstrap();

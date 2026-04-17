@@ -16,10 +16,10 @@
       "path": "./packages/shared-types"
     },
     {
-      "path": "./packages/shared-utils"
+      "path": "./packages/db"
     },
     {
-      "path": "./packages/vision-protocol"
+      "path": "./packages/shared-utils"
     }
   ]
 }

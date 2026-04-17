@@ -1,10 +1,14 @@
 /// <reference types="jest" />
 /// <reference types="node" />
 module.exports = {
-  displayName: '@park-u/mobile',
+  displayName: '@lectrai/mobile',
   preset: 'jest-expo',
   moduleFileExtensions: ['ts', 'js', 'html', 'tsx', 'jsx'],
-  setupFilesAfterEnv: ['<rootDir>/src/test-setup.ts'],
+  testMatch: ['**/?(*.)+(spec|test).[jt]s?(x)'],
+  testPathIgnorePatterns: ['<rootDir>/out-tsc/', '/node_modules/'],
+  watchman: false,
+  passWithNoTests: true,
+  setupFilesAfterEnv: ['<rootDir>/test-setup.ts'],
   moduleNameMapper: {
     '\\.svg$': '@nx/expo/plugins/jest/svg-mock',
   },

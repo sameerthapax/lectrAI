@@ -1,0 +1,198 @@
+name: Deploy Infra and API
+
+on:
+  push:
+    branches:
+      - production
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AR_REGION: us-central1
+  AR_REPOSITORY: lectrai
+  API_IMAGE_NAME: api
+  TF_WORKING_DIR: infra/terraform/environments/dev
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve Nx base/head
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_SHA="${{ github.event.before }}"
+          HEAD_SHA="${{ github.sha }}"
+
+          if [[ "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          echo "NX_BASE=$BASE_SHA" >> "$GITHUB_ENV"
+          echo "NX_HEAD=$HEAD_SHA" >> "$GITHUB_ENV"
+
+      - name: Compute affected projects
+        id: affected
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AFFECTED_JSON=$(npx nx show projects --affected --base="$NX_BASE" --head="$NX_HEAD" --json)
+          echo "Affected projects: $AFFECTED_JSON"
+
+          API_AFFECTED=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.includes("api") ? "true" : "false")' "$AFFECTED_JSON")
+          INFRA_AFFECTED=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.includes("infra") ? "true" : "false")' "$AFFECTED_JSON")
+
+          echo "api_affected=$API_AFFECTED" >> "$GITHUB_OUTPUT"
+          echo "infra_affected=$INFRA_AFFECTED" >> "$GITHUB_OUTPUT"
+
+      - name: Show skipped deployment reason
+        if: ${{ steps.affected.outputs.api_affected != 'true' && steps.affected.outputs.infra_affected != 'true' }}
+        run: echo "Neither api nor infra is affected. Skipping deploy tasks."
+
+      - name: Authenticate to Google Cloud
+        if: ${{ steps.affected.outputs.api_affected == 'true' || steps.affected.outputs.infra_affected == 'true' }}
+        id: gcp-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Setup gcloud
+        if: ${{ steps.affected.outputs.api_affected == 'true' || steps.affected.outputs.infra_affected == 'true' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Login to Artifact Registry
+        if: ${{ steps.affected.outputs.api_affected == 'true' }}
+        shell: bash
+        run: |
+          echo "${{ steps.gcp-auth.outputs.access_token }}" | docker login -u oauth2accesstoken --password-stdin "https://${{ env.AR_REGION }}-docker.pkg.dev"
+
+      - name: Setup Docker Buildx
+        if: ${{ steps.affected.outputs.api_affected == 'true' }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image for production deploys
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' && steps.affected.outputs.api_affected == 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:production
+
+      - name: Setup Terraform
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform fmt (check)
+        if: ${{ steps.affected.outputs.infra_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive
+
+      - name: Terraform validate
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      - name: Debug Terraform state
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform init -reconfigure -input=false
+          terraform workspace show
+          terraform state list || true
+
+      - name: Terraform plan
+        if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
+        id: tf_plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_google_cloud_project: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_region: us-central1
+          TF_VAR_environment: dev
+          TF_VAR_supabase_url: ${{ secrets.SUPABASE_URL }}
+          TF_VAR_supabase_anon_key: ${{ secrets.SUPABASE_ANON_KEY }}
+          TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_elevenlabs_api_key: ${{ secrets.ELEVENLABS_API_KEY }}
+          TF_VAR_openai_transcription_model: ${{ secrets.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe-diarize' }}
+          TF_VAR_openai_transcript_processing_model: ${{ secrets.OPENAI_TRANSCRIPT_PROCESSING_MODEL || 'gpt-4o-2024-08-06' }}
+          TF_VAR_cloud_run_service_name: lectrai-api-dev
+          TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+          TF_VAR_pubsub_topic_name: lectrai-events-dev
+          TF_VAR_pubsub_subscription_name: lectrai-events-worker-dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          terraform plan -input=false -detailed-exitcode -out=tfplan
+          PLAN_EXIT_CODE=$?
+          set -e
+
+          if [[ "$PLAN_EXIT_CODE" == "0" ]]; then
+            echo "has_diff=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$PLAN_EXIT_CODE" == "2" ]]; then
+            echo "has_diff=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Terraform plan failed with exit code $PLAN_EXIT_CODE"
+            exit "$PLAN_EXIT_CODE"
+          fi
+
+      - name: Terraform apply for production deploys
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' && steps.tf_plan.outputs.has_diff == 'true' && (steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true') }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_google_cloud_project: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_region: us-central1
+          TF_VAR_environment: dev
+          TF_VAR_supabase_url: ${{ secrets.SUPABASE_URL }}
+          TF_VAR_supabase_anon_key: ${{ secrets.SUPABASE_ANON_KEY }}
+          TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_elevenlabs_api_key: ${{ secrets.ELEVENLABS_API_KEY }}
+          TF_VAR_openai_transcription_model: ${{ secrets.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe-diarize' }}
+          TF_VAR_openai_transcript_processing_model: ${{ secrets.OPENAI_TRANSCRIPT_PROCESSING_MODEL || 'gpt-4o-2024-08-06' }}
+          TF_VAR_cloud_run_service_name: lectrai-api-dev
+          TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+          TF_VAR_pubsub_topic_name: lectrai-events-dev
+          TF_VAR_pubsub_subscription_name: lectrai-events-worker-dev
+        run: terraform apply -auto-approve -input=false tfplan
+
+      - name: Terraform apply skipped
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' && steps.tf_plan.outputs.has_diff == 'false' }}
+        run: echo "Terraform plan has no add/change/destroy actions. Skipping apply."
