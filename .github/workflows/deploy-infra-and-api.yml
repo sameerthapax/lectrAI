@@ -3,7 +3,7 @@ name: Deploy Infra and API
 on:
   push:
     branches:
-      - develop
+      - production
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ env:
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -93,8 +93,8 @@ jobs:
         if: ${{ steps.affected.outputs.api_affected == 'true' }}
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push API image for develop deploys
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.affected.outputs.api_affected == 'true' }}
+      - name: Build and push API image for production deploys
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' && steps.affected.outputs.api_affected == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -102,7 +102,7 @@ jobs:
           push: true
           tags: |
             ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:develop
+            ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:production
 
       - name: Setup Terraform
         if: ${{ steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true' }}
@@ -170,8 +170,8 @@ jobs:
             exit "$PLAN_EXIT_CODE"
           fi
 
-      - name: Terraform apply for develop deploys
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.tf_plan.outputs.has_diff == 'true' && (steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true') }}
+      - name: Terraform apply for production deploys
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' && steps.tf_plan.outputs.has_diff == 'true' && (steps.affected.outputs.infra_affected == 'true' || steps.affected.outputs.api_affected == 'true') }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
@@ -192,5 +192,5 @@ jobs:
         run: terraform apply -auto-approve -input=false tfplan
 
       - name: Terraform apply skipped
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && steps.tf_plan.outputs.has_diff == 'false' }}
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' && steps.tf_plan.outputs.has_diff == 'false' }}
         run: echo "Terraform plan has no add/change/destroy actions. Skipping apply."

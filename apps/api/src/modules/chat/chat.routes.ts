@@ -4,12 +4,14 @@ import {
   getChatSession,
   getChatSessions,
   postChatReply,
+  postChatTranscription,
 } from './chat.controller.js';
 
 const chatRouter = Router();
 
 chatRouter.get('/sessions', getChatSessions);
 chatRouter.get('/sessions/:sessionId', getChatSession);
+chatRouter.post('/transcribe', postChatTranscription);
 chatRouter.post('/reply', postChatReply);
 chatRouter.get('/messages/:messageId/audio', getAssistantMessageAudio);
 

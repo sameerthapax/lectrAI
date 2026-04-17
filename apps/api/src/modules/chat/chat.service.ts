@@ -6,14 +6,17 @@ import {
 } from '../lectures/transcript-embeddings.service.js';
 
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
+const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const DEFAULT_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL ?? 'gpt-4.1-mini';
+const DEFAULT_CHAT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL ?? 'gpt-4o-mini-transcribe';
 const DEFAULT_TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL ?? 'eleven_flash_v2_5';
 const DEFAULT_TTS_VOICE_ID = process.env.ELEVENLABS_TTS_VOICE_ID ?? 'JBFqnCBsd6RMkjVDRZzb';
 const FALLBACK_TTS_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb';
 const DEFAULT_TTS_OUTPUT_FORMAT = process.env.ELEVENLABS_TTS_OUTPUT_FORMAT ?? 'mp3_44100_128';
 const DEFAULT_RETRIEVAL_TOP_K = 6;
 const MAX_HISTORY_MESSAGES = 12;
+const OPENAI_AUDIO_FILE_LIMIT_BYTES = 25 * 1024 * 1024;
 
 type DbClient = ReturnType<typeof getDb>;
 
@@ -94,6 +97,12 @@ export type ChatReplyRequest = {
   message: string;
 };
 
+export type ChatTranscriptionRequest = {
+  audioBase64: string;
+  mimeType: string;
+  fileName: string;
+};
+
 export type RetrievedContext = {
   chunks: TranscriptChunkSearchResult[];
 };
@@ -124,6 +133,73 @@ export function parseChatReplyRequest(payload: unknown): ChatReplyRequest {
     courseId,
     lectureId,
     message,
+  };
+}
+
+export function parseChatTranscriptionRequest(payload: unknown): ChatTranscriptionRequest {
+  const record = readObject(payload);
+
+  return {
+    audioBase64: readRequiredBase64(record.audioBase64, 'audioBase64'),
+    mimeType: readRequiredString(record.mimeType, 'mimeType'),
+    fileName: readRequiredString(record.fileName, 'fileName'),
+  };
+}
+
+export async function transcribeChatAudioInput(input: ChatTranscriptionRequest) {
+  const audioBytes = readBase64AudioBuffer(input.audioBase64, 'audioBase64');
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new HttpError(500, 'Missing OpenAI API key. Set OPENAI_API_KEY for audio transcription.');
+  }
+
+  if (audioBytes.byteLength > OPENAI_AUDIO_FILE_LIMIT_BYTES) {
+    throw new HttpError(
+      413,
+      'Recording is too large to transcribe in one request.',
+      'OpenAI audio transcription uploads are limited to 25 MB.'
+    );
+  }
+
+  const formData = new FormData();
+  formData.set('file', new Blob([audioBytes], { type: input.mimeType }), input.fileName);
+  formData.set('model', DEFAULT_CHAT_TRANSCRIPTION_MODEL);
+  formData.set('response_format', 'json');
+
+  const response = await fetch(OPENAI_TRANSCRIPTIONS_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorDetails = await readProviderErrorDetails(response);
+    throw new HttpError(502, 'OpenAI transcription failed.', errorDetails);
+  }
+
+  const rawResponse = (await response.json()) as {
+    text?: unknown;
+    language?: unknown;
+    confidence?: unknown;
+    model?: unknown;
+  };
+  const fullText = typeof rawResponse.text === 'string' ? rawResponse.text.trim() : '';
+
+  if (!fullText) {
+    throw new HttpError(502, 'OpenAI transcription did not include any text.');
+  }
+
+  return {
+    fullText,
+    languageCode: typeof rawResponse.language === 'string' ? rawResponse.language : null,
+    modelName:
+      typeof rawResponse.model === 'string' && rawResponse.model.trim().length > 0
+        ? rawResponse.model
+        : DEFAULT_CHAT_TRANSCRIPTION_MODEL,
+    confidenceAvg: typeof rawResponse.confidence === 'number' ? rawResponse.confidence : null,
   };
 }
 
@@ -1024,6 +1100,22 @@ function readRequiredString(value: unknown, fieldName: string) {
   }
 
   return value.trim();
+}
+
+function readRequiredBase64(value: unknown, fieldName: string) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new HttpError(400, `${fieldName} is required.`);
+  }
+
+  return value.trim();
+}
+
+function readBase64AudioBuffer(value: string, fieldName: string) {
+  try {
+    return Buffer.from(value, 'base64');
+  } catch {
+    throw new HttpError(400, `${fieldName} must be valid base64 audio data.`);
+  }
 }
 
 function readOptionalUuid(value: unknown, fieldName: string) {

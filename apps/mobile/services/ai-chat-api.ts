@@ -59,6 +59,13 @@ export type RemoteLokiAudioPayload = {
   fileName: string;
 };
 
+export type RemoteLokiTranscription = {
+  text: string;
+  languageCode: string | null;
+  modelName: string;
+  confidenceAvg: number | null;
+};
+
 export type RemoteLokiReply = {
   session: RemoteLokiSession;
   userMessage: RemoteLokiMessage;
@@ -144,6 +151,24 @@ export async function sendLokiReply(
 ) {
   return authorizedJsonRequest<RemoteLokiReply>(
     '/chat/reply',
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+    { accessToken }
+  );
+}
+
+export async function transcribeLokiAudio(
+  accessToken: string,
+  input: {
+    audioBase64: string;
+    mimeType: string;
+    fileName: string;
+  }
+) {
+  return authorizedJsonRequest<RemoteLokiTranscription>(
+    '/chat/transcribe',
     {
       method: 'POST',
       body: JSON.stringify(input),

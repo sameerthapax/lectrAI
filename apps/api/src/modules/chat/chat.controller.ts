@@ -6,7 +6,9 @@ import {
   getChatSessionDetailForUser,
   listChatSessionsForUser,
   parseChatReplyRequest,
+  parseChatTranscriptionRequest,
   requestTutorSpeechStream,
+  transcribeChatAudioInput,
   type ChatMessageRecord,
 } from './chat.service.js';
 
@@ -72,6 +74,22 @@ export async function postChatReply(request: Request, response: Response, next: 
       userMessage: serializeMessage(result.userMessage),
       assistantMessage: serializeMessage(result.assistantMessage),
       audio: result.audio,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function postChatTranscription(request: Request, response: Response, next: NextFunction) {
+  try {
+    const input = parseChatTranscriptionRequest(request.body);
+    const transcription = await transcribeChatAudioInput(input);
+
+    response.status(200).json({
+      text: transcription.fullText,
+      languageCode: transcription.languageCode,
+      modelName: transcription.modelName,
+      confidenceAvg: transcription.confidenceAvg,
     });
   } catch (error) {
     next(error);
