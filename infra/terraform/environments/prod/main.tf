@@ -34,6 +34,7 @@ module "cloudrun" {
     SUPABASE_SERVICE_ROLE_KEY          = var.supabase_service_role_key
     DATABASE_URL                       = var.database_url
     OPENAI_API_KEY                     = var.openai_api_key
+    ELEVENLABS_API_KEY                 = var.elevenlabs_api_key
     OPENAI_TRANSCRIPTION_MODEL         = var.openai_transcription_model
     OPENAI_TRANSCRIPT_PROCESSING_MODEL = var.openai_transcript_processing_model
   }
