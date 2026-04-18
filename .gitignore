@@ -71,3 +71,6 @@ vitest.config.*.timestamp*
 
 # local secrets
 secrets/*.json
+
+#local database
+.data

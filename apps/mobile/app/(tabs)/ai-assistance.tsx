@@ -60,7 +60,6 @@ export default function AiAssistanceRoute() {
   const [voiceRecordingActive, setVoiceRecordingActive] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [assistantWaiting, setAssistantWaiting] = useState(false);
-  const [audioResponseUri, setAudioResponseUri] = useState<string | null>(null);
   const [assistantSpeechLevel, setAssistantSpeechLevel] = useState(0);
   const [audioMuted, setAudioMuted] = useState(false);
   const [composerText, setComposerText] = useState('');
@@ -80,7 +79,7 @@ export default function AiAssistanceRoute() {
     isMeteringEnabled: true,
   });
   const recorderState = useAudioRecorderState(recorder, 120);
-  const player = useAudioPlayer(audioResponseUri, { updateInterval: 100, keepAudioSessionActive: true });
+  const player = useAudioPlayer(null, { updateInterval: 100, keepAudioSessionActive: true });
   const playerStatus = useAudioPlayerStatus(player);
 
   useAudioSampleListener(player, (sample) => {
@@ -376,7 +375,9 @@ export default function AiAssistanceRoute() {
           throw new Error('Loki could not hear anything clearly enough to transcribe.');
         }
 
-        const optimisticUserMessage = createPendingMessage('user', transcriptText);
+        const optimisticUserMessage = createPendingMessage('user', transcriptText, {
+          source: 'voice',
+        });
 
         setMessages((current) => {
           if (activeSessionId) {
@@ -408,7 +409,6 @@ export default function AiAssistanceRoute() {
           });
 
           const nextAudioUri = await writeLokiAudioToFile(reply.audio, reply.assistantMessage.id);
-          setAudioResponseUri(nextAudioUri);
           player.replace(nextAudioUri);
           player.play();
         }
@@ -442,7 +442,9 @@ export default function AiAssistanceRoute() {
         throw new Error('Your session expired. Please sign in again.');
       }
 
-      const optimisticUserMessage = createPendingMessage('user', messageText);
+      const optimisticUserMessage = createPendingMessage('user', messageText, {
+        source: 'typed',
+      });
       setComposerText('');
       setMessages((current) => (activeSessionId ? [...current, optimisticUserMessage] : [optimisticUserMessage]));
 
@@ -468,7 +470,6 @@ export default function AiAssistanceRoute() {
         });
 
         const nextAudioUri = await writeLokiAudioToFile(reply.audio, reply.assistantMessage.id);
-        setAudioResponseUri(nextAudioUri);
         player.replace(nextAudioUri);
         player.play();
       }
@@ -495,7 +496,6 @@ export default function AiAssistanceRoute() {
       player.pause();
     }
 
-    setAudioResponseUri(null);
     setAssistantSpeechLevel(0);
     assistantSpeechLevelRef.current = 0;
     setActiveSessionId(null);
@@ -1047,12 +1047,16 @@ export default function AiAssistanceRoute() {
   );
 }
 
-function createPendingMessage(role: RemoteLokiMessage['role'], messageText: string): RemoteLokiMessage {
+function createPendingMessage(
+  role: RemoteLokiMessage['role'],
+  messageText: string,
+  options: { source?: 'typed' | 'voice' } = {}
+): RemoteLokiMessage {
   return {
     id: `pending-${role}-${Date.now()}`,
     role,
     messageText,
-    modelName: role === 'user' ? 'transcribing' : null,
+    modelName: role === 'user' && options.source === 'voice' ? 'transcribing' : null,
     promptTokens: null,
     completionTokens: null,
     totalTokens: null,

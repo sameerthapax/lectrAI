@@ -191,19 +191,6 @@ export default function LokiNativeVoiceVisualizer({
       </View>
 
       <View pointerEvents="none" style={styles.overlay}>
-        <View style={styles.badgeRow}>
-          <View style={styles.badge}>
-            <View style={styles.badgeDot} />
-            <View>
-              <View style={styles.badgeLinePrimary} />
-              <View style={styles.badgeLineSecondary} />
-            </View>
-          </View>
-          <View style={[styles.badge, styles.badgeCompact]}>
-            <View style={styles.badgeGlow} />
-          </View>
-        </View>
-
         <View style={styles.statusBadge}>
           <View
             style={[
@@ -284,7 +271,7 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     paddingHorizontal: 14,
     paddingVertical: 14,
   },
@@ -340,6 +327,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
   },
   statusBadge: {
+    display: 'flex',
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',

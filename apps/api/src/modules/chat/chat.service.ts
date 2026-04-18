@@ -1,4 +1,7 @@
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { getDb } from '@lectrai/db';
+import { Memory } from 'mem0ai/oss';
 import OpenAI from 'openai';
 import { env } from '../../config/env.js';
 import { HttpError } from '../../lib/http-error.js';
@@ -25,6 +28,10 @@ const MAX_RETRIEVAL_TOP_K = 25;
 const DEFAULT_SCOPE_ITEM_LIMIT = 5;
 const MAX_RETRIEVAL_PLANNER_STEPS = 4;
 const MAX_HISTORY_MESSAGES = 12;
+const MAX_MEM0_RESULTS = 5;
+const MEM0_SEARCH_TIMEOUT_MS = 1500;
+const MEM0_AGENT_ID = 'loki';
+const MEM0_COLLECTION_NAME = 'loki_memories';
 const OPENAI_AUDIO_FILE_LIMIT_BYTES = 25 * 1024 * 1024;
 const LIST_COURSES_TOOL_NAME = 'list_courses_catalog';
 const LIST_RECENT_LECTURES_TOOL_NAME = 'list_recent_course_lectures';
@@ -33,6 +40,7 @@ const TRANSCRIPT_SEARCH_TOOL_NAME = 'search_transcript_chunks';
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 let openAiClient: OpenAI | null = null;
+let mem0Memory: Memory | null | undefined;
 
 type DbClient = ReturnType<typeof getDb>;
 
@@ -180,6 +188,12 @@ export type RetrievedContext = {
   chunks: TranscriptChunkSearchResult[];
   scopeItems?: PlannerScopeItem[];
   decision?: RetrievalDecisionMetadata;
+};
+
+type LokiMemory = {
+  id: string;
+  text: string;
+  score: number | null;
 };
 
 export type GeneratedAssistantReply = {
@@ -339,6 +353,10 @@ export async function generateChatReplyForUser(
         input.message
       );
   const history = await listRecentChatHistory(session.id, MAX_HISTORY_MESSAGES);
+  const memories = await searchLokiMemories({
+    userId,
+    query: input.message,
+  });
 
   const userMessage = await createChatMessage({
     chatSessionId: session.id,
@@ -351,6 +369,7 @@ export async function generateChatReplyForUser(
     scope: sessionScope,
     history,
     retrieval,
+    memories,
     currentMessage: input.message,
   });
   const assistantMessage = await createAssistantMessageWithCitations({
@@ -360,12 +379,20 @@ export async function generateChatReplyForUser(
     modelName: modelResponse.modelName,
     usage: modelResponse.usage,
     retrieval,
+    memories,
   });
   const audio = input.muteAudioResponse ? null : await generateAssistantAudio(modelResponse.messageText);
 
   await touchChatSession(session.id, {
     title: deriveSessionTitle(session.title, input.message),
     scope: sessionScope,
+  });
+  void rememberLokiConversationTurn({
+    userId,
+    sessionId: session.id,
+    scope: sessionScope,
+    userMessage: input.message,
+    assistantMessage: modelResponse.messageText,
   });
 
   return {
@@ -503,6 +530,7 @@ async function requestTutorResponse(input: {
   scope: ChatScope;
   history: Array<{ role: ChatMessageRole; messageText: string }>;
   retrieval: RetrievedContext;
+  memories: LokiMemory[];
   currentMessage: string;
 }) {
   const rawResponse = (await getOpenAiClient().responses.create({
@@ -528,6 +556,7 @@ function buildOpenAiInput(input: {
   scope: ChatScope;
   history: Array<{ role: ChatMessageRole; messageText: string }>;
   retrieval: RetrievedContext;
+  memories: LokiMemory[];
   currentMessage: string;
 }) {
   const messageIntent = classifyMessageIntent(input.currentMessage);
@@ -541,6 +570,8 @@ function buildOpenAiInput(input: {
     'If the user asks for a summary or recap of recent or latest lectures, synthesize across the retrieved lecture set instead of focusing on only one lecture unless the user explicitly named one lecture.',
     'If the retrieved context spans multiple lecture dates or titles, make that synthesis explicit in the answer.',
     'If the user asks for quiz or practice questions, use the lecture material as background knowledge only.',
+    'When relevant, use the personal memory context to personalize continuity and study help, but never let it override lecture facts.',
+    'If personal memory conflicts with retrieved lecture context, trust the lecture context for subject matter and treat memory as preference context only.',
     'For quiz generation, do not ask speaker-identification questions, quote-matching questions, line-specific transcript questions, or questions about who said something in lecture.',
     'For quiz generation, produce concept-based questions that test understanding of the knowledge taught in the lectures rather than recall of transcript wording.',
   ].join(' ');
@@ -572,6 +603,14 @@ function buildOpenAiInput(input: {
           .map((item, index) => `Scope ${index + 1}: [${item.type}] ${item.title} - ${item.detail}`)
           .join('\n')
       : 'No extra course, lecture, or file scope metadata was collected for this turn.';
+  const personalMemoryContext =
+    input.memories.length > 0
+      ? input.memories
+          .map((memory, index) =>
+            `Memory ${index + 1}: ${memory.text}${memory.score == null ? '' : ` (score ${memory.score.toFixed(3)})`}`
+          )
+          .join('\n')
+      : 'No relevant personal memory was found for this turn.';
 
   return [
     {
@@ -587,6 +626,7 @@ function buildOpenAiInput(input: {
           text: [
             `Conversation scope: ${scopeLabel}.`,
             `Detected intent: ${messageIntent}.`,
+            `Personal memory context:\n${personalMemoryContext}`,
             `Retrieved scope metadata:\n${scopeContext}`,
             `Retrieved lecture context:\n${retrievedContext}`,
             `Current student message: ${input.currentMessage}`,
@@ -935,6 +975,7 @@ async function createAssistantMessageWithCitations(input: {
   modelName: string;
   usage: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null };
   retrieval: RetrievedContext;
+  memories: LokiMemory[];
 }) {
   const db = getDb();
 
@@ -960,7 +1001,7 @@ async function createAssistantMessageWithCitations(input: {
         ${input.usage.promptTokens},
         ${input.usage.completionTokens},
         ${input.usage.totalTokens},
-        ${JSON.stringify(buildRetrievalMetadata(input.retrieval))}::jsonb
+        ${JSON.stringify(buildRetrievalMetadata(input.retrieval, input.memories))}::jsonb
       )
       returning
         id::text as id,
@@ -1095,10 +1136,15 @@ async function touchChatSession(
   `;
 }
 
-function buildRetrievalMetadata(retrieval: RetrievedContext) {
+function buildRetrievalMetadata(retrieval: RetrievedContext, memories: LokiMemory[]) {
   return {
     decision: retrieval.decision ?? null,
     scopeItems: retrieval.scopeItems ?? [],
+    memories: memories.map((memory) => ({
+      id: memory.id,
+      text: memory.text,
+      score: memory.score,
+    })),
     chunkCount: retrieval.chunks.length,
     chunks: retrieval.chunks.map((entry) => ({
       lectureId: entry.transcript.lectureId,
@@ -1876,6 +1922,161 @@ function classifyMessageIntent(message: string) {
   }
 
   return 'general';
+}
+
+function getMem0Memory() {
+  if (mem0Memory !== undefined) {
+    return mem0Memory;
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+
+  if (!apiKey) {
+    mem0Memory = null;
+    return mem0Memory;
+  }
+
+  const vectorDbPath = resolveMem0StoragePath(env.mem0OssVectorDbPath);
+  const historyDbPath = resolveMem0StoragePath(env.mem0OssHistoryDbPath);
+
+  ensureDirectoryForFile(vectorDbPath);
+  ensureDirectoryForFile(historyDbPath);
+
+  mem0Memory = new Memory({
+    llm: {
+      provider: 'openai',
+      config: {
+        apiKey,
+        model: DEFAULT_CHAT_MODEL,
+      },
+    },
+    embedder: {
+      provider: 'openai',
+      config: {
+        apiKey,
+        model: env.openAiTranscriptEmbeddingModel,
+        embeddingDims: env.openAiTranscriptEmbeddingDimensions,
+      },
+    },
+    vectorStore: {
+      provider: 'memory',
+      config: {
+        collectionName: MEM0_COLLECTION_NAME,
+        dimension: env.openAiTranscriptEmbeddingDimensions,
+        dbPath: vectorDbPath,
+      },
+    },
+    historyDbPath,
+  });
+
+  return mem0Memory;
+}
+
+async function searchLokiMemories(input: { userId: string; query: string }): Promise<LokiMemory[]> {
+  const memory = getMem0Memory();
+
+  if (!memory) {
+    return [];
+  }
+
+  const query = input.query.trim();
+
+  if (!query) {
+    return [];
+  }
+
+  try {
+    const response = await withTimeout(
+      memory.search(query, {
+        filters: { user_id: input.userId },
+        topK: MAX_MEM0_RESULTS,
+      }),
+      MEM0_SEARCH_TIMEOUT_MS,
+      'Mem0 search timed out.'
+    );
+    const results = isRecord(response) && Array.isArray(response.results) ? response.results : [];
+
+    return results
+      .map((item): LokiMemory | null => {
+        if (!isRecord(item) || typeof item.memory !== 'string' || item.memory.trim().length === 0) {
+          return null;
+        }
+
+        return {
+          id: typeof item.id === 'string' ? item.id : item.memory,
+          text: item.memory.trim(),
+          score: typeof item.score === 'number' ? item.score : null,
+        };
+      })
+      .filter((item): item is LokiMemory => item !== null);
+  } catch (error) {
+    console.warn('[ chat ] Mem0 search failed.', error);
+    return [];
+  }
+}
+
+async function rememberLokiConversationTurn(input: {
+  userId: string;
+  sessionId: string;
+  scope: ChatScope;
+  userMessage: string;
+  assistantMessage: string;
+}) {
+  const memory = getMem0Memory();
+
+  if (!memory) {
+    return;
+  }
+
+  try {
+    await memory.add(
+      [
+        { role: 'user', content: input.userMessage },
+        { role: 'assistant', content: input.assistantMessage },
+      ],
+      {
+        userId: input.userId,
+        agentId: MEM0_AGENT_ID,
+        runId: input.sessionId,
+        metadata: {
+          courseId: input.scope.courseId,
+          lectureId: input.scope.lectureId,
+          sessionType: input.scope.sessionType,
+        },
+      }
+    );
+  } catch (error) {
+    console.warn('[ chat ] Mem0 add failed.', error);
+  }
+}
+
+function resolveMem0StoragePath(pathValue: string) {
+  return resolve(process.cwd(), pathValue);
+}
+
+function ensureDirectoryForFile(filePath: string) {
+  mkdirSync(dirname(filePath), { recursive: true });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function resolveTranscriptSearchTopK(requestedTopK: number | undefined, message: string) {
