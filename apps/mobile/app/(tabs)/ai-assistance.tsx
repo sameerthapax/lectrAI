@@ -30,7 +30,6 @@ import {
   listLokiSessions,
   sendLokiReply,
   type RemoteLokiMessage,
-  type RemoteLokiRetrievedChunk,
   type RemoteLokiSession,
   transcribeLokiAudio,
   writeLokiAudioToFile,
@@ -57,7 +56,6 @@ export default function AiAssistanceRoute() {
   const [messages, setMessages] = useState<RemoteLokiMessage[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [retrievedChunks, setRetrievedChunks] = useState<RemoteLokiRetrievedChunk[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [talkHoldActive, setTalkHoldActive] = useState(false);
   const [voiceRecordingActive, setVoiceRecordingActive] = useState(false);
@@ -202,12 +200,11 @@ export default function AiAssistanceRoute() {
   useEffect(() => {
     let cancelled = false;
 
-    const loadSession = async () => {
-      if (!activeSessionId || auth.status !== 'authenticated') {
-        setMessages([]);
-        setRetrievedChunks([]);
-        return;
-      }
+      const loadSession = async () => {
+        if (!activeSessionId || auth.status !== 'authenticated') {
+          setMessages([]);
+          return;
+        }
 
       try {
         const accessToken = await auth.getValidAccessToken();
@@ -239,7 +236,6 @@ export default function AiAssistanceRoute() {
 
   const handleSelectSession = (session: RemoteLokiSession) => {
     setActiveSessionId(session.id);
-    setRetrievedChunks([]);
     setHistoryVisible(false);
   };
 
@@ -305,7 +301,6 @@ export default function AiAssistanceRoute() {
       setVoiceBusy(true);
       setAssistantWaiting(true);
       setErrorMessage(null);
-      setRetrievedChunks([]);
 
       try {
         const accessToken = await auth.getValidAccessToken();
@@ -347,7 +342,6 @@ export default function AiAssistanceRoute() {
           const remaining = current.filter((session) => session.id !== reply.session.id);
           return [reply.session, ...remaining];
         });
-        setRetrievedChunks(reply.retrieval.chunks);
         setMessages((current) => {
           const withoutPendingUser = current.filter((message) => message.id !== optimisticUserMessage.id);
           return [...withoutPendingUser, reply.userMessage, reply.assistantMessage];
@@ -746,9 +740,9 @@ export default function AiAssistanceRoute() {
                           </Text>
                         ) : null}
 
-                        {message.citations.length > 0 ? (
+                        {getUniqueLectureCitations(message.citations).length > 0 ? (
                           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                            {message.citations.map((citation) => (
+                            {getUniqueLectureCitations(message.citations).map((citation) => (
                               <View
                                 key={citation.id}
                                 style={{
@@ -771,33 +765,6 @@ export default function AiAssistanceRoute() {
                     );
                   })
                 )}
-
-                {retrievedChunks.length > 0 ? (
-                  <View style={{ gap: 8 }}>
-                    <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, fontWeight: '700' }}>
-                      Injected knowledge
-                    </Text>
-                    {retrievedChunks.slice(0, 3).map((chunk) => (
-                      <View
-                        key={chunk.chunkId}
-                        style={{
-                          borderRadius: 16,
-                          padding: 10,
-                          backgroundColor: theme.colors.overlay,
-                          borderWidth: 1,
-                          borderColor: theme.colors.border,
-                        }}
-                      >
-                        <Text selectable style={{ color: theme.colors.text, fontSize: 12.5, fontWeight: '700' }}>
-                          {chunk.lectureTitle}
-                        </Text>
-                        <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 4 }}>
-                          {chunk.content}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
 
                 {errorMessage ? (
                   <Text selectable style={{ color: '#dc2626', fontSize: 12.5, lineHeight: 18 }}>
@@ -925,6 +892,19 @@ function createPendingMessage(role: RemoteLokiMessage['role'], messageText: stri
     createdAt: new Date().toISOString(),
     citations: [],
   };
+}
+
+function getUniqueLectureCitations(citations: RemoteLokiMessage['citations']) {
+  const seenLectureIds = new Set<string>();
+
+  return citations.filter((citation) => {
+    if (seenLectureIds.has(citation.lectureId)) {
+      return false;
+    }
+
+    seenLectureIds.add(citation.lectureId);
+    return true;
+  });
 }
 
 function inferAudioFilename(recordingUri: string) {

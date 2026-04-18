@@ -1,22 +1,34 @@
 import { getDb } from '@lectrai/db';
+import OpenAI from 'openai';
+import { env } from '../../config/env.js';
 import { HttpError } from '../../lib/http-error.js';
+import { listCourseFilesForUser, listCoursesForUser, type CourseFileRecord, type CourseRecord } from '../courses/courses.service.js';
+import { listLectureRecordingsForUser, type LectureRecordingListItem } from '../lectures/lectures.service.js';
 import {
   searchTranscriptChunks,
   type TranscriptChunkSearchResult,
 } from '../lectures/transcript-embeddings.service.js';
 
-const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
-const DEFAULT_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL ?? 'gpt-4.1-mini';
+const DEFAULT_CHAT_MODEL = env.openAiChatModel ?? 'gpt-4.1-mini';
 const DEFAULT_CHAT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL ?? 'gpt-4o-mini-transcribe';
 const DEFAULT_TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL ?? 'eleven_flash_v2_5';
 const DEFAULT_TTS_VOICE_ID = process.env.ELEVENLABS_TTS_VOICE_ID ?? 'JBFqnCBsd6RMkjVDRZzb';
 const FALLBACK_TTS_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb';
 const DEFAULT_TTS_OUTPUT_FORMAT = process.env.ELEVENLABS_TTS_OUTPUT_FORMAT ?? 'mp3_44100_128';
-const DEFAULT_RETRIEVAL_TOP_K = 6;
+const DEFAULT_RETRIEVAL_TOP_K = 5;
+const DEFAULT_SCOPE_ITEM_LIMIT = 5;
+const MAX_RETRIEVAL_PLANNER_STEPS = 4;
 const MAX_HISTORY_MESSAGES = 12;
 const OPENAI_AUDIO_FILE_LIMIT_BYTES = 25 * 1024 * 1024;
+const LIST_COURSES_TOOL_NAME = 'list_courses_catalog';
+const LIST_RECENT_LECTURES_TOOL_NAME = 'list_recent_course_lectures';
+const LIST_RECENT_FILES_TOOL_NAME = 'list_recent_course_files';
+const TRANSCRIPT_SEARCH_TOOL_NAME = 'search_transcript_chunks';
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+let openAiClient: OpenAI | null = null;
 
 type DbClient = ReturnType<typeof getDb>;
 
@@ -41,9 +53,65 @@ type OpenAiResponsesUsage = {
 };
 
 type OpenAiResponsesResponse = {
+  id?: unknown;
   output?: unknown;
   usage?: unknown;
   model?: unknown;
+};
+
+type RetrievalDecisionMetadata = {
+  requiresAdditionalScope: boolean;
+  functionName: typeof TRANSCRIPT_SEARCH_TOOL_NAME | null;
+  functionArguments: TranscriptSearchToolArgs | null;
+  selectedScope: ChatScope;
+};
+
+type TranscriptSearchToolArgs = {
+  query: string;
+  scopeType: 'user' | 'course' | 'lecture';
+  topK?: number;
+  courseId?: string;
+  lectureId?: string;
+  recordedOnOrAfter?: string;
+  recordedOnOrBefore?: string;
+};
+
+type RecentCourseLecturesToolArgs = {
+  courseId: string;
+  limit?: number;
+};
+
+type RecentCourseFilesToolArgs = {
+  courseId: string;
+  limit?: number;
+};
+
+type PlannerScopeItem =
+  | {
+      type: 'course';
+      id: string;
+      title: string;
+      detail: string;
+    }
+  | {
+      type: 'lecture';
+      id: string;
+      courseId: string;
+      title: string;
+      detail: string;
+    }
+  | {
+      type: 'file';
+      id: string;
+      courseId: string;
+      title: string;
+      detail: string;
+    };
+
+type PlannerFunctionCall = {
+  name: string;
+  arguments: string;
+  callId: string;
 };
 
 export type ChatScope = {
@@ -105,6 +173,8 @@ export type ChatTranscriptionRequest = {
 
 export type RetrievedContext = {
   chunks: TranscriptChunkSearchResult[];
+  scopeItems?: PlannerScopeItem[];
+  decision?: RetrievalDecisionMetadata;
 };
 
 export type GeneratedAssistantReply = {
@@ -165,6 +235,7 @@ export async function transcribeChatAudioInput(input: ChatTranscriptionRequest) 
   const formData = new FormData();
   formData.set('file', new Blob([audioBytes], { type: input.mimeType }), input.fileName);
   formData.set('model', DEFAULT_CHAT_TRANSCRIPTION_MODEL);
+  formData.set('language', 'en');
   formData.set('response_format', 'json');
 
   const response = await fetch(OPENAI_TRANSCRIPTIONS_URL, {
@@ -248,11 +319,18 @@ export async function generateChatReplyForUser(
     lectureId: input.lectureId,
     sessionId: input.sessionId,
   });
-  const retrievalDecision = await decideRetrievalForUser(userId, resolvedScope, input.message);
-  const sessionScope = input.sessionId ? resolvedScope : retrievalDecision.scope;
+  const sessionScopeHint = input.sessionId
+    ? await getRecentSessionScopeHintForUser(userId, input.sessionId)
+    : null;
+  const retrievalDecision = await decideRetrievalForUser(userId, resolvedScope, input.message, sessionScopeHint);
+  const sessionScope = retrievalDecision.scope;
   const session = input.sessionId
     ? await getChatSessionForUser(userId, input.sessionId)
-    : await createChatSessionForUser(userId, sessionScope, input.message);
+    : await createChatSessionForUser(
+        userId,
+        { courseId: null, lectureId: null, sessionType: 'exam_review' },
+        input.message
+      );
   const history = await listRecentChatHistory(session.id, MAX_HISTORY_MESSAGES);
 
   const userMessage = await createChatMessage({
@@ -278,7 +356,10 @@ export async function generateChatReplyForUser(
   });
   const audio = await generateAssistantAudio(modelResponse.messageText);
 
-  await touchChatSession(session.id, deriveSessionTitle(session.title, input.message));
+  await touchChatSession(session.id, {
+    title: deriveSessionTitle(session.title, input.message),
+    scope: sessionScope,
+  });
 
   return {
     session: {
@@ -417,36 +498,10 @@ async function requestTutorResponse(input: {
   retrieval: RetrievedContext;
   currentMessage: string;
 }) {
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    throw new HttpError(500, 'Missing OpenAI API key. Set OPENAI_API_KEY for Loki.');
-  }
-
-  const response = await fetch(OPENAI_RESPONSES_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: DEFAULT_CHAT_MODEL,
-      input: buildOpenAiInput(input),
-    }),
-  });
-
-  if (!response.ok) {
-    const errorDetails = await readProviderErrorDetails(response);
-    console.error('[ chat ] OpenAI tutor response error.', {
-      status: response.status,
-      statusText: response.statusText,
-      model: DEFAULT_CHAT_MODEL,
-      errorDetails,
-    });
-    throw new HttpError(502, 'OpenAI tutor response failed.', errorDetails);
-  }
-
-  const rawResponse = (await response.json()) as OpenAiResponsesResponse;
+  const rawResponse = (await getOpenAiClient().responses.create({
+    model: DEFAULT_CHAT_MODEL,
+    input: buildOpenAiInput(input) as any,
+  })) as unknown as OpenAiResponsesResponse;
   const messageText = extractOutputText(rawResponse)?.trim();
 
   if (!messageText) {
@@ -471,6 +526,7 @@ function buildOpenAiInput(input: {
   const systemPrompt = [
     'You are Loki, a conversational AI tutor for LectrAI.',
     'Answer like a helpful tutor speaking to a student in a mobile voice conversation.',
+    'Always answer in English only.',
     'Prefer the retrieved lecture context when it is relevant and do not invent facts that are not supported by the provided material.',
     'If the lecture context is thin or missing, say that clearly and then give the best high-level guidance you can.',
     'Keep answers concise, natural to speak aloud, and avoid markdown tables or bullet-heavy formatting.',
@@ -497,6 +553,12 @@ function buildOpenAiInput(input: {
           })
           .join('\n\n')
       : 'No retrieved lecture excerpts were found for this turn.';
+  const scopeContext =
+    input.retrieval.scopeItems && input.retrieval.scopeItems.length > 0
+      ? input.retrieval.scopeItems
+          .map((item, index) => `Scope ${index + 1}: [${item.type}] ${item.title} - ${item.detail}`)
+          .join('\n')
+      : 'No extra course, lecture, or file scope metadata was collected for this turn.';
 
   return [
     {
@@ -511,6 +573,7 @@ function buildOpenAiInput(input: {
           type: 'input_text',
           text: [
             `Conversation scope: ${scopeLabel}.`,
+            `Retrieved scope metadata:\n${scopeContext}`,
             `Retrieved lecture context:\n${retrievedContext}`,
             `Current student message: ${input.currentMessage}`,
           ].join('\n\n'),
@@ -534,56 +597,13 @@ function buildOpenAiHistoryMessage(message: { role: ChatMessageRole; messageText
   };
 }
 
-async function retrieveContextForScope(scope: ChatScope, message: string): Promise<RetrievedContext> {
-  if (!scope.courseId && !scope.lectureId) {
-    return { chunks: [] };
-  }
-
-  const chunks = await searchTranscriptChunks({
-    query: message,
-    topK: DEFAULT_RETRIEVAL_TOP_K,
-    courseId: scope.courseId ?? undefined,
-    lectureId: scope.lectureId ?? undefined,
-  });
-
-  return { chunks };
-}
-
 async function decideRetrievalForUser(
   userId: string,
   scope: ChatScope,
-  message: string
+  message: string,
+  sessionScopeHint: ChatScope | null
 ): Promise<{ scope: ChatScope; retrieval: RetrievedContext }> {
-  if (!shouldUseSimilaritySearch(message)) {
-    return {
-      scope,
-      retrieval: { chunks: [] },
-    };
-  }
-
-  if (scope.courseId || scope.lectureId) {
-    return {
-      scope,
-      retrieval: await retrieveContextForScope(scope, message),
-    };
-  }
-
-  const retrieval = await retrieveContextForUser(userId, message);
-
-  return {
-    scope: deriveScopeFromRetrieval(retrieval, scope),
-    retrieval,
-  };
-}
-
-async function retrieveContextForUser(userId: string, message: string): Promise<RetrievedContext> {
-  const chunks = await searchTranscriptChunks({
-    query: message,
-    topK: DEFAULT_RETRIEVAL_TOP_K,
-    userId,
-  });
-
-  return { chunks };
+  return runDynamicRetrievalPlannerForUser(userId, message, sessionScopeHint);
 }
 
 function deriveScopeFromRetrieval(retrieval: RetrievedContext, fallbackScope: ChatScope): ChatScope {
@@ -612,42 +632,18 @@ function deriveScopeFromRetrieval(retrieval: RetrievedContext, fallbackScope: Ch
   };
 }
 
-function shouldUseSimilaritySearch(message: string) {
-  const normalized = message.trim().toLowerCase();
-
-  if (!normalized) {
-    return false;
-  }
-
-  if (
-    /^(hi|hey|hello|yo|sup|thanks|thank you|ok|okay|cool|nice|help|who are you|what can you do)[!.?]*$/i.test(
-      normalized
-    )
-  ) {
-    return false;
-  }
-
-  if (normalized.split(/\s+/).length <= 2) {
-    return false;
-  }
-
-  return /\b(lecture|course|class|professor|teacher|quiz|exam|midterm|final|homework|assignment|notes|topic|chapter|concept|today|taught|teaching|study|review)\b/.test(
-    normalized
-  );
-}
-
 async function resolveChatScopeForUser(inputUserId: string, input: {
   courseId: string | null;
   lectureId: string | null;
   sessionId: string | null;
 }): Promise<ChatScope> {
   if (input.sessionId) {
-    const session = await getChatSessionForUser(inputUserId, input.sessionId);
+    await getChatSessionForUser(inputUserId, input.sessionId);
 
     return {
-      courseId: session.courseId,
-      lectureId: session.lectureId,
-      sessionType: session.sessionType,
+      courseId: null,
+      lectureId: null,
+      sessionType: 'exam_review',
     };
   }
 
@@ -787,6 +783,69 @@ async function listRecentChatHistory(sessionId: string, limit: number) {
       role: row.role,
       messageText: row.message_text,
     }));
+}
+
+async function getRecentSessionScopeHintForUser(userId: string, sessionId: string): Promise<ChatScope | null> {
+  const db = getDb();
+  const rows = await db<{ retrieval_metadata: unknown }[]>`
+    select cm.retrieval_metadata
+    from public.chat_messages cm
+    inner join public.chat_sessions cs
+      on cs.id = cm.chat_session_id
+    where cm.chat_session_id = ${sessionId}::uuid
+      and cs.user_id = ${userId}::uuid
+      and cm.role = 'assistant'
+      and cm.retrieval_metadata is not null
+    order by cm.created_at desc, cm.id desc
+    limit 1
+  `;
+
+  const metadata = rows[0]?.retrieval_metadata;
+
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+
+  const metadataRecord = metadata as Record<string, unknown>;
+  const decision =
+    metadataRecord.decision && typeof metadataRecord.decision === 'object' && !Array.isArray(metadataRecord.decision)
+      ? (metadataRecord.decision as Record<string, unknown>)
+      : null;
+  const selectedScope =
+    decision?.selectedScope && typeof decision.selectedScope === 'object' && !Array.isArray(decision.selectedScope)
+      ? (decision.selectedScope as Record<string, unknown>)
+      : null;
+
+  if (!selectedScope) {
+    return null;
+  }
+
+  const courseId = typeof selectedScope.courseId === 'string' && UUID_REGEX.test(selectedScope.courseId)
+    ? selectedScope.courseId
+    : null;
+  const lectureId = typeof selectedScope.lectureId === 'string' && UUID_REGEX.test(selectedScope.lectureId)
+    ? selectedScope.lectureId
+    : null;
+  const sessionType =
+    selectedScope.sessionType === 'lecture_chat' ||
+    selectedScope.sessionType === 'course_chat' ||
+    selectedScope.sessionType === 'exam_review'
+      ? selectedScope.sessionType
+      : lectureId
+        ? 'lecture_chat'
+        : courseId
+          ? 'course_chat'
+          : 'exam_review';
+
+  if (!courseId && !lectureId) {
+    return null;
+  }
+
+  return {
+    courseId,
+    lectureId,
+    sessionType,
+  };
 }
 
 async function createChatMessage(input: {
@@ -988,12 +1047,21 @@ async function listChatMessagesForSession(sessionId: string): Promise<ChatMessag
   }));
 }
 
-async function touchChatSession(sessionId: string, title: string | null) {
+async function touchChatSession(
+  sessionId: string,
+  input: {
+    title: string | null;
+    scope: ChatScope;
+  }
+) {
   const db = getDb();
   await db`
     update public.chat_sessions
     set
-      title = ${nullable(title)},
+      course_id = null,
+      lecture_id = null,
+      title = ${nullable(input.title)},
+      session_type = 'exam_review',
       updated_at = timezone('utc', now())
     where id = ${sessionId}::uuid
   `;
@@ -1001,6 +1069,8 @@ async function touchChatSession(sessionId: string, title: string | null) {
 
 function buildRetrievalMetadata(retrieval: RetrievedContext) {
   return {
+    decision: retrieval.decision ?? null,
+    scopeItems: retrieval.scopeItems ?? [],
     chunkCount: retrieval.chunks.length,
     chunks: retrieval.chunks.map((entry) => ({
       lectureId: entry.transcript.lectureId,
@@ -1029,6 +1099,335 @@ function deriveSessionTitle(existingTitle: string | null, message: string) {
   }
 
   return `${normalized.slice(0, 57)}...`;
+}
+
+async function runDynamicRetrievalPlannerForUser(
+  userId: string,
+  message: string,
+  sessionScopeHint: ChatScope | null
+): Promise<{ scope: ChatScope; retrieval: RetrievedContext }> {
+  const courses = await listCoursesForUser(userId);
+  const plannerIntro = buildPlannerIntro(message, courses);
+  let response = (await getOpenAiClient().responses.create({
+    model: DEFAULT_CHAT_MODEL,
+    input: plannerIntro as any,
+    tools: buildRetrievalPlannerTools() as any,
+    tool_choice: 'auto',
+  })) as unknown as OpenAiResponsesResponse;
+  let collectedScopeItems: PlannerScopeItem[] = [];
+  let latestChunks: TranscriptChunkSearchResult[] = [];
+  let lastToolName: string | null = null;
+  let lastToolArgs: Record<string, unknown> | null = null;
+
+  for (let step = 0; step < MAX_RETRIEVAL_PLANNER_STEPS; step += 1) {
+    const toolCalls = extractFunctionCalls(response);
+
+    if (toolCalls.length === 0) {
+      const selectedScope = deriveDynamicScopeFromResults(latestChunks, collectedScopeItems);
+
+      return {
+        scope: selectedScope,
+        retrieval: {
+          chunks: latestChunks,
+          scopeItems: collectedScopeItems,
+          decision: {
+            requiresAdditionalScope: latestChunks.length > 0 || collectedScopeItems.length > 0,
+            functionName: lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME ? TRANSCRIPT_SEARCH_TOOL_NAME : null,
+            functionArguments: lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME
+              ? readTranscriptSearchToolArgs(JSON.stringify(lastToolArgs ?? {}))
+              : null,
+            selectedScope,
+          },
+        },
+      };
+    }
+
+    const toolOutputs: Array<Record<string, unknown>> = [];
+
+    for (const toolCall of toolCalls) {
+      const result = await executePlannerToolCall(userId, toolCall, message, sessionScopeHint);
+      lastToolName = toolCall.name;
+      lastToolArgs = result.serializedArguments;
+
+      if (result.retrievedChunks.length > 0) {
+        latestChunks = result.retrievedChunks;
+      }
+
+      if (result.scopeItems.length > 0) {
+        collectedScopeItems = result.scopeItems;
+      }
+
+      toolOutputs.push({
+        type: 'function_call_output',
+        call_id: toolCall.callId,
+        output: JSON.stringify(result.output),
+      });
+    }
+
+    if (typeof response.id !== 'string' || response.id.length === 0) {
+      throw new HttpError(502, 'OpenAI retrieval planner response did not include a response id.');
+    }
+
+    response = (await getOpenAiClient().responses.create({
+      model: DEFAULT_CHAT_MODEL,
+      previous_response_id: response.id,
+      input: toolOutputs as any,
+      tools: buildRetrievalPlannerTools() as any,
+      tool_choice: 'auto',
+    })) as unknown as OpenAiResponsesResponse;
+  }
+
+  const selectedScope = deriveDynamicScopeFromResults(latestChunks, collectedScopeItems);
+
+  return {
+    scope: selectedScope,
+    retrieval: {
+      chunks: latestChunks,
+      scopeItems: collectedScopeItems,
+      decision: {
+        requiresAdditionalScope: latestChunks.length > 0 || collectedScopeItems.length > 0,
+        functionName: lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME ? TRANSCRIPT_SEARCH_TOOL_NAME : null,
+        functionArguments:
+          lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME ? readTranscriptSearchToolArgs(JSON.stringify(lastToolArgs ?? {})) : null,
+        selectedScope,
+      },
+    },
+  };
+}
+
+function buildPlannerIntro(message: string, courses: CourseRecord[]) {
+  const courseCatalog =
+    courses.length > 0
+      ? courses
+          .map((course, index) =>
+            [
+              `Course ${index + 1}:`,
+              `id=${course.id}`,
+              `name=${course.courseName}`,
+              course.courseCode ? `code=${course.courseCode}` : null,
+              course.instructorName ? `instructor=${course.instructorName}` : null,
+              course.description ? `description=${course.description}` : null,
+              course.semester ? `semester=${course.semester}` : null,
+            ]
+              .filter(Boolean)
+              .join(' | ')
+          )
+          .join('\n')
+      : 'No courses available.';
+
+  return [
+    {
+      role: 'system',
+      content: [
+        {
+          type: 'input_text',
+          text: [
+            'You are the dynamic retrieval planner for LectrAI.',
+            'Every user message must be treated independently. Do not assume the chat session is tied to a fixed course or lecture.',
+            'Use the available tools to identify the best course, lecture set, or file set for this specific message.',
+            'You may call tools in sequence, for example: list courses, then list recent lectures or files, then search transcript chunks.',
+            'Only call transcript search when the answer should rely on lecture transcript content.',
+            'When transcript search is useful, choose topK dynamically.',
+            'If the user asks about recent materials or uploaded materials, you may use lecture or file listing tools even before transcript search.',
+          ].join(' '),
+        },
+      ],
+    },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'input_text',
+          text: [`Student message: ${message}`, `Available courses:\n${courseCatalog}`].join('\n\n'),
+        },
+      ],
+    },
+  ];
+}
+
+function buildRetrievalPlannerTools() {
+  return [
+    {
+      type: 'function',
+      name: LIST_COURSES_TOOL_NAME,
+      description: 'Return the available courses for the current user with course metadata.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      type: 'function',
+      name: LIST_RECENT_LECTURES_TOOL_NAME,
+      description: 'Return recent lectures for a course. Use this to discover lecture dates and titles before transcript retrieval.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          courseId: { type: 'string' },
+          limit: { type: ['integer', 'null'], minimum: 1, maximum: 10 },
+        },
+        required: ['courseId', 'limit'],
+      },
+    },
+    {
+      type: 'function',
+      name: LIST_RECENT_FILES_TOOL_NAME,
+      description: 'Return recent uploaded files for a course. Use this when the user likely refers to notes, slides, or uploaded materials.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          courseId: { type: 'string' },
+          limit: { type: ['integer', 'null'], minimum: 1, maximum: 10 },
+        },
+        required: ['courseId', 'limit'],
+      },
+    },
+    {
+      type: 'function',
+      name: TRANSCRIPT_SEARCH_TOOL_NAME,
+      description:
+        'Search transcript chunks across the current user, one course, or one lecture. Supports optional lecture recorded date filtering.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          query: { type: 'string' },
+          scopeType: { type: 'string', enum: ['user', 'course', 'lecture'] },
+          topK: { type: ['integer', 'null'], minimum: 1, maximum: 10 },
+          courseId: { type: ['string', 'null'] },
+          lectureId: { type: ['string', 'null'] },
+          recordedOnOrAfter: { type: ['string', 'null'] },
+          recordedOnOrBefore: { type: ['string', 'null'] },
+        },
+        required: ['query', 'scopeType', 'topK', 'courseId', 'lectureId', 'recordedOnOrAfter', 'recordedOnOrBefore'],
+      },
+    },
+  ];
+}
+
+async function executePlannerToolCall(
+  userId: string,
+  toolCall: PlannerFunctionCall,
+  fallbackQuery: string,
+  sessionScopeHint: ChatScope | null
+) {
+  if (toolCall.name === LIST_COURSES_TOOL_NAME) {
+    const courses = await listCoursesForUser(userId);
+    return {
+      output: { courses: courses.map(mapCourseForPlanner) },
+      scopeItems: courses.map(mapCourseToScopeItem),
+      retrievedChunks: [] as TranscriptChunkSearchResult[],
+      serializedArguments: {},
+    };
+  }
+
+  if (toolCall.name === LIST_RECENT_LECTURES_TOOL_NAME) {
+    const args = readRecentCourseLecturesToolArgs(toolCall.arguments);
+    const lectures = await listLectureRecordingsForUser(userId, args.courseId);
+    const limited = lectures.slice(0, args.limit ?? DEFAULT_SCOPE_ITEM_LIMIT);
+    return {
+      output: { lectures: limited.map(mapLectureForPlanner) },
+      scopeItems: limited.map(mapLectureToScopeItem),
+      retrievedChunks: [] as TranscriptChunkSearchResult[],
+      serializedArguments: args as Record<string, unknown>,
+    };
+  }
+
+  if (toolCall.name === LIST_RECENT_FILES_TOOL_NAME) {
+    const args = readRecentCourseFilesToolArgs(toolCall.arguments);
+    const files = await listCourseFilesForUser(userId, args.courseId);
+    const limited = files.slice(0, args.limit ?? DEFAULT_SCOPE_ITEM_LIMIT);
+    return {
+      output: { files: limited.map(mapCourseFileForPlanner) },
+      scopeItems: limited.map(mapCourseFileToScopeItem),
+      retrievedChunks: [] as TranscriptChunkSearchResult[],
+      serializedArguments: args as Record<string, unknown>,
+    };
+  }
+
+  if (toolCall.name === TRANSCRIPT_SEARCH_TOOL_NAME) {
+    const args = readTranscriptSearchToolArgs(toolCall.arguments, fallbackQuery, sessionScopeHint);
+    const retrieval = await executeTranscriptSearchTool(userId, args);
+    return {
+      output: {
+        chunks: retrieval.chunks.map((entry) => ({
+          lectureId: entry.transcript.lectureId,
+          lectureTitle: entry.transcript.lectureTitle,
+          courseId: entry.transcript.courseId,
+          courseName: entry.transcript.courseName,
+          recordedAt: entry.transcript.recordedAt,
+          chunkIndex: entry.chunk.chunkIndex,
+          speaker: entry.chunk.speaker,
+          similarity: entry.chunk.similarity,
+          content: entry.chunk.content,
+        })),
+      },
+      scopeItems: [] as PlannerScopeItem[],
+      retrievedChunks: retrieval.chunks,
+      serializedArguments: args as Record<string, unknown>,
+    };
+  }
+
+  throw new HttpError(502, `OpenAI retrieval planner requested unsupported function "${toolCall.name}".`);
+}
+
+async function executeTranscriptSearchTool(userId: string, toolArgs: TranscriptSearchToolArgs): Promise<RetrievedContext> {
+  const topK =
+    toolArgs.topK && Number.isInteger(toolArgs.topK)
+      ? Math.min(Math.max(toolArgs.topK, 1), 10)
+      : DEFAULT_RETRIEVAL_TOP_K;
+
+  const chunks = await searchTranscriptChunks({
+    query: toolArgs.query,
+    topK,
+    userId,
+    courseId: toolArgs.scopeType === 'course' ? toolArgs.courseId : undefined,
+    lectureId: toolArgs.scopeType === 'lecture' ? toolArgs.lectureId : undefined,
+    recordedOnOrAfter: toolArgs.recordedOnOrAfter,
+    recordedOnOrBefore: toolArgs.recordedOnOrBefore,
+  });
+
+  return { chunks };
+}
+
+function deriveDynamicScopeFromResults(chunks: TranscriptChunkSearchResult[], scopeItems: PlannerScopeItem[]): ChatScope {
+  if (chunks.length > 0) {
+    return deriveScopeFromRetrieval({ chunks }, { courseId: null, lectureId: null, sessionType: 'exam_review' });
+  }
+
+  const lectureScopeItem = scopeItems.find((item) => item.type === 'lecture');
+
+  if (lectureScopeItem && 'courseId' in lectureScopeItem) {
+    return {
+      courseId: lectureScopeItem.courseId,
+      lectureId: lectureScopeItem.id,
+      sessionType: 'lecture_chat',
+    };
+  }
+
+  const courseScopeItem = scopeItems.find((item) => item.type === 'course');
+
+  if (courseScopeItem) {
+    return {
+      courseId: courseScopeItem.id,
+      lectureId: null,
+      sessionType: 'course_chat',
+    };
+  }
+
+  return {
+    courseId: null,
+    lectureId: null,
+    sessionType: 'exam_review',
+  };
 }
 
 function readUsage(usage: unknown) {
@@ -1061,6 +1460,209 @@ function extractOutputText(response: OpenAiResponsesResponse) {
   }
 
   return fragments.join('').trim() || null;
+}
+
+function extractFunctionCalls(response: OpenAiResponsesResponse) {
+  if (!Array.isArray(response.output)) {
+    return [];
+  }
+
+  return (response.output as Array<Record<string, unknown>>)
+    .filter((item) => item?.type === 'function_call')
+    .map((item) => ({
+      name: typeof item.name === 'string' ? item.name : '',
+      arguments: typeof item.arguments === 'string' ? item.arguments : '{}',
+      callId: typeof item.call_id === 'string' ? item.call_id : '',
+    }))
+    .filter((item) => item.name.length > 0);
+}
+
+function readTranscriptSearchToolArgs(rawArguments: string, fallbackQuery?: string, fallbackScope?: ChatScope | null): TranscriptSearchToolArgs {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(rawArguments);
+  } catch {
+    throw new HttpError(502, 'OpenAI retrieval planner returned invalid tool arguments.', rawArguments);
+  }
+
+  const record = readObject(parsed);
+  const query = readPlannerQuery(record.query, fallbackQuery);
+  const scopeType = readTranscriptSearchScope(record.scopeType);
+  const topK = readOptionalPositiveInteger(record.topK, 'topK');
+  const courseId = readOptionalUuid(record.courseId, 'courseId');
+  const lectureId = readOptionalUuid(record.lectureId, 'lectureId');
+  const recordedOnOrAfter = readOptionalIsoDate(record.recordedOnOrAfter, 'recordedOnOrAfter');
+  const recordedOnOrBefore = readOptionalIsoDate(record.recordedOnOrBefore, 'recordedOnOrBefore');
+
+  const fallbackCourseId = fallbackScope?.courseId ?? undefined;
+  const resolvedCourseId = courseId ?? (scopeType === 'course' ? fallbackCourseId : undefined);
+  const resolvedLectureId =
+    lectureId ?? (scopeType === 'lecture' ? fallbackScope?.lectureId ?? undefined : undefined);
+
+  if (scopeType === 'course' && !resolvedCourseId) {
+    throw new HttpError(502, 'OpenAI retrieval planner omitted courseId for a course-scoped search.');
+  }
+
+  if (scopeType === 'lecture' && !resolvedLectureId) {
+    if (fallbackCourseId) {
+      return {
+        query,
+        scopeType: 'course',
+        topK: topK ?? undefined,
+        courseId: fallbackCourseId,
+        lectureId: undefined,
+        recordedOnOrAfter: recordedOnOrAfter ?? undefined,
+        recordedOnOrBefore: recordedOnOrBefore ?? undefined,
+      };
+    }
+
+    return {
+      query,
+      scopeType: 'user',
+      topK: topK ?? undefined,
+      courseId: undefined,
+      lectureId: undefined,
+      recordedOnOrAfter: recordedOnOrAfter ?? undefined,
+      recordedOnOrBefore: recordedOnOrBefore ?? undefined,
+    };
+  }
+
+  return {
+    query,
+    scopeType,
+    topK: topK ?? undefined,
+    courseId: resolvedCourseId,
+    lectureId: resolvedLectureId,
+    recordedOnOrAfter: recordedOnOrAfter ?? undefined,
+    recordedOnOrBefore: recordedOnOrBefore ?? undefined,
+  };
+}
+
+function readPlannerQuery(value: unknown, fallbackQuery?: string) {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  if (typeof fallbackQuery === 'string' && fallbackQuery.trim().length > 0) {
+    return fallbackQuery.trim();
+  }
+
+  throw new HttpError(400, 'query is required.');
+}
+
+function readRecentCourseLecturesToolArgs(rawArguments: string): RecentCourseLecturesToolArgs {
+  const record = readJsonObject(rawArguments, 'OpenAI retrieval planner returned invalid lecture tool arguments.');
+
+  return {
+    courseId: readRequiredString(record.courseId, 'courseId'),
+    limit: readOptionalBoundedInteger(record.limit, 'limit', 1, 10) ?? DEFAULT_SCOPE_ITEM_LIMIT,
+  };
+}
+
+function readRecentCourseFilesToolArgs(rawArguments: string): RecentCourseFilesToolArgs {
+  const record = readJsonObject(rawArguments, 'OpenAI retrieval planner returned invalid file tool arguments.');
+
+  return {
+    courseId: readRequiredString(record.courseId, 'courseId'),
+    limit: readOptionalBoundedInteger(record.limit, 'limit', 1, 10) ?? DEFAULT_SCOPE_ITEM_LIMIT,
+  };
+}
+
+function readJsonObject(rawArguments: string, errorMessage: string) {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(rawArguments);
+  } catch {
+    throw new HttpError(502, errorMessage, rawArguments);
+  }
+
+  return readObject(parsed);
+}
+
+function mapCourseForPlanner(course: CourseRecord) {
+  return {
+    id: course.id,
+    courseName: course.courseName,
+    courseCode: course.courseCode,
+    instructorName: course.instructorName,
+    description: course.description,
+    semester: course.semester,
+    courseType: course.courseType,
+  };
+}
+
+function mapCourseToScopeItem(course: CourseRecord): PlannerScopeItem {
+  return {
+    type: 'course',
+    id: course.id,
+    title: course.courseName,
+    detail: [
+      course.courseCode,
+      course.instructorName ? `Instructor: ${course.instructorName}` : null,
+      course.description ? `Description: ${course.description}` : null,
+      course.semester ? `Semester: ${course.semester}` : null,
+    ]
+      .filter(Boolean)
+      .join(' | '),
+  };
+}
+
+function mapLectureForPlanner(lecture: LectureRecordingListItem) {
+  return {
+    lectureId: lecture.lecture.id,
+    courseId: lecture.lecture.courseId,
+    title: lecture.lecture.title,
+    recordedAt: lecture.lecture.recordedAt,
+    transcriptStatus: lecture.transcript?.status ?? null,
+    transcriptGeneratedAt: lecture.transcript?.generatedAt ?? null,
+  };
+}
+
+function mapLectureToScopeItem(lecture: LectureRecordingListItem): PlannerScopeItem {
+  return {
+    type: 'lecture',
+    id: lecture.lecture.id,
+    courseId: lecture.lecture.courseId,
+    title: lecture.lecture.title,
+    detail: [
+      lecture.lecture.recordedAt ? `Recorded: ${lecture.lecture.recordedAt}` : null,
+      lecture.transcript?.status ? `Transcript: ${lecture.transcript.status}` : null,
+    ]
+      .filter(Boolean)
+      .join(' | '),
+  };
+}
+
+function mapCourseFileForPlanner(file: CourseFileRecord) {
+  return {
+    fileId: file.id,
+    courseId: file.courseId,
+    title: file.title,
+    description: file.description,
+    relationType: file.relationType,
+    originalFilename: file.originalFilename,
+    mimeType: file.mimeType,
+    uploadedAt: file.uploadedAt,
+  };
+}
+
+function mapCourseFileToScopeItem(file: CourseFileRecord): PlannerScopeItem {
+  return {
+    type: 'file',
+    id: file.id,
+    courseId: file.courseId,
+    title: file.title,
+    detail: [
+      file.relationType,
+      file.originalFilename,
+      file.description ? `Description: ${file.description}` : null,
+      file.uploadedAt ? `Uploaded: ${file.uploadedAt}` : null,
+    ]
+      .filter(Boolean)
+      .join(' | '),
+  };
 }
 
 async function readProviderErrorDetails(response: Response) {
@@ -1102,6 +1704,35 @@ function readRequiredString(value: unknown, fieldName: string) {
   return value.trim();
 }
 
+function readOptionalPositiveInteger(value: unknown, fieldName: string) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  if (!Number.isInteger(value) || Number(value) <= 0) {
+    throw new HttpError(400, `${fieldName} must be a positive integer.`);
+  }
+
+  return Number(value);
+}
+
+function readOptionalBoundedInteger(
+  value: unknown,
+  fieldName: string,
+  min: number,
+  max: number
+) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  if (!Number.isInteger(value) || Number(value) < min || Number(value) > max) {
+    throw new HttpError(400, `${fieldName} must be an integer between ${min} and ${max}.`);
+  }
+
+  return Number(value);
+}
+
 function readRequiredBase64(value: unknown, fieldName: string) {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new HttpError(400, `${fieldName} is required.`);
@@ -1128,6 +1759,41 @@ function readOptionalUuid(value: unknown, fieldName: string) {
   }
 
   return value;
+}
+
+function readOptionalIsoDate(value: unknown, fieldName: string) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  if (typeof value !== 'string' || !ISO_DATE_REGEX.test(value)) {
+    throw new HttpError(400, `${fieldName} must be an ISO date in YYYY-MM-DD format.`);
+  }
+
+  return value;
+}
+
+function readTranscriptSearchScope(value: unknown): TranscriptSearchToolArgs['scopeType'] {
+  if (value === 'user' || value === 'course' || value === 'lecture') {
+    return value;
+  }
+
+  throw new HttpError(502, 'OpenAI retrieval planner returned an invalid scopeType.', value);
+}
+
+function getOpenAiClient() {
+  if (openAiClient) {
+    return openAiClient;
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new HttpError(500, 'Missing OpenAI API key. Set OPENAI_API_KEY for Loki.');
+  }
+
+  openAiClient = new OpenAI({ apiKey });
+  return openAiClient;
 }
 
 function nullable(value: string | null) {
