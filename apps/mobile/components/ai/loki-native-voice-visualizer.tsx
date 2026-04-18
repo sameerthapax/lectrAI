@@ -7,6 +7,7 @@ type LokiNativeVoiceVisualizerProps = {
   mode?: LokiVisualizerMode;
   speechLevel?: number;
   playbackTimeSeconds?: number;
+  collapsed?: boolean;
 };
 
 function getSpeechEnvelope(playbackTimeSeconds: number, speechLevel: number) {
@@ -21,6 +22,7 @@ export default function LokiNativeVoiceVisualizer({
   mode = 'idle',
   speechLevel = 0,
   playbackTimeSeconds = 0,
+  collapsed = false,
 }: LokiNativeVoiceVisualizerProps) {
   const waitingFloat = useRef(new Animated.Value(0)).current;
   const waitingPulse = useRef(new Animated.Value(0)).current;
@@ -118,6 +120,9 @@ export default function LokiNativeVoiceVisualizer({
       : mode === 'waiting'
         ? -16
         : -40;
+  const haloSize = collapsed ? 96 : 224;
+  const orbShellSize = collapsed ? 64 : 148;
+  const orbCoreSize = collapsed ? 54 : 130;
   const badgeLabel =
     mode === 'listening'
       ? 'Listening'
@@ -134,6 +139,8 @@ export default function LokiNativeVoiceVisualizer({
           style={[
             styles.halo,
             {
+              width: haloSize,
+              height: haloSize,
               transform: [
                 { translateY: mode === 'waiting' ? waitingHaloLift : 0 },
                 { scale: mode === 'waiting' ? waitingPulseScale : haloScale },
@@ -147,6 +154,8 @@ export default function LokiNativeVoiceVisualizer({
           style={[
             styles.orbShell,
             {
+              width: orbShellSize,
+              height: orbShellSize,
               transform: [
                 { translateY: mode === 'waiting' ? waitingLift : 0 },
                 { scale: orbScale },
@@ -157,12 +166,14 @@ export default function LokiNativeVoiceVisualizer({
           ]}
         >
           <Animated.View
-            style={[
-              styles.orbCore,
-              {
-                transform: [{ scale: coreScale }],
-                opacity: 0.88 + intensity * 0.1,
-              },
+          style={[
+            styles.orbCore,
+            {
+              width: orbCoreSize,
+              height: orbCoreSize,
+              transform: [{ scale: coreScale }],
+              opacity: 0.88 + intensity * 0.1,
+            },
             ]}
           >
             <View style={styles.orbGrid} />
@@ -274,48 +285,48 @@ const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingVertical: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
   },
   badgeRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     alignItems: 'center',
   },
   badge: {
-    minHeight: 34,
+    minHeight: 24,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     backgroundColor: 'rgba(17, 12, 8, 0.58)',
     borderWidth: 1,
     borderColor: 'rgba(255, 237, 213, 0.08)',
   },
   badgeCompact: {
-    width: 34,
+    display: 'none',
     justifyContent: 'center',
     paddingHorizontal: 0,
   },
   badgeDot: {
-    width: 8,
-    height: 8,
+    width: 6,
+    height: 6,
     borderRadius: 999,
     backgroundColor: '#fb923c',
   },
   badgeLinePrimary: {
-    width: 40,
-    height: 6,
+    width: 24,
+    height: 4,
     borderRadius: 999,
     backgroundColor: 'rgba(255, 237, 213, 0.74)',
   },
   badgeLineSecondary: {
-    width: 24,
-    height: 4,
+    width: 14,
+    height: 3,
     borderRadius: 999,
-    marginTop: 4,
+    marginTop: 3,
     backgroundColor: 'rgba(255, 237, 213, 0.24)',
   },
   badgeGlow: {

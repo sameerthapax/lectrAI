@@ -147,6 +147,7 @@ export async function sendLokiReply(
   input: {
     sessionId?: string | null;
     message: string;
+    muteAudioResponse?: boolean;
   }
 ) {
   return authorizedJsonRequest<RemoteLokiReply>(

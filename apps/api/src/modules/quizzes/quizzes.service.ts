@@ -1107,7 +1107,11 @@ async function generateQuizWithOpenAi(input: {
                 'If there are fewer than 5 direct content sources, you may generate course-related questions inferred from course metadata. ' +
                 'Set isRelatedToAnyCourse to true only when a question is related to one of the user courses, even if it is not directly quoted from a source. ' +
                 'Every question must have exactly 4 answer options with exactly 1 correct option. ' +
-                'Do not mention missing context or say that you are inferring in the question text.',
+                'Do not mention missing context or say that you are inferring in the question text. ' +
+                'Use lecture transcripts as knowledge context, not as transcript trivia. ' +
+                'Do not ask who said something, which speaker said a line, or questions that depend on exact lecture wording. ' +
+                'Do not make the quiz lecture-specific unless the underlying concept itself is lecture-specific. ' +
+                'Prefer concept-based questions that test understanding of ideas taught across the provided materials.',
             },
           ],
         },
