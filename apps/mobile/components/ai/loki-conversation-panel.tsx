@@ -1,5 +1,6 @@
 import { BlurView } from 'expo-blur';
-import { Animated, ScrollView, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import { Animated, Pressable, ScrollView, Text, View } from 'react-native';
 import type { MutableRefObject, ReactNode } from 'react';
 import type { ViewStyle } from 'react-native';
 import type { AppTheme } from '../../services/app-theme';
@@ -38,6 +39,14 @@ export function LokiConversationPanel({
   fillBody = false,
   bodyStyle,
 }: LokiConversationPanelProps) {
+  const conversationSurface = theme.resolvedMode === 'dark' ? '#171c21' : 'rgba(248, 250, 252, 0.96)';
+  const assistantBubble = theme.resolvedMode === 'dark' ? 'rgba(255,255,255,0.045)' : 'rgba(255,255,255,0.88)';
+  const userBubble = theme.resolvedMode === 'dark' ? 'rgba(255, 138, 61, 0.22)' : 'rgba(255, 237, 220, 0.98)';
+  const citationChip = theme.resolvedMode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.88)';
+  const quizCardBackground = theme.resolvedMode === 'dark' ? 'rgba(96, 165, 250, 0.18)' : '#eaf4ff';
+  const quizCardLabel = theme.resolvedMode === 'dark' ? '#bfdbfe' : '#2563eb';
+  const quizCardHint = theme.resolvedMode === 'dark' ? '#dbeafe' : '#1d4ed8';
+
   const body = (
     <Animated.View
       style={{
@@ -45,9 +54,8 @@ export function LokiConversationPanel({
         minHeight: fillBody ? 0 : undefined,
         height: fillBody ? undefined : (bodyHeight ?? (isCompact ? 220 : 300)),
         borderRadius: 18,
-        backgroundColor: theme.colors.neutralSoft,
-        borderWidth: 1,
-        borderColor: theme.colors.neutralBorder,
+        overflow: 'hidden',
+        backgroundColor: conversationSurface,
         ...bodyStyle,
       }}
     >
@@ -57,9 +65,11 @@ export function LokiConversationPanel({
         showsVerticalScrollIndicator={false}
         onContentSizeChange={onContentSizeChange}
         contentContainerStyle={{
-          padding: 12,
+          flexGrow: 1,
+          paddingHorizontal: 12,
+          paddingTop: 14,
+          paddingBottom: 18,
           gap: 12,
-          minHeight: '100%',
         }}
       >
         {loading ? (
@@ -73,6 +83,7 @@ export function LokiConversationPanel({
         ) : (
           messages.map((message) => {
             const isAssistant = message.role === 'assistant';
+            const quizAttachment = getQuizAttachment(message);
             return (
               <View
                 key={message.id}
@@ -81,9 +92,7 @@ export function LokiConversationPanel({
                   borderRadius: 18,
                   padding: 12,
                   gap: 8,
-                  backgroundColor: isAssistant ? theme.colors.overlay : theme.colors.accentSoft,
-                  borderWidth: 1,
-                  borderColor: isAssistant ? theme.colors.border : theme.colors.accentBorder,
+                  backgroundColor: isAssistant ? assistantBubble : userBubble,
                 }}
               >
                 <Text
@@ -113,9 +122,7 @@ export function LokiConversationPanel({
                           borderRadius: 999,
                           paddingHorizontal: 10,
                           paddingVertical: 6,
-                          backgroundColor: theme.colors.neutralSoft,
-                          borderWidth: 1,
-                          borderColor: theme.colors.border,
+                          backgroundColor: citationChip,
                         }}
                       >
                         <Text selectable style={{ color: theme.colors.textMuted, fontSize: 11.5, fontWeight: '700' }}>
@@ -124,6 +131,38 @@ export function LokiConversationPanel({
                       </View>
                     ))}
                   </View>
+                ) : null}
+
+                {message.role === 'assistant' && quizAttachment.hasQuiz && quizAttachment.quizId ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() =>
+                      router.push({
+                        pathname: '/quiz/[quizId]',
+                        params: { quizId: quizAttachment.quizId },
+                      })
+                    }
+                    style={({ pressed }) => ({
+                      borderRadius: 16,
+                      padding: 12,
+                      gap: 6,
+                      backgroundColor: quizCardBackground,
+                      opacity: pressed ? 0.9 : 1,
+                    })}
+                  >
+                    <Text
+                      selectable
+                      style={{ color: quizCardLabel, fontSize: 11.5, fontWeight: '800', letterSpacing: 0.3 }}
+                    >
+                      QUIZ GENERATED
+                    </Text>
+                    <Text selectable style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
+                      {quizAttachment.quizTitle?.trim() || 'Generated quiz'}
+                    </Text>
+                    <Text selectable style={{ color: quizCardHint, fontSize: 12.5, lineHeight: 18, fontWeight: '700' }}>
+                      Navigate to quiz
+                    </Text>
+                  </Pressable>
                 ) : null}
               </View>
             );
@@ -152,8 +191,6 @@ export function LokiConversationPanel({
         overflow: 'hidden',
         borderCurve: 'continuous',
         backgroundColor: theme.colors.overlay,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
       }}
     >
       <View style={{ padding: 14, gap: 12 }}>
@@ -180,4 +217,37 @@ function getUniqueLectureCitations(citations: RemoteLokiMessage['citations']) {
     seenLectureIds.add(citation.lectureId);
     return true;
   });
+}
+
+function getQuizAttachment(message: RemoteLokiMessage) {
+  if (message.hasQuiz && message.quizId) {
+    return {
+      hasQuiz: true,
+      quizId: message.quizId,
+      quizTitle: message.quizTitle,
+    };
+  }
+
+  if (!message.retrievalMetadata || typeof message.retrievalMetadata !== 'object' || Array.isArray(message.retrievalMetadata)) {
+    return {
+      hasQuiz: false,
+      quizId: null,
+      quizTitle: null,
+    };
+  }
+
+  const metadata = message.retrievalMetadata as Record<string, unknown>;
+  const quiz =
+    metadata.quiz && typeof metadata.quiz === 'object' && !Array.isArray(metadata.quiz)
+      ? (metadata.quiz as Record<string, unknown>)
+      : null;
+  const quizId = typeof quiz?.quizId === 'string' ? quiz.quizId : null;
+  const quizTitle = typeof quiz?.quizTitle === 'string' ? quiz.quizTitle : null;
+  const hasQuiz = quiz?.hasQuiz === true && Boolean(quizId);
+
+  return {
+    hasQuiz,
+    quizId: hasQuiz ? quizId : null,
+    quizTitle: hasQuiz ? quizTitle : null,
+  };
 }

@@ -74,6 +74,9 @@ export async function postChatReply(request: Request, response: Response, next: 
       userMessage: serializeMessage(result.userMessage),
       assistantMessage: serializeMessage(result.assistantMessage),
       audio: result.audio,
+      hasQuiz: result.quiz?.hasQuiz ?? false,
+      quizId: result.quiz?.quizId ?? null,
+      quizTitle: result.quiz?.quizTitle ?? null,
     });
   } catch (error) {
     next(error);
@@ -154,6 +157,9 @@ function serializeMessage(message: ChatMessageRecord) {
     completionTokens: message.completionTokens,
     totalTokens: message.totalTokens,
     retrievalMetadata: message.retrievalMetadata,
+    hasQuiz: message.hasQuiz,
+    quizId: message.quizId,
+    quizTitle: message.quizTitle,
     createdAt: message.createdAt,
     citations: message.citations,
   };

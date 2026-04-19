@@ -1,7 +1,8 @@
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { LokiSessionList } from '../../components/ai/loki-session-list';
+import { NativeBackButton } from '../../components/ui/native-back-button';
 import { useAuth } from '../../providers/auth-provider';
 import { useAppTheme } from '../../providers/settings-provider';
 import { listLokiSessions, type RemoteLokiSession } from '../../services/ai-chat-api';
@@ -65,16 +66,16 @@ export default function LokiHistoryRoute() {
         options={{
           headerShown: true,
           headerTitle: 'Conversation history',
-          headerLeft: () => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Go back"
-              onPress={() => router.back()}
-              style={{ paddingVertical: 6, paddingRight: 10 }}
-            >
-              <Text style={{ color: theme.colors.accent, fontSize: 22, fontWeight: '700' }}>{'<'}</Text>
-            </Pressable>
-          ),
+          headerStyle: {
+            backgroundColor: theme.colors.screen,
+          },
+          headerShadowVisible: false,
+          headerTitleStyle: {
+            color: theme.colors.text,
+            fontWeight: '700',
+          },
+          headerTintColor: theme.colors.accent,
+          headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
         }}
       />
 

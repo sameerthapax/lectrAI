@@ -1,7 +1,8 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { LokiConversationPanel } from '../../../components/ai/loki-conversation-panel';
+import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAuth } from '../../../providers/auth-provider';
 import { useAppTheme } from '../../../providers/settings-provider';
 import {
@@ -71,16 +72,16 @@ export default function LokiSessionDetailRoute() {
         options={{
           headerShown: true,
           headerTitle: 'Chat session',
-          headerLeft: () => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Go back"
-              onPress={() => router.back()}
-              style={{ paddingVertical: 6, paddingRight: 10 }}
-            >
-              <Text style={{ color: theme.colors.accent, fontSize: 22, fontWeight: '700' }}>{'<'}</Text>
-            </Pressable>
-          ),
+          headerStyle: {
+            backgroundColor: theme.colors.screen,
+          },
+          headerShadowVisible: false,
+          headerTitleStyle: {
+            color: theme.colors.text,
+            fontWeight: '700',
+          },
+          headerTintColor: theme.colors.accent,
+          headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
         }}
       />
 

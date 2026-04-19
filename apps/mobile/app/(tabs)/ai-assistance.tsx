@@ -115,6 +115,8 @@ export default function AiAssistanceRoute() {
     });
   }, []);
 
+  const shouldExpandTalkButton = talkHoldActive || assistantWaiting;
+
   useEffect(() => {
     Animated.timing(talkGlowOpacity, {
       toValue: talkHoldActive ? 0.82 : 0,
@@ -126,12 +128,12 @@ export default function AiAssistanceRoute() {
 
   useEffect(() => {
     Animated.timing(talkExpandProgress, {
-      toValue: talkHoldActive ? 1 : 0,
-      duration: talkHoldActive ? TALK_EXPAND_DURATION_MS : TALK_RESET_DURATION_MS,
+      toValue: shouldExpandTalkButton ? 1 : 0,
+      duration: shouldExpandTalkButton ? TALK_EXPAND_DURATION_MS : TALK_RESET_DURATION_MS,
       easing: Easing.inOut(Easing.cubic),
       useNativeDriver: false,
     }).start();
-  }, [talkExpandProgress, talkHoldActive]);
+  }, [shouldExpandTalkButton, talkExpandProgress]);
 
   useEffect(() => {
     if (playerStatus.playing) {
@@ -387,19 +389,20 @@ export default function AiAssistanceRoute() {
           return [optimisticUserMessage];
         });
 
-        const reply = await sendLokiReply(accessToken, {
-          sessionId: activeSessionId,
-          message: transcriptText,
-          muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
-        });
+      const reply = await sendLokiReply(accessToken, {
+        sessionId: activeSessionId,
+        message: transcriptText,
+        muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
+      });
+      const assistantMessage = withReplyQuizMetadata(reply);
 
-        setActiveSessionId(reply.session.id);
-        setMessages((current) => {
-          const withoutPendingUser = current.filter((message) => message.id !== optimisticUserMessage.id);
-          return [...withoutPendingUser, reply.userMessage, reply.assistantMessage];
-        });
+      setActiveSessionId(reply.session.id);
+      setMessages((current) => {
+        const withoutPendingUser = current.filter((message) => message.id !== optimisticUserMessage.id);
+          return [...withoutPendingUser, reply.userMessage, assistantMessage];
+      });
 
-        if (reply.audio) {
+      if (reply.audio) {
           await setAudioModeAsync({
             allowsRecording: false,
             playsInSilentMode: true,
@@ -408,7 +411,7 @@ export default function AiAssistanceRoute() {
             shouldRouteThroughEarpiece: false,
           });
 
-          const nextAudioUri = await writeLokiAudioToFile(reply.audio, reply.assistantMessage.id);
+          const nextAudioUri = await writeLokiAudioToFile(reply.audio, assistantMessage.id);
           player.replace(nextAudioUri);
           player.play();
         }
@@ -453,11 +456,12 @@ export default function AiAssistanceRoute() {
         message: messageText,
         muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
       });
+      const assistantMessage = withReplyQuizMetadata(reply);
 
       setActiveSessionId(reply.session.id);
       setMessages((current) => {
         const withoutPendingUser = current.filter((message) => message.id !== optimisticUserMessage.id);
-        return [...withoutPendingUser, reply.userMessage, reply.assistantMessage];
+        return [...withoutPendingUser, reply.userMessage, assistantMessage];
       });
 
       if (reply.audio) {
@@ -469,7 +473,7 @@ export default function AiAssistanceRoute() {
           shouldRouteThroughEarpiece: false,
         });
 
-        const nextAudioUri = await writeLokiAudioToFile(reply.audio, reply.assistantMessage.id);
+        const nextAudioUri = await writeLokiAudioToFile(reply.audio, assistantMessage.id);
         player.replace(nextAudioUri);
         player.play();
       }
@@ -1061,8 +1065,20 @@ function createPendingMessage(
     completionTokens: null,
     totalTokens: null,
     retrievalMetadata: null,
+    hasQuiz: false,
+    quizId: null,
+    quizTitle: null,
     createdAt: new Date().toISOString(),
     citations: [],
+  };
+}
+
+function withReplyQuizMetadata(reply: Awaited<ReturnType<typeof sendLokiReply>>) {
+  return {
+    ...reply.assistantMessage,
+    hasQuiz: reply.assistantMessage.hasQuiz || reply.hasQuiz,
+    quizId: reply.assistantMessage.quizId ?? reply.quizId ?? null,
+    quizTitle: reply.assistantMessage.quizTitle ?? reply.quizTitle ?? null,
   };
 }
 

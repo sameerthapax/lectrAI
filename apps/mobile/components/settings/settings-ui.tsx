@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { useAppTheme } from '../../providers/settings-provider';
+import { NativeBackButton } from '../ui/native-back-button';
 
 export const ORANGE = '#ff6a00';
 export const INK = '#0b0b0b';
@@ -54,25 +55,9 @@ export function SettingsScreen({
           paddingBottom: 4,
         }}
       >
-        <Pressable
-          onPress={() => router.back()}
-          style={({ pressed }) => ({
-            position: 'absolute',
-            left: 0,
-            width: 38,
-            height: 38,
-            borderRadius: 999,
-            borderCurve: 'continuous',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: theme.resolvedMode === 'dark' ? '#20262b' : 'rgba(255,255,255,0.72)',
-            borderWidth: 1,
-            borderColor: theme.colors.border,
-            opacity: pressed ? 0.88 : 1,
-          })}
-        >
-          <Text style={{ color: theme.colors.text, fontSize: 18, fontWeight: '900' }}>←</Text>
-        </Pressable>
+        <View style={{ position: 'absolute', left: 0 }}>
+          <NativeBackButton theme={theme} onPress={() => router.back()} />
+        </View>
         <Text style={{ color: theme.colors.text, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
           {title}
         </Text>

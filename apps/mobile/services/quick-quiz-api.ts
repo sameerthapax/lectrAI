@@ -71,6 +71,27 @@ export type RemoteDailyQuickQuizBundle = {
   };
 };
 
+export type RemoteStoredQuizOptionRecord = RemoteDailyQuickQuizOptionRecord;
+export type RemoteStoredQuizQuestionRecord = RemoteDailyQuickQuizQuestionRecord;
+
+export type RemoteStoredQuizRecord = {
+  id: string;
+  title: string | null;
+  quizType: string;
+  difficulty: string;
+  questionCount: number | null;
+  estimatedMinutes: number | null;
+  availableOn: string | null;
+  createdAt: string;
+  updatedAt: string;
+  questions: RemoteStoredQuizQuestionRecord[];
+};
+
+export type RemoteStoredQuizBundle = {
+  quiz: RemoteStoredQuizRecord;
+  attempt: RemoteDailyQuickQuizAttemptRecord | null;
+};
+
 export async function fetchDailyQuickQuiz(accessToken: string) {
   return authorizedRequest<RemoteDailyQuickQuizBundle>(
     '/quizzes/daily',
@@ -83,6 +104,14 @@ export async function generateDailyQuickQuiz(accessToken: string) {
   return authorizedRequest<RemoteDailyQuickQuizBundle>(
     '/quizzes/daily/generate',
     { method: 'POST' },
+    accessToken
+  );
+}
+
+export async function fetchQuizById(accessToken: string, quizId: string) {
+  return authorizedRequest<RemoteStoredQuizBundle>(
+    `/quizzes/${encodeURIComponent(quizId)}`,
+    { method: 'GET' },
     accessToken
   );
 }
@@ -120,6 +149,27 @@ export async function submitDailyQuickQuizAttempt(
 ) {
   return authorizedRequest<RemoteDailyQuickQuizBundle>(
     '/quizzes/daily/attempt',
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+    accessToken
+  );
+}
+
+export async function submitQuizAttempt(
+  accessToken: string,
+  input: {
+    quizId: string;
+    answers: Array<{
+      questionId: string;
+      selectedOptionId: string;
+    }>;
+    timeSpentSeconds?: number | null;
+  }
+) {
+  return authorizedRequest<RemoteStoredQuizBundle>(
+    `/quizzes/${encodeURIComponent(input.quizId)}/attempt`,
     {
       method: 'POST',
       body: JSON.stringify(input),

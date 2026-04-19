@@ -32,6 +32,9 @@ export type RemoteLokiMessage = {
   completionTokens: number | null;
   totalTokens: number | null;
   retrievalMetadata: unknown;
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
   createdAt: string;
   citations: RemoteLokiCitation[];
 };
@@ -72,6 +75,9 @@ export type RemoteLokiReply = {
   assistantMessage: RemoteLokiMessage;
   retrieval: { chunks: RemoteLokiRetrievedChunk[] };
   audio: RemoteLokiAudioPayload | null;
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
 };
 
 type RequestOptions = {

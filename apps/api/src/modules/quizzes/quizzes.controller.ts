@@ -2,6 +2,8 @@ import type { NextFunction, Request, Response } from 'express';
 import {
   generateDailyQuickQuizResponseForUser,
   getDailyQuickQuizResponseForUser,
+  getStoredQuizBundleForUser,
+  submitStoredQuizAttemptForUser,
   submitDailyQuickQuizAttemptForUser,
   upsertDailyQuickQuizAnswerForUser,
 } from './quizzes.service.js';
@@ -20,6 +22,21 @@ function requireAuthUserId(request: Request) {
 export async function getDailyQuickQuiz(request: Request, response: Response, next: NextFunction) {
   try {
     const result = await getDailyQuickQuizResponseForUser(requireAuthUserId(request));
+    response.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getQuizById(request: Request, response: Response, next: NextFunction) {
+  try {
+    const quizId = request.params.quizId;
+
+    if (!quizId) {
+      throw new HttpError(400, 'quizId is required.');
+    }
+
+    const result = await getStoredQuizBundleForUser(requireAuthUserId(request), quizId);
     response.status(200).json(result);
   } catch (error) {
     next(error);
@@ -49,6 +66,26 @@ export async function postDailyQuickQuizAttempt(request: Request, response: Resp
   try {
     const body = readAttemptInput(request.body);
     const result = await submitDailyQuickQuizAttemptForUser(requireAuthUserId(request), body);
+    response.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function postQuizAttempt(request: Request, response: Response, next: NextFunction) {
+  try {
+    const body = readAttemptInput(request.body);
+    const quizId = request.params.quizId;
+
+    if (!quizId) {
+      throw new HttpError(400, 'quizId is required.');
+    }
+
+    if (body.quizId !== quizId) {
+      throw new HttpError(400, 'quizId in path must match request body.');
+    }
+
+    const result = await submitStoredQuizAttemptForUser(requireAuthUserId(request), body);
     response.status(200).json(result);
   } catch (error) {
     next(error);

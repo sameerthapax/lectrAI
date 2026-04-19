@@ -9,6 +9,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAuth } from '../../../providers/auth-provider';
 import { useAppTheme, useSettings } from '../../../providers/settings-provider';
 import {
@@ -274,22 +275,7 @@ export default function CourseDetailRoute() {
               paddingTop: 4,
             }}
           >
-            <Pressable
-              onPress={() => router.back()}
-              style={({ pressed }) => ({
-                width: 40,
-                height: 40,
-                borderRadius: 999,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: theme.colors.overlay,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                opacity: pressed ? 0.86 : 1,
-              })}
-            >
-              <Text style={{ color: theme.colors.text, fontSize: 18, fontWeight: '900' }}>←</Text>
-            </Pressable>
+            <NativeBackButton theme={theme} onPress={() => router.back()} />
 
             <Text
               numberOfLines={1}
@@ -301,7 +287,7 @@ export default function CourseDetailRoute() {
                 fontWeight: '900',
               }}
             >
-              {course?.courseName ?? 'Course'}
+              Course
             </Text>
           </View>
 
@@ -363,6 +349,33 @@ export default function CourseDetailRoute() {
                     {course.description}
                   </Text>
                 ) : null}
+
+                <Pressable
+                  onPress={() =>
+                    router.push({
+                      pathname: '/course/[courseId]/dynamic-quiz',
+                      params: {
+                        courseId: course.id,
+                        courseName: course.courseName,
+                      },
+                    })
+                  }
+                  style={({ pressed }) => ({
+                    minHeight: 52,
+                    alignSelf: 'flex-start',
+                    borderRadius: 18,
+                    borderCurve: 'continuous',
+                    paddingHorizontal: 18,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
+                    boxShadow: '0 16px 28px rgba(234, 88, 12, 0.18)',
+                  })}
+                >
+                  <Text style={{ color: theme.colors.accentContrast, fontSize: 15, fontWeight: '900' }}>
+                    Open dynamic quiz
+                  </Text>
+                </Pressable>
               </View>
 
               <SectionCard

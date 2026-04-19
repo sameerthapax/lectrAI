@@ -11,6 +11,11 @@ import {
   searchTranscriptChunks,
   type TranscriptChunkSearchResult,
 } from '../lectures/transcript-embeddings.service.js';
+import {
+  generateLokiQuizForUser,
+  type LokiQuizSourceContext,
+  type StoredQuizRecord,
+} from '../quizzes/quizzes.service.js';
 
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
@@ -27,6 +32,7 @@ const SPECIFIC_RETRIEVAL_TOP_K = 5;
 const MAX_RETRIEVAL_TOP_K = 25;
 const DEFAULT_SCOPE_ITEM_LIMIT = 5;
 const MAX_RETRIEVAL_PLANNER_STEPS = 4;
+const MAX_TUTOR_TOOL_STEPS = 4;
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_MEM0_RESULTS = 5;
 const MEM0_SEARCH_TIMEOUT_MS = 1500;
@@ -37,6 +43,7 @@ const LIST_COURSES_TOOL_NAME = 'list_courses_catalog';
 const LIST_RECENT_LECTURES_TOOL_NAME = 'list_recent_course_lectures';
 const LIST_RECENT_FILES_TOOL_NAME = 'list_recent_course_files';
 const TRANSCRIPT_SEARCH_TOOL_NAME = 'search_transcript_chunks';
+const CREATE_QUIZ_TOOL_NAME = 'create_quiz';
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 let openAiClient: OpenAI | null = null;
@@ -126,6 +133,8 @@ type PlannerFunctionCall = {
   callId: string;
 };
 
+type TutorFunctionCall = PlannerFunctionCall;
+
 export type ChatScope = {
   courseId: string | null;
   lectureId: string | null;
@@ -161,6 +170,9 @@ export type ChatMessageRecord = {
   completionTokens: number | null;
   totalTokens: number | null;
   retrievalMetadata: unknown;
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
   createdAt: string;
   citations: ChatCitationRecord[];
 };
@@ -196,12 +208,19 @@ type LokiMemory = {
   score: number | null;
 };
 
+type AssistantQuizAttachment = {
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
+};
+
 export type GeneratedAssistantReply = {
   session: ChatSessionRecord;
   userMessage: ChatMessageRecord;
   assistantMessage: ChatMessageRecord;
   retrieval: RetrievedContext;
   audio: AssistantAudioPayload | null;
+  quiz: AssistantQuizAttachment | null;
 };
 
 export type AssistantAudioPayload = {
@@ -366,6 +385,7 @@ export async function generateChatReplyForUser(
   });
   const retrieval = retrievalDecision.retrieval;
   const modelResponse = await requestTutorResponse({
+    userId,
     scope: sessionScope,
     history,
     retrieval,
@@ -380,6 +400,7 @@ export async function generateChatReplyForUser(
     usage: modelResponse.usage,
     retrieval,
     memories,
+    quiz: modelResponse.quiz,
   });
   const audio = input.muteAudioResponse ? null : await generateAssistantAudio(modelResponse.messageText);
 
@@ -405,6 +426,7 @@ export async function generateChatReplyForUser(
     assistantMessage,
     retrieval,
     audio,
+    quiz: modelResponse.quiz,
   };
 }
 
@@ -527,28 +549,119 @@ async function generateAssistantAudio(text: string): Promise<AssistantAudioPaylo
 }
 
 async function requestTutorResponse(input: {
+  userId: string;
   scope: ChatScope;
   history: Array<{ role: ChatMessageRole; messageText: string }>;
   retrieval: RetrievedContext;
   memories: LokiMemory[];
   currentMessage: string;
 }) {
-  const rawResponse = (await getOpenAiClient().responses.create({
+  let response = (await getOpenAiClient().responses.create({
     model: DEFAULT_CHAT_MODEL,
     input: buildOpenAiInput(input) as any,
+    tools: buildTutorTools() as any,
+    tool_choice: 'auto',
   })) as unknown as OpenAiResponsesResponse;
-  const messageText = extractOutputText(rawResponse)?.trim();
+  let latestQuiz: StoredQuizRecord | null = null;
+  let latestUsage = readUsage(response.usage);
+
+  for (let step = 0; step < MAX_TUTOR_TOOL_STEPS; step += 1) {
+    const toolCalls = extractFunctionCalls(response);
+
+    if (toolCalls.length === 0) {
+      const messageText = extractOutputText(response)?.trim();
+
+      if (!messageText) {
+        if (latestQuiz) {
+          return {
+            messageText: `I generated your quiz "${latestQuiz.title ?? 'Generated quiz'}". Open it from the card below.`,
+            modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+            usage: latestUsage,
+            quiz: {
+              hasQuiz: true,
+              quizId: latestQuiz.id,
+              quizTitle: latestQuiz.title,
+            },
+          };
+        }
+
+        throw new HttpError(502, 'OpenAI tutor response did not include assistant text.');
+      }
+
+      return {
+        messageText,
+        modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+        usage: latestUsage,
+        quiz: latestQuiz
+          ? {
+              hasQuiz: true,
+              quizId: latestQuiz.id,
+              quizTitle: latestQuiz.title,
+            }
+          : null,
+      };
+    }
+
+    const toolOutputs: Array<Record<string, unknown>> = [];
+
+    for (const toolCall of toolCalls) {
+      const result = await executeTutorToolCall(input, toolCall);
+
+      if (result.quiz) {
+        latestQuiz = result.quiz;
+      }
+
+      toolOutputs.push({
+        type: 'function_call_output',
+        call_id: toolCall.callId,
+        output: JSON.stringify(result.output),
+      });
+    }
+
+    if (typeof response.id !== 'string' || response.id.length === 0) {
+      throw new HttpError(502, 'OpenAI tutor response did not include a response id.');
+    }
+
+    response = (await getOpenAiClient().responses.create({
+      model: DEFAULT_CHAT_MODEL,
+      previous_response_id: response.id,
+      input: toolOutputs as any,
+      tools: buildTutorTools() as any,
+      tool_choice: 'auto',
+    })) as unknown as OpenAiResponsesResponse;
+    latestUsage = readUsage(response.usage);
+  }
+
+  const messageText = extractOutputText(response)?.trim();
+
+  if (!messageText && latestQuiz) {
+    return {
+      messageText: `I generated your quiz "${latestQuiz.title ?? 'Generated quiz'}". Open it from the card below.`,
+      modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+      usage: latestUsage,
+      quiz: {
+        hasQuiz: true,
+        quizId: latestQuiz.id,
+        quizTitle: latestQuiz.title,
+      },
+    };
+  }
 
   if (!messageText) {
     throw new HttpError(502, 'OpenAI tutor response did not include assistant text.');
   }
 
-  const usage = readUsage(rawResponse.usage);
-
   return {
     messageText,
-    modelName: typeof rawResponse.model === 'string' ? rawResponse.model : DEFAULT_CHAT_MODEL,
-    usage,
+    modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+    usage: latestUsage,
+    quiz: latestQuiz
+      ? {
+          hasQuiz: true,
+          quizId: latestQuiz.id,
+          quizTitle: latestQuiz.title,
+        }
+      : null,
   };
 }
 
@@ -570,6 +683,9 @@ function buildOpenAiInput(input: {
     'If the user asks for a summary or recap of recent or latest lectures, synthesize across the retrieved lecture set instead of focusing on only one lecture unless the user explicitly named one lecture.',
     'If the retrieved context spans multiple lecture dates or titles, make that synthesis explicit in the answer.',
     'If the user asks for quiz or practice questions, use the lecture material as background knowledge only.',
+    `When the user asks you to generate a quiz, practice quiz, or practice test, call the ${CREATE_QUIZ_TOOL_NAME} tool instead of pasting the whole quiz into the chat.`,
+    'After a quiz tool succeeds, briefly tell the user the quiz is ready and invite them to open it.',
+    'You may execute multiple tool calls in the same response loop when needed.',
     'When relevant, use the personal memory context to personalize continuity and study help, but never let it override lecture facts.',
     'If personal memory conflicts with retrieved lecture context, trust the lecture context for subject matter and treat memory as preference context only.',
     'For quiz generation, do not ask speaker-identification questions, quote-matching questions, line-specific transcript questions, or questions about who said something in lecture.',
@@ -648,6 +764,72 @@ function buildOpenAiHistoryMessage(message: { role: ChatMessageRole; messageText
   return {
     role: message.role,
     content: [{ type: 'input_text' as const, text: message.messageText }],
+  };
+}
+
+function buildTutorTools() {
+  return [
+    {
+      type: 'function',
+      name: CREATE_QUIZ_TOOL_NAME,
+      description:
+        'Generate a stored quiz for the current user when they ask for a quiz, practice quiz, or practice test.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          questionCount: { type: ['integer', 'null'], minimum: 3, maximum: 10 },
+          title: { type: ['string', 'null'] },
+        },
+        required: ['questionCount', 'title'],
+      },
+    },
+  ];
+}
+
+async function executeTutorToolCall(
+  input: {
+    userId: string;
+    scope: ChatScope;
+    history: Array<{ role: ChatMessageRole; messageText: string }>;
+    retrieval: RetrievedContext;
+    memories: LokiMemory[];
+    currentMessage: string;
+  },
+  toolCall: TutorFunctionCall
+) {
+  if (toolCall.name === CREATE_QUIZ_TOOL_NAME) {
+    const args = readCreateQuizToolArgs(toolCall.arguments);
+    const quiz = await generateLokiQuizForUser({
+      userId: input.userId,
+      message: input.currentMessage,
+      questionCount: args.questionCount ?? undefined,
+      titleHint: args.title ?? null,
+      contexts: input.retrieval.chunks.map(mapRetrievalChunkToQuizSourceContext),
+    });
+
+    return {
+      output: {
+        quizId: quiz.id,
+        title: quiz.title,
+        questionCount: quiz.questionCount,
+      },
+      quiz,
+    };
+  }
+
+  throw new HttpError(502, `OpenAI tutor requested unsupported function "${toolCall.name}".`);
+}
+
+function mapRetrievalChunkToQuizSourceContext(entry: TranscriptChunkSearchResult): LokiQuizSourceContext {
+  return {
+    lectureId: entry.transcript.lectureId,
+    lectureTitle: entry.transcript.lectureTitle,
+    courseId: entry.transcript.courseId,
+    courseName: entry.transcript.courseName,
+    similarity: entry.chunk.similarity,
+    content: entry.chunk.content,
   };
 }
 
@@ -976,6 +1158,7 @@ async function createAssistantMessageWithCitations(input: {
   usage: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null };
   retrieval: RetrievedContext;
   memories: LokiMemory[];
+  quiz: AssistantQuizAttachment | null;
 }) {
   const db = getDb();
 
@@ -1001,7 +1184,7 @@ async function createAssistantMessageWithCitations(input: {
         ${input.usage.promptTokens},
         ${input.usage.completionTokens},
         ${input.usage.totalTokens},
-        ${JSON.stringify(buildRetrievalMetadata(input.retrieval, input.memories))}::jsonb
+        ${JSON.stringify(buildRetrievalMetadata(input.retrieval, input.memories, input.quiz))}::jsonb
       )
       returning
         id::text as id,
@@ -1136,7 +1319,11 @@ async function touchChatSession(
   `;
 }
 
-function buildRetrievalMetadata(retrieval: RetrievedContext, memories: LokiMemory[]) {
+function buildRetrievalMetadata(
+  retrieval: RetrievedContext,
+  memories: LokiMemory[],
+  quiz: AssistantQuizAttachment | null
+) {
   return {
     decision: retrieval.decision ?? null,
     scopeItems: retrieval.scopeItems ?? [],
@@ -1158,6 +1345,7 @@ function buildRetrievalMetadata(retrieval: RetrievedContext, memories: LokiMemor
       similarity: entry.chunk.similarity,
       content: entry.chunk.content,
     })),
+    quiz: quiz ?? null,
   };
 }
 
@@ -1654,6 +1842,15 @@ function readRecentCourseFilesToolArgs(rawArguments: string): RecentCourseFilesT
   };
 }
 
+function readCreateQuizToolArgs(rawArguments: string) {
+  const record = readJsonObject(rawArguments, 'OpenAI tutor returned invalid quiz tool arguments.');
+
+  return {
+    questionCount: readOptionalBoundedInteger(record.questionCount, 'questionCount', 3, 10),
+    title: readOptionalString(record.title, 'title'),
+  };
+}
+
 function readJsonObject(rawArguments: string, errorMessage: string) {
   let parsed: unknown;
 
@@ -1791,6 +1988,19 @@ function readRequiredString(value: unknown, fieldName: string) {
   }
 
   return value.trim();
+}
+
+function readOptionalString(value: unknown, fieldName: string) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  if (typeof value !== 'string') {
+    throw new HttpError(400, `${fieldName} must be a string.`);
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function readOptionalPositiveInteger(value: unknown, fieldName: string) {
@@ -2154,6 +2364,8 @@ function mapChatSessionRow(row: DbChatSessionRow): ChatSessionRecord {
 }
 
 function mapChatMessageRow(row: DbChatMessageRow): Omit<ChatMessageRecord, 'citations'> {
+  const quiz = readQuizAttachmentFromMetadata(row.retrieval_metadata);
+
   return {
     id: row.id,
     role: row.role,
@@ -2163,7 +2375,24 @@ function mapChatMessageRow(row: DbChatMessageRow): Omit<ChatMessageRecord, 'cita
     completionTokens: row.completion_tokens,
     totalTokens: row.total_tokens,
     retrievalMetadata: row.retrieval_metadata,
+    hasQuiz: quiz.hasQuiz,
+    quizId: quiz.quizId,
+    quizTitle: quiz.quizTitle,
     createdAt: row.created_at,
+  };
+}
+
+function readQuizAttachmentFromMetadata(metadata: unknown): AssistantQuizAttachment {
+  const record = readObjectRecord(metadata);
+  const quiz = readObjectRecord(record?.quiz);
+  const quizId = typeof quiz?.quizId === 'string' && UUID_REGEX.test(quiz.quizId) ? quiz.quizId : null;
+  const quizTitle = typeof quiz?.quizTitle === 'string' && quiz.quizTitle.trim().length > 0 ? quiz.quizTitle.trim() : null;
+  const hasQuiz = quiz?.hasQuiz === true && Boolean(quizId);
+
+  return {
+    hasQuiz,
+    quizId: hasQuiz ? quizId : null,
+    quizTitle: hasQuiz ? quizTitle : null,
   };
 }
 
