@@ -5,6 +5,7 @@ export default function PagesLayout() {
     <Stack screenOptions={{ headerShown: false }} initialRouteName="welcome">
       <Stack.Screen name="welcome" />
       <Stack.Screen name="course/[courseId]" />
+      <Stack.Screen name="course/[courseId]/flashcards" />
       <Stack.Screen name="course/[courseId]/dynamic-quiz" />
       <Stack.Screen name="course-file/[courseFileId]" />
       <Stack.Screen name="loki-history" />

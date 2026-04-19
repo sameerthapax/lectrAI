@@ -350,32 +350,60 @@ export default function CourseDetailRoute() {
                   </Text>
                 ) : null}
 
-                <Pressable
-                  onPress={() =>
-                    router.push({
-                      pathname: '/course/[courseId]/dynamic-quiz',
-                      params: {
-                        courseId: course.id,
-                        courseName: course.courseName,
-                      },
-                    })
-                  }
-                  style={({ pressed }) => ({
-                    minHeight: 52,
-                    alignSelf: 'flex-start',
-                    borderRadius: 18,
-                    borderCurve: 'continuous',
-                    paddingHorizontal: 18,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
-                    boxShadow: '0 16px 28px rgba(234, 88, 12, 0.18)',
-                  })}
-                >
-                  <Text style={{ color: theme.colors.accentContrast, fontSize: 15, fontWeight: '900' }}>
-                    Open dynamic quiz
-                  </Text>
-                </Pressable>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+                  <Pressable
+                    onPress={() =>
+                      router.push({
+                        pathname: '/course/[courseId]/flashcards',
+                        params: {
+                          courseId: course.id,
+                          courseName: course.courseName,
+                        },
+                      })
+                    }
+                    style={({ pressed }) => ({
+                      minHeight: 52,
+                      borderRadius: 18,
+                      borderCurve: 'continuous',
+                      paddingHorizontal: 18,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
+                      boxShadow: '0 16px 28px rgba(234, 88, 12, 0.18)',
+                    })}
+                  >
+                    <Text style={{ color: theme.colors.accentContrast, fontSize: 15, fontWeight: '900' }}>
+                      Open flashcards
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() =>
+                      router.push({
+                        pathname: '/course/[courseId]/dynamic-quiz',
+                        params: {
+                          courseId: course.id,
+                          courseName: course.courseName,
+                        },
+                      })
+                    }
+                    style={({ pressed }) => ({
+                      minHeight: 52,
+                      borderRadius: 18,
+                      borderCurve: 'continuous',
+                      paddingHorizontal: 18,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: pressed ? theme.colors.cardMuted : theme.colors.card,
+                      borderWidth: 1,
+                      borderColor: theme.colors.border,
+                    })}
+                  >
+                    <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '900' }}>
+                      Open dynamic quiz
+                    </Text>
+                  </Pressable>
+                </View>
               </View>
 
               <SectionCard
