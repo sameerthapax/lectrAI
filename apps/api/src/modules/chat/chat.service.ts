@@ -44,6 +44,7 @@ const LIST_RECENT_LECTURES_TOOL_NAME = 'list_recent_course_lectures';
 const LIST_RECENT_FILES_TOOL_NAME = 'list_recent_course_files';
 const TRANSCRIPT_SEARCH_TOOL_NAME = 'search_transcript_chunks';
 const CREATE_QUIZ_TOOL_NAME = 'create_quiz';
+const GET_CURRENT_DATE_AND_TIME_TOOL_NAME = 'get_current_date_and_time';
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 let openAiClient: OpenAI | null = null;
@@ -134,6 +135,15 @@ type PlannerFunctionCall = {
 };
 
 type TutorFunctionCall = PlannerFunctionCall;
+
+type CurrentDateTimeToolResult = {
+  isoDateTime: string;
+  timezone: string;
+  localDate: string;
+  localTime: string;
+  localDateTime: string;
+  weekday: string;
+};
 
 export type ChatScope = {
   courseId: string | null;
@@ -683,6 +693,8 @@ function buildOpenAiInput(input: {
     'If the user asks for a summary or recap of recent or latest lectures, synthesize across the retrieved lecture set instead of focusing on only one lecture unless the user explicitly named one lecture.',
     'If the retrieved context spans multiple lecture dates or titles, make that synthesis explicit in the answer.',
     'If the user asks for quiz or practice questions, use the lecture material as background knowledge only.',
+    `When the user asks to list the user's courses, count courses, or identify which courses they have, call the ${LIST_COURSES_TOOL_NAME} tool instead of saying you cannot access the course list.`,
+    `When the user asks what course is next, what courses are scheduled today, or any question that depends on the current day or time, call both ${GET_CURRENT_DATE_AND_TIME_TOOL_NAME} and ${LIST_COURSES_TOOL_NAME} before answering.`,
     `When the user asks you to generate a quiz, practice quiz, or practice test, call the ${CREATE_QUIZ_TOOL_NAME} tool instead of pasting the whole quiz into the chat.`,
     'After a quiz tool succeeds, briefly tell the user the quiz is ready and invite them to open it.',
     'You may execute multiple tool calls in the same response loop when needed.',
@@ -771,6 +783,32 @@ function buildTutorTools() {
   return [
     {
       type: 'function',
+      name: LIST_COURSES_TOOL_NAME,
+      description:
+        'Return the available courses for the current user with course metadata, including meeting schedule details for direct listing and scheduling questions.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      type: 'function',
+      name: GET_CURRENT_DATE_AND_TIME_TOOL_NAME,
+      description:
+        'Return the current local date and time for the current user, including timezone and weekday, for questions about today, tomorrow, or what course is next.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      type: 'function',
       name: CREATE_QUIZ_TOOL_NAME,
       description:
         'Generate a stored quiz for the current user when they ask for a quiz, practice quiz, or practice test.',
@@ -799,6 +837,27 @@ async function executeTutorToolCall(
   },
   toolCall: TutorFunctionCall
 ) {
+  if (toolCall.name === LIST_COURSES_TOOL_NAME) {
+    const courses = await listCoursesForUser(input.userId);
+
+    return {
+      output: {
+        count: courses.length,
+        courses: courses.map(mapCourseForPlanner),
+      },
+      quiz: null,
+    };
+  }
+
+  if (toolCall.name === GET_CURRENT_DATE_AND_TIME_TOOL_NAME) {
+    const currentDateTime = await getCurrentDateTimeForUser(input.userId);
+
+    return {
+      output: currentDateTime,
+      quiz: null,
+    };
+  }
+
   if (toolCall.name === CREATE_QUIZ_TOOL_NAME) {
     const args = readCreateQuizToolArgs(toolCall.arguments);
     const quiz = await generateLokiQuizForUser({
@@ -1489,6 +1548,8 @@ function buildPlannerIntro(message: string, courses: CourseRecord[]) {
             'Every user message must be treated independently. Do not assume the chat session is tied to a fixed course or lecture.',
             'Use the available tools to identify the best course, lecture set, or file set for this specific message.',
             'You may call tools in sequence, for example: list courses, then list recent lectures or files, then search transcript chunks.',
+            `If the user asks to list their courses, count their courses, or identify which courses they have, call ${LIST_COURSES_TOOL_NAME}.`,
+            `If the user asks what course is next, what courses are scheduled today, or any question that depends on the current day or time, call ${GET_CURRENT_DATE_AND_TIME_TOOL_NAME} and ${LIST_COURSES_TOOL_NAME} before deciding whether transcript search is needed.`,
             'Only call transcript search when the answer should rely on lecture transcript content.',
             'When transcript search is useful, choose topK dynamically using these defaults: around 20 for summaries or recaps, around 10 for quiz or practice-question generation, and around 5 for targeted factual questions.',
             'If the user asks about recent materials or uploaded materials, you may use lecture or file listing tools even before transcript search.',
@@ -1523,6 +1584,19 @@ function buildRetrievalPlannerTools() {
       type: 'function',
       name: LIST_COURSES_TOOL_NAME,
       description: 'Return the available courses for the current user with course metadata.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      type: 'function',
+      name: GET_CURRENT_DATE_AND_TIME_TOOL_NAME,
+      description:
+        'Return the current local date and time for the current user, including timezone and weekday, for schedule-aware planning.',
       strict: true,
       parameters: {
         type: 'object',
@@ -1594,8 +1668,19 @@ async function executePlannerToolCall(
   if (toolCall.name === LIST_COURSES_TOOL_NAME) {
     const courses = await listCoursesForUser(userId);
     return {
-      output: { courses: courses.map(mapCourseForPlanner) },
+      output: { count: courses.length, courses: courses.map(mapCourseForPlanner) },
       scopeItems: courses.map(mapCourseToScopeItem),
+      retrievedChunks: [] as TranscriptChunkSearchResult[],
+      serializedArguments: {},
+    };
+  }
+
+  if (toolCall.name === GET_CURRENT_DATE_AND_TIME_TOOL_NAME) {
+    const currentDateTime = await getCurrentDateTimeForUser(userId);
+
+    return {
+      output: currentDateTime,
+      scopeItems: [] as PlannerScopeItem[],
       retrievedChunks: [] as TranscriptChunkSearchResult[],
       serializedArguments: {},
     };
@@ -1872,6 +1957,11 @@ function mapCourseForPlanner(course: CourseRecord) {
     description: course.description,
     semester: course.semester,
     courseType: course.courseType,
+    meetingSchedule: course.meetingSchedule.map((meeting) => ({
+      dayOfWeek: meeting.dayOfWeek,
+      startTime: meeting.startTime,
+      endTime: meeting.endTime,
+    })),
   };
 }
 
@@ -1885,10 +1975,25 @@ function mapCourseToScopeItem(course: CourseRecord): PlannerScopeItem {
       course.instructorName ? `Instructor: ${course.instructorName}` : null,
       course.description ? `Description: ${course.description}` : null,
       course.semester ? `Semester: ${course.semester}` : null,
+      formatCourseScheduleLabel(course),
     ]
       .filter(Boolean)
       .join(' | '),
   };
+}
+
+function formatCourseScheduleLabel(course: CourseRecord) {
+  if (course.meetingSchedule.length === 0) {
+    return null;
+  }
+
+  return `Schedule: ${course.meetingSchedule
+    .map((meeting) => `${formatMeetingDayLabel(meeting.dayOfWeek)} ${meeting.startTime}-${meeting.endTime}`)
+    .join(', ')}`;
+}
+
+function formatMeetingDayLabel(dayOfWeek: string) {
+  return `${dayOfWeek.slice(0, 1).toUpperCase()}${dayOfWeek.slice(1, 3)}`;
 }
 
 function mapLectureForPlanner(lecture: LectureRecordingListItem) {
@@ -2180,6 +2285,66 @@ function getMem0Memory() {
   });
 
   return mem0Memory;
+}
+
+async function getCurrentDateTimeForUser(userId: string): Promise<CurrentDateTimeToolResult> {
+  const timezone = await getUserTimezoneOrUtc(userId);
+  const now = new Date();
+
+  const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const timeFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const dateTimeFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const weekdayFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    weekday: 'long',
+  });
+
+  return {
+    isoDateTime: now.toISOString(),
+    timezone,
+    localDate: dateFormatter.format(now),
+    localTime: timeFormatter.format(now),
+    localDateTime: dateTimeFormatter.format(now),
+    weekday: weekdayFormatter.format(now),
+  };
+}
+
+async function getUserTimezoneOrUtc(userId: string) {
+  const db = getDb();
+  const rows = await db<{ timezone: string | null }[]>`
+    select timezone
+    from public.users
+    where id = ${userId}::uuid
+    limit 1
+  `;
+  const timezone = rows[0]?.timezone?.trim() || 'UTC';
+
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch {
+    return 'UTC';
+  }
 }
 
 async function searchLokiMemories(input: { userId: string; query: string }): Promise<LokiMemory[]> {
