@@ -46,6 +46,9 @@ export function LokiConversationPanel({
   const quizCardBackground = theme.resolvedMode === 'dark' ? 'rgba(96, 165, 250, 0.18)' : '#eaf4ff';
   const quizCardLabel = theme.resolvedMode === 'dark' ? '#bfdbfe' : '#2563eb';
   const quizCardHint = theme.resolvedMode === 'dark' ? '#dbeafe' : '#1d4ed8';
+  const flashcardCardBackground = theme.resolvedMode === 'dark' ? 'rgba(168, 85, 247, 0.22)' : '#f4e8ff';
+  const flashcardCardLabel = theme.resolvedMode === 'dark' ? '#e9d5ff' : '#7c3aed';
+  const flashcardCardHint = theme.resolvedMode === 'dark' ? '#f3e8ff' : '#6d28d9';
 
   const body = (
     <Animated.View
@@ -84,6 +87,7 @@ export function LokiConversationPanel({
           messages.map((message) => {
             const isAssistant = message.role === 'assistant';
             const quizAttachment = getQuizAttachment(message);
+            const flashcardAttachment = getFlashcardAttachment(message);
             return (
               <View
                 key={message.id}
@@ -164,6 +168,43 @@ export function LokiConversationPanel({
                     </Text>
                   </Pressable>
                 ) : null}
+
+                {message.role === 'assistant' &&
+                flashcardAttachment.hasFlashcards &&
+                flashcardAttachment.flashcardSetId ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() =>
+                      router.push({
+                        pathname: '/flashcards/[flashcardSetId]',
+                        params: { flashcardSetId: flashcardAttachment.flashcardSetId },
+                      })
+                    }
+                    style={({ pressed }) => ({
+                      borderRadius: 16,
+                      padding: 12,
+                      gap: 6,
+                      backgroundColor: flashcardCardBackground,
+                      opacity: pressed ? 0.9 : 1,
+                    })}
+                  >
+                    <Text
+                      selectable
+                      style={{ color: flashcardCardLabel, fontSize: 11.5, fontWeight: '800', letterSpacing: 0.3 }}
+                    >
+                      FLASHCARDS GENERATED
+                    </Text>
+                    <Text selectable style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
+                      {flashcardAttachment.flashcardTitle?.trim() || 'Generated flashcards'}
+                    </Text>
+                    <Text
+                      selectable
+                      style={{ color: flashcardCardHint, fontSize: 12.5, lineHeight: 18, fontWeight: '700' }}
+                    >
+                      Navigate to flashcards
+                    </Text>
+                  </Pressable>
+                ) : null}
               </View>
             );
           })
@@ -204,6 +245,39 @@ export function LokiConversationPanel({
       </View>
     </BlurView>
   );
+}
+
+function getFlashcardAttachment(message: RemoteLokiMessage) {
+  if (message.hasFlashcards && message.flashcardSetId) {
+    return {
+      hasFlashcards: true,
+      flashcardSetId: message.flashcardSetId,
+      flashcardTitle: message.flashcardTitle,
+    };
+  }
+
+  if (!message.retrievalMetadata || typeof message.retrievalMetadata !== 'object' || Array.isArray(message.retrievalMetadata)) {
+    return {
+      hasFlashcards: false,
+      flashcardSetId: null,
+      flashcardTitle: null,
+    };
+  }
+
+  const metadata = message.retrievalMetadata as Record<string, unknown>;
+  const flashcards =
+    metadata.flashcards && typeof metadata.flashcards === 'object' && !Array.isArray(metadata.flashcards)
+      ? (metadata.flashcards as Record<string, unknown>)
+      : null;
+  const flashcardSetId = typeof flashcards?.flashcardSetId === 'string' ? flashcards.flashcardSetId : null;
+  const flashcardTitle = typeof flashcards?.flashcardTitle === 'string' ? flashcards.flashcardTitle : null;
+  const hasFlashcards = flashcards?.hasFlashcards === true && Boolean(flashcardSetId);
+
+  return {
+    hasFlashcards,
+    flashcardSetId: hasFlashcards ? flashcardSetId : null,
+    flashcardTitle: hasFlashcards ? flashcardTitle : null,
+  };
 }
 
 function getUniqueLectureCitations(citations: RemoteLokiMessage['citations']) {

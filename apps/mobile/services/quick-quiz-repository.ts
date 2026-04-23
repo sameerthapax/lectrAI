@@ -216,6 +216,8 @@ export async function upsertDailyQuickQuiz(bundle: RemoteDailyQuickQuizBundle) {
     return;
   }
 
+  const quiz = bundle.quiz;
+
   await runSerializedLocalWrite(async (db) => {
     await ensureDailyQuickQuizCacheReady(db);
     await db.withTransactionAsync(async () => {
@@ -225,7 +227,7 @@ export async function upsertDailyQuickQuiz(bundle: RemoteDailyQuickQuizBundle) {
          WHERE scope = 'daily_quick'
            AND available_on = ?
          LIMIT 1`,
-        [bundle.quiz.availableOn]
+        [quiz.availableOn]
       );
 
       const incompleteAttemptForDate = await db.getFirstAsync<{
@@ -242,7 +244,7 @@ export async function upsertDailyQuickQuiz(bundle: RemoteDailyQuickQuizBundle) {
            AND cached_quizzes.available_on = ?
            AND local_quiz_attempts.is_completed = 0
          LIMIT 1`,
-        [bundle.quiz.availableOn]
+        [quiz.availableOn]
       );
 
       // Keep the in-progress local quiz stable until the user finishes it.
@@ -257,7 +259,7 @@ export async function upsertDailyQuickQuiz(bundle: RemoteDailyQuickQuizBundle) {
 
       if (
         existingQuizForDate &&
-        existingQuizForDate.id !== bundle.quiz.id &&
+        existingQuizForDate.id !== quiz.id &&
         incompleteAttemptForDate
       ) {
         return;
@@ -268,7 +270,7 @@ export async function upsertDailyQuickQuiz(bundle: RemoteDailyQuickQuizBundle) {
          WHERE scope = 'daily_quick'
            AND available_on = ?
            AND id <> ?`,
-        [bundle.quiz.availableOn, bundle.quiz.id]
+        [quiz.availableOn, quiz.id]
       );
 
       await db.runAsync(
@@ -313,18 +315,18 @@ export async function upsertDailyQuickQuiz(bundle: RemoteDailyQuickQuizBundle) {
            dirty_fields_json = excluded.dirty_fields_json,
            last_synced_at = excluded.last_synced_at`,
         [
-          bundle.quiz.id,
+          quiz.id,
           null,
           bundle.attempt?.userId ?? null,
           null,
-          bundle.quiz.title,
-          bundle.quiz.quizType,
-          bundle.quiz.difficulty,
-          bundle.quiz.questionCount,
-          bundle.quiz.estimatedMinutes,
-          bundle.quiz.availableOn,
-          bundle.quiz.createdAt,
-          bundle.quiz.updatedAt,
+          quiz.title,
+          quiz.quizType,
+          quiz.difficulty,
+          quiz.questionCount,
+          quiz.estimatedMinutes,
+          quiz.availableOn,
+          quiz.createdAt,
+          quiz.updatedAt,
           JSON.stringify([]),
         ]
       );
@@ -336,11 +338,11 @@ export async function upsertDailyQuickQuiz(bundle: RemoteDailyQuickQuizBundle) {
            FROM cached_quiz_questions
            WHERE quiz_id = ?
          )`,
-        [bundle.quiz.id]
+        [quiz.id]
       );
-      await db.runAsync('DELETE FROM cached_quiz_questions WHERE quiz_id = ?', [bundle.quiz.id]);
+      await db.runAsync('DELETE FROM cached_quiz_questions WHERE quiz_id = ?', [quiz.id]);
 
-      for (const question of bundle.quiz.questions) {
+      for (const question of quiz.questions) {
         await db.runAsync(
           `INSERT INTO cached_quiz_questions (
              id,
@@ -378,7 +380,7 @@ export async function upsertDailyQuickQuiz(bundle: RemoteDailyQuickQuizBundle) {
              last_synced_at = excluded.last_synced_at`,
           [
             question.id,
-            bundle.quiz.id,
+            quiz.id,
             null,
             question.questionOrder,
             question.questionType,

@@ -35,6 +35,9 @@ export type RemoteLokiMessage = {
   hasQuiz: boolean;
   quizId: string | null;
   quizTitle: string | null;
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
   createdAt: string;
   citations: RemoteLokiCitation[];
 };
@@ -78,6 +81,9 @@ export type RemoteLokiReply = {
   hasQuiz: boolean;
   quizId: string | null;
   quizTitle: string | null;
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
 };
 
 type RequestOptions = {

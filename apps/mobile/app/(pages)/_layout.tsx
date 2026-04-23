@@ -10,6 +10,7 @@ export default function PagesLayout() {
       <Stack.Screen name="course-file/[courseFileId]" />
       <Stack.Screen name="loki-history" />
       <Stack.Screen name="loki-session/[sessionId]" />
+      <Stack.Screen name="flashcards/[flashcardSetId]" />
       <Stack.Screen name="quiz/[quizId]" />
       <Stack.Screen name="recording-results-page" />
     </Stack>

@@ -1068,6 +1068,9 @@ function createPendingMessage(
     hasQuiz: false,
     quizId: null,
     quizTitle: null,
+    hasFlashcards: false,
+    flashcardSetId: null,
+    flashcardTitle: null,
     createdAt: new Date().toISOString(),
     citations: [],
   };
@@ -1079,6 +1082,9 @@ function withReplyQuizMetadata(reply: Awaited<ReturnType<typeof sendLokiReply>>)
     hasQuiz: reply.assistantMessage.hasQuiz || reply.hasQuiz,
     quizId: reply.assistantMessage.quizId ?? reply.quizId ?? null,
     quizTitle: reply.assistantMessage.quizTitle ?? reply.quizTitle ?? null,
+    hasFlashcards: reply.assistantMessage.hasFlashcards || reply.hasFlashcards,
+    flashcardSetId: reply.assistantMessage.flashcardSetId ?? reply.flashcardSetId ?? null,
+    flashcardTitle: reply.assistantMessage.flashcardTitle ?? reply.flashcardTitle ?? null,
   };
 }
 

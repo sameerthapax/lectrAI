@@ -2,11 +2,12 @@ import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import LottieView from 'lottie-react-native';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { NativeBackButton } from '../../../../components/ui/native-back-button';
 import quickQuizAnimation from '../../../../assets/animations/quick-quiz.json';
 import buttonPressSoundFx from '../../../../assets/animations/soundfx/button-press-soundfx.mp3';
 import poppingAnimationSoundFx from '../../../../assets/animations/soundfx/popping-animation-soundfx.mp3';
+import { getResponsiveStudyLayout } from '../../../../components/study/responsive-study-layout';
 import { useSettings } from '../../../../providers/settings-provider';
 
 type MockQuizOption = {
@@ -165,6 +166,7 @@ export default function DynamicQuizRoute() {
   }>();
   const settingsState = useSettings();
   const theme = settingsState.theme;
+  const { width: screenWidth } = useWindowDimensions();
   const [questionIndex, setQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState<QuizAnswerState[]>([]);
   const [quizCompleted, setQuizCompleted] = useState(false);
@@ -183,6 +185,43 @@ export default function DynamicQuizRoute() {
   const progressRatio = answeredCount / MOCK_DYNAMIC_QUIZ.questionCount;
   const displayCourseName =
     typeof courseName === 'string' && courseName.trim().length > 0 ? courseName : 'Selected course';
+  const courseLabelLayout = getResponsiveStudyLayout(displayCourseName, {
+    screenWidth,
+    baseFontSize: 14,
+    minFontSize: 12,
+    baseLineHeight: 20,
+    minLineHeight: 17,
+    shrinkStartWords: 6,
+    shrinkWordsPerStep: 4,
+  });
+  const questionLayout = getResponsiveStudyLayout(currentQuestion?.questionText, {
+    screenWidth,
+    baseFontSize: 24,
+    minFontSize: 18,
+    baseLineHeight: 30,
+    minLineHeight: 23,
+    shrinkStartWords: 12,
+    shrinkWordsPerStep: 5,
+    baseMinHeight: 124,
+    expandStartWords: 24,
+    expandWordsPerStep: 8,
+    expandHeightStep: 24,
+    maxExtraHeight: 144,
+  });
+  const explanationLayout = getResponsiveStudyLayout(currentQuestion?.explanation, {
+    screenWidth,
+    baseFontSize: 14,
+    minFontSize: 13,
+    baseLineHeight: 20,
+    minLineHeight: 18,
+    shrinkStartWords: 18,
+    shrinkWordsPerStep: 10,
+    baseMinHeight: 68,
+    expandStartWords: 28,
+    expandWordsPerStep: 12,
+    expandHeightStep: 18,
+    maxExtraHeight: 72,
+  });
 
   useEffect(() => {
     void setAudioModeAsync({
@@ -344,7 +383,14 @@ export default function DynamicQuizRoute() {
                 <Text style={{ color: theme.colors.text, fontSize: 26, lineHeight: 30, fontWeight: '900' }}>
                   Quiz
                 </Text>
-                <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20, fontWeight: '600' }}>
+                <Text
+                  style={{
+                    color: theme.colors.textMuted,
+                    fontSize: courseLabelLayout.fontSize,
+                    lineHeight: courseLabelLayout.lineHeight,
+                    fontWeight: '600',
+                  }}
+                >
                   {displayCourseName}
                 </Text>
               </View>
@@ -357,7 +403,7 @@ export default function DynamicQuizRoute() {
               />
             </View>
 
-            <View style={{ flexDirection: 'row', gap: 10 }}>
+            <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
               <Pill label={`${MOCK_DYNAMIC_QUIZ.questionCount} questions`} themeColor={theme.colors.cardMuted} textColor={theme.colors.text} />
               <Pill label={`${MOCK_DYNAMIC_QUIZ.estimatedMinutes} min`} themeColor={theme.colors.cardMuted} textColor={theme.colors.text} />
               <Pill label={courseId ? 'Course-linked' : 'Mock'} themeColor={theme.colors.accentSoft} textColor={theme.colors.accentMuted} />
@@ -404,6 +450,7 @@ export default function DynamicQuizRoute() {
                     borderRadius: 22,
                     borderCurve: 'continuous',
                     padding: 16,
+                    minHeight: questionLayout.minHeight,
                     backgroundColor: theme.colors.cardMuted,
                     borderWidth: 1,
                     borderColor: theme.colors.border,
@@ -412,8 +459,8 @@ export default function DynamicQuizRoute() {
                   <Text
                     style={{
                       color: theme.colors.text,
-                      fontSize: 24,
-                      lineHeight: 30,
+                      fontSize: questionLayout.fontSize,
+                      lineHeight: questionLayout.lineHeight,
                       fontWeight: '900',
                     }}
                   >
@@ -423,62 +470,33 @@ export default function DynamicQuizRoute() {
 
                 <View style={{ gap: 10 }}>
                   {currentQuestion.options.map((option) => (
-                    <Pressable
+                    <ResponsiveMockQuizOption
                       key={option.id}
+                      optionText={option.text}
+                      screenWidth={screenWidth}
                       disabled={Boolean(currentAnswer)}
                       onPress={() => handleSelectOption(option.id)}
-                      style={({ pressed }) => ({
-                        minHeight: 66,
-                        borderRadius: 20,
-                        borderCurve: 'continuous',
-                        paddingHorizontal: 14,
-                        paddingVertical: 12,
-                        flexDirection: 'row',
-                        gap: 12,
-                        alignItems: 'center',
-                        backgroundColor: getOptionBackgroundColor({
-                          option,
-                          answer: currentAnswer,
-                          theme,
-                        }),
-                        borderWidth: 1,
-                        borderColor: getOptionBorderColor({
-                          option,
-                          answer: currentAnswer,
-                          theme,
-                        }),
-                        opacity: !currentAnswer && pressed ? 0.92 : 1,
+                      backgroundColor={getOptionBackgroundColor({
+                        option,
+                        answer: currentAnswer,
+                        theme,
                       })}
+                      borderColor={getOptionBorderColor({
+                        option,
+                        answer: currentAnswer,
+                        theme,
+                      })}
+                      textColor={theme.colors.text}
+                      badgeColor={getOptionBadgeColor({
+                        option,
+                        answer: currentAnswer,
+                        theme,
+                      })}
+                      badgeLabel={option.label}
+                      isSelected={currentAnswer?.selectedOptionId === option.id}
                     >
-                      <View
-                        style={{
-                          width: 34,
-                          height: 34,
-                          borderRadius: 17,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          backgroundColor: getOptionBadgeColor({
-                            option,
-                            answer: currentAnswer,
-                            theme,
-                          }),
-                        }}
-                      >
-                        <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '900' }}>{option.label}</Text>
-                      </View>
-
-                      <Text
-                        style={{
-                          flex: 1,
-                          color: theme.colors.text,
-                          fontSize: 15,
-                          lineHeight: 20,
-                          fontWeight: currentAnswer?.selectedOptionId === option.id ? '800' : '600',
-                        }}
-                      >
-                        {option.text}
-                      </Text>
-                    </Pressable>
+                      {option.text}
+                    </ResponsiveMockQuizOption>
                   ))}
                 </View>
 
@@ -504,16 +522,18 @@ export default function DynamicQuizRoute() {
                     >
                       {currentAnswer.isCorrect ? 'Correct answer' : 'Incorrect answer'}
                     </Text>
-                    <Text
-                      style={{
-                        color: theme.colors.text,
-                        fontSize: 14,
-                        lineHeight: 20,
-                        fontWeight: '600',
-                      }}
-                    >
-                      {currentQuestion.explanation}
-                    </Text>
+                    <View style={{ minHeight: explanationLayout.minHeight, justifyContent: 'center' }}>
+                      <Text
+                        style={{
+                          color: theme.colors.text,
+                          fontSize: explanationLayout.fontSize,
+                          lineHeight: explanationLayout.lineHeight,
+                          fontWeight: '600',
+                        }}
+                      >
+                        {currentQuestion.explanation}
+                      </Text>
+                    </View>
                   </View>
                 ) : (
                   <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20, fontWeight: '600' }}>
@@ -654,6 +674,81 @@ function Pill({
     >
       <Text style={{ color: textColor, fontSize: 12, fontWeight: '800' }}>{label}</Text>
     </View>
+  );
+}
+
+function ResponsiveMockQuizOption(input: {
+  optionText: string;
+  screenWidth: number;
+  disabled: boolean;
+  onPress: () => void;
+  backgroundColor: string;
+  borderColor: string;
+  textColor: string;
+  badgeColor: string;
+  badgeLabel: string;
+  isSelected: boolean;
+  children: string;
+}) {
+  const optionLayout = getResponsiveStudyLayout(input.optionText, {
+    screenWidth: input.screenWidth,
+    baseFontSize: 15,
+    minFontSize: 13,
+    baseLineHeight: 20,
+    minLineHeight: 18,
+    shrinkStartWords: 8,
+    shrinkWordsPerStep: 4,
+    baseMinHeight: 66,
+    expandStartWords: 16,
+    expandWordsPerStep: 6,
+    expandHeightStep: 14,
+    maxExtraHeight: 70,
+  });
+
+  return (
+    <Pressable
+      disabled={input.disabled}
+      onPress={input.onPress}
+      style={({ pressed }) => ({
+        minHeight: optionLayout.minHeight,
+        borderRadius: 20,
+        borderCurve: 'continuous',
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        flexDirection: 'row',
+        gap: 12,
+        alignItems: 'center',
+        backgroundColor: input.backgroundColor,
+        borderWidth: 1,
+        borderColor: input.borderColor,
+        opacity: !input.disabled && pressed ? 0.92 : 1,
+      })}
+    >
+      <View
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 17,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: input.badgeColor,
+        }}
+      >
+        <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '900' }}>{input.badgeLabel}</Text>
+      </View>
+
+      <Text
+        style={{
+          flex: 1,
+          color: input.textColor,
+          fontSize: optionLayout.fontSize,
+          lineHeight: optionLayout.lineHeight,
+          fontWeight: input.isSelected ? '800' : '600',
+        }}
+      >
+        {input.children}
+      </Text>
+    </Pressable>
   );
 }
 

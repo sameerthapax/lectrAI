@@ -12,6 +12,11 @@ import {
   type TranscriptChunkSearchResult,
 } from '../lectures/transcript-embeddings.service.js';
 import {
+  generateLokiFlashcardsForUser,
+  type LokiFlashcardSourceContext,
+  type StoredFlashcardSetRecord,
+} from '../flashcards/flashcards.service.js';
+import {
   generateLokiQuizForUser,
   type LokiQuizSourceContext,
   type StoredQuizRecord,
@@ -44,6 +49,7 @@ const LIST_RECENT_LECTURES_TOOL_NAME = 'list_recent_course_lectures';
 const LIST_RECENT_FILES_TOOL_NAME = 'list_recent_course_files';
 const TRANSCRIPT_SEARCH_TOOL_NAME = 'search_transcript_chunks';
 const CREATE_QUIZ_TOOL_NAME = 'create_quiz';
+const CREATE_FLASHCARDS_TOOL_NAME = 'create_flashcards';
 const GET_CURRENT_DATE_AND_TIME_TOOL_NAME = 'get_current_date_and_time';
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -183,6 +189,9 @@ export type ChatMessageRecord = {
   hasQuiz: boolean;
   quizId: string | null;
   quizTitle: string | null;
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
   createdAt: string;
   citations: ChatCitationRecord[];
 };
@@ -224,6 +233,12 @@ type AssistantQuizAttachment = {
   quizTitle: string | null;
 };
 
+type AssistantFlashcardAttachment = {
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
+};
+
 export type GeneratedAssistantReply = {
   session: ChatSessionRecord;
   userMessage: ChatMessageRecord;
@@ -231,6 +246,7 @@ export type GeneratedAssistantReply = {
   retrieval: RetrievedContext;
   audio: AssistantAudioPayload | null;
   quiz: AssistantQuizAttachment | null;
+  flashcards: AssistantFlashcardAttachment | null;
 };
 
 export type AssistantAudioPayload = {
@@ -411,6 +427,7 @@ export async function generateChatReplyForUser(
     retrieval,
     memories,
     quiz: modelResponse.quiz,
+    flashcards: modelResponse.flashcards,
   });
   const audio = input.muteAudioResponse ? null : await generateAssistantAudio(modelResponse.messageText);
 
@@ -437,6 +454,7 @@ export async function generateChatReplyForUser(
     retrieval,
     audio,
     quiz: modelResponse.quiz,
+    flashcards: modelResponse.flashcards,
   };
 }
 
@@ -573,6 +591,7 @@ async function requestTutorResponse(input: {
     tool_choice: 'auto',
   })) as unknown as OpenAiResponsesResponse;
   let latestQuiz: StoredQuizRecord | null = null;
+  let latestFlashcards: StoredFlashcardSetRecord | null = null;
   let latestUsage = readUsage(response.usage);
 
   for (let step = 0; step < MAX_TUTOR_TOOL_STEPS; step += 1) {
@@ -592,6 +611,27 @@ async function requestTutorResponse(input: {
               quizId: latestQuiz.id,
               quizTitle: latestQuiz.title,
             },
+            flashcards: latestFlashcards
+              ? {
+                  hasFlashcards: true,
+                  flashcardSetId: latestFlashcards.id,
+                  flashcardTitle: latestFlashcards.title,
+                }
+              : null,
+          };
+        }
+
+        if (latestFlashcards) {
+          return {
+            messageText: `I generated your flashcards "${latestFlashcards.title ?? 'Generated flashcards'}". Open them from the card below.`,
+            modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+            usage: latestUsage,
+            quiz: null,
+            flashcards: {
+              hasFlashcards: true,
+              flashcardSetId: latestFlashcards.id,
+              flashcardTitle: latestFlashcards.title,
+            },
           };
         }
 
@@ -609,16 +649,56 @@ async function requestTutorResponse(input: {
               quizTitle: latestQuiz.title,
             }
           : null,
+        flashcards: latestFlashcards
+          ? {
+              hasFlashcards: true,
+              flashcardSetId: latestFlashcards.id,
+              flashcardTitle: latestFlashcards.title,
+            }
+          : null,
       };
     }
 
     const toolOutputs: Array<Record<string, unknown>> = [];
 
     for (const toolCall of toolCalls) {
-      const result = await executeTutorToolCall(input, toolCall);
+      let result;
+
+      try {
+        result = await executeTutorToolCall(input, toolCall);
+      } catch (error) {
+        if (toolCall.name === CREATE_FLASHCARDS_TOOL_NAME) {
+          console.warn('[ chat ] Loki flashcard tool failed.', error);
+          return {
+            messageText: 'I am having a little difficulty generating those flashcards right now. Please try again.',
+            modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+            usage: latestUsage,
+            quiz: latestQuiz
+              ? {
+                  hasQuiz: true,
+                  quizId: latestQuiz.id,
+                  quizTitle: latestQuiz.title,
+                }
+              : null,
+            flashcards: latestFlashcards
+              ? {
+                  hasFlashcards: true,
+                  flashcardSetId: latestFlashcards.id,
+                  flashcardTitle: latestFlashcards.title,
+                }
+              : null,
+          };
+        }
+
+        throw error;
+      }
 
       if (result.quiz) {
         latestQuiz = result.quiz;
+      }
+
+      if (result.flashcards) {
+        latestFlashcards = result.flashcards;
       }
 
       toolOutputs.push({
@@ -654,6 +734,33 @@ async function requestTutorResponse(input: {
         quizId: latestQuiz.id,
         quizTitle: latestQuiz.title,
       },
+      flashcards: latestFlashcards
+        ? {
+            hasFlashcards: true,
+            flashcardSetId: latestFlashcards.id,
+            flashcardTitle: latestFlashcards.title,
+          }
+        : null,
+    };
+  }
+
+  if (!messageText && latestFlashcards) {
+    return {
+      messageText: `I generated your flashcards "${latestFlashcards.title ?? 'Generated flashcards'}". Open them from the card below.`,
+      modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+      usage: latestUsage,
+      quiz: latestQuiz
+        ? {
+            hasQuiz: true,
+            quizId: latestQuiz.id,
+            quizTitle: latestQuiz.title,
+          }
+        : null,
+      flashcards: {
+        hasFlashcards: true,
+        flashcardSetId: latestFlashcards.id,
+        flashcardTitle: latestFlashcards.title,
+      },
     };
   }
 
@@ -670,6 +777,13 @@ async function requestTutorResponse(input: {
           hasQuiz: true,
           quizId: latestQuiz.id,
           quizTitle: latestQuiz.title,
+        }
+      : null,
+    flashcards: latestFlashcards
+      ? {
+          hasFlashcards: true,
+          flashcardSetId: latestFlashcards.id,
+          flashcardTitle: latestFlashcards.title,
         }
       : null,
   };
@@ -696,12 +810,16 @@ function buildOpenAiInput(input: {
     `When the user asks to list the user's courses, count courses, or identify which courses they have, call the ${LIST_COURSES_TOOL_NAME} tool instead of saying you cannot access the course list.`,
     `When the user asks what course is next, what courses are scheduled today, or any question that depends on the current day or time, call both ${GET_CURRENT_DATE_AND_TIME_TOOL_NAME} and ${LIST_COURSES_TOOL_NAME} before answering.`,
     `When the user asks you to generate a quiz, practice quiz, or practice test, call the ${CREATE_QUIZ_TOOL_NAME} tool instead of pasting the whole quiz into the chat.`,
+    `When the user asks you to generate flashcards, study cards, or revision cards, call the ${CREATE_FLASHCARDS_TOOL_NAME} tool instead of pasting the whole set into the chat.`,
     'After a quiz tool succeeds, briefly tell the user the quiz is ready and invite them to open it.',
+    'After a flashcard tool succeeds, briefly tell the user the flashcards are ready and invite them to open them.',
     'You may execute multiple tool calls in the same response loop when needed.',
     'When relevant, use the personal memory context to personalize continuity and study help, but never let it override lecture facts.',
     'If personal memory conflicts with retrieved lecture context, trust the lecture context for subject matter and treat memory as preference context only.',
     'For quiz generation, do not ask speaker-identification questions, quote-matching questions, line-specific transcript questions, or questions about who said something in lecture.',
     'For quiz generation, produce concept-based questions that test understanding of the knowledge taught in the lectures rather than recall of transcript wording.',
+    'For flashcard generation, use lecture and course material only as knowledge background and transform it into standalone concept-based study cards.',
+    'For flashcard generation, do not generate speaker-based, quote-based, line-by-line, or transcript-trivia flashcards.',
   ].join(' ');
 
   const scopeLabel = input.scope.lectureId
@@ -823,6 +941,22 @@ function buildTutorTools() {
         required: ['questionCount', 'title'],
       },
     },
+    {
+      type: 'function',
+      name: CREATE_FLASHCARDS_TOOL_NAME,
+      description:
+        'Generate a stored flashcard set for the current user when they ask for flashcards, study cards, or revision cards.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          cardCount: { type: ['integer', 'null'], minimum: 4, maximum: 12 },
+          title: { type: ['string', 'null'] },
+        },
+        required: ['cardCount', 'title'],
+      },
+    },
   ];
 }
 
@@ -846,6 +980,7 @@ async function executeTutorToolCall(
         courses: courses.map(mapCourseForPlanner),
       },
       quiz: null,
+      flashcards: null,
     };
   }
 
@@ -855,6 +990,7 @@ async function executeTutorToolCall(
     return {
       output: currentDateTime,
       quiz: null,
+      flashcards: null,
     };
   }
 
@@ -875,6 +1011,28 @@ async function executeTutorToolCall(
         questionCount: quiz.questionCount,
       },
       quiz,
+      flashcards: null,
+    };
+  }
+
+  if (toolCall.name === CREATE_FLASHCARDS_TOOL_NAME) {
+    const args = readCreateFlashcardsToolArgs(toolCall.arguments);
+    const flashcards = await generateLokiFlashcardsForUser({
+      userId: input.userId,
+      message: input.currentMessage,
+      cardCount: args.cardCount ?? undefined,
+      titleHint: args.title ?? null,
+      contexts: buildFlashcardGenerationContexts(input.retrieval),
+    });
+
+    return {
+      output: {
+        flashcardSetId: flashcards.id,
+        title: flashcards.title,
+        cardCount: flashcards.cardCount,
+      },
+      quiz: null,
+      flashcards,
     };
   }
 
@@ -890,6 +1048,73 @@ function mapRetrievalChunkToQuizSourceContext(entry: TranscriptChunkSearchResult
     similarity: entry.chunk.similarity,
     content: entry.chunk.content,
   };
+}
+
+function mapRetrievalChunkToFlashcardSourceContext(entry: TranscriptChunkSearchResult): LokiFlashcardSourceContext {
+  return {
+    sourceType: 'transcript',
+    sourceId: entry.chunk.id,
+    lectureId: entry.transcript.lectureId,
+    lectureTitle: entry.transcript.lectureTitle,
+    courseId: entry.transcript.courseId,
+    courseName: entry.transcript.courseName,
+    similarity: entry.chunk.similarity,
+    content: entry.chunk.content,
+  };
+}
+
+function buildFlashcardGenerationContexts(retrieval: RetrievedContext): LokiFlashcardSourceContext[] {
+  const transcriptContexts = retrieval.chunks.map(mapRetrievalChunkToFlashcardSourceContext);
+  const scopeContexts = (retrieval.scopeItems ?? []).map((item): LokiFlashcardSourceContext => {
+    if (item.type === 'file') {
+      return {
+        sourceType: 'course_file',
+        sourceId: item.id,
+        lectureId: null,
+        lectureTitle: null,
+        courseId: item.courseId,
+        courseName: null,
+        similarity: null,
+        content: `${item.title}. ${item.detail}`.trim(),
+      };
+    }
+
+    if (item.type === 'lecture') {
+      return {
+        sourceType: 'lecture_metadata',
+        sourceId: item.id,
+        lectureId: item.id,
+        lectureTitle: item.title,
+        courseId: item.courseId,
+        courseName: null,
+        similarity: null,
+        content: `${item.title}. ${item.detail}`.trim(),
+      };
+    }
+
+    return {
+      sourceType: 'course_metadata',
+      sourceId: item.id,
+      lectureId: null,
+      lectureTitle: null,
+      courseId: item.id,
+      courseName: item.title,
+      similarity: null,
+      content: `${item.title}. ${item.detail}`.trim(),
+    };
+  });
+
+  const deduped = new Map<string, LokiFlashcardSourceContext>();
+
+  for (const context of [...transcriptContexts, ...scopeContexts]) {
+    const key = `${context.sourceType}:${context.sourceId}`;
+
+    if (!deduped.has(key)) {
+      deduped.set(key, context);
+    }
+  }
+
+  return Array.from(deduped.values());
 }
 
 async function decideRetrievalForUser(
@@ -1218,6 +1443,7 @@ async function createAssistantMessageWithCitations(input: {
   retrieval: RetrievedContext;
   memories: LokiMemory[];
   quiz: AssistantQuizAttachment | null;
+  flashcards: AssistantFlashcardAttachment | null;
 }) {
   const db = getDb();
 
@@ -1243,7 +1469,7 @@ async function createAssistantMessageWithCitations(input: {
         ${input.usage.promptTokens},
         ${input.usage.completionTokens},
         ${input.usage.totalTokens},
-        ${JSON.stringify(buildRetrievalMetadata(input.retrieval, input.memories, input.quiz))}::jsonb
+        ${JSON.stringify(buildRetrievalMetadata(input.retrieval, input.memories, input.quiz, input.flashcards))}::jsonb
       )
       returning
         id::text as id,
@@ -1381,7 +1607,8 @@ async function touchChatSession(
 function buildRetrievalMetadata(
   retrieval: RetrievedContext,
   memories: LokiMemory[],
-  quiz: AssistantQuizAttachment | null
+  quiz: AssistantQuizAttachment | null,
+  flashcards: AssistantFlashcardAttachment | null
 ) {
   return {
     decision: retrieval.decision ?? null,
@@ -1405,6 +1632,7 @@ function buildRetrievalMetadata(
       content: entry.chunk.content,
     })),
     quiz: quiz ?? null,
+    flashcards: flashcards ?? null,
   };
 }
 
@@ -1932,6 +2160,15 @@ function readCreateQuizToolArgs(rawArguments: string) {
 
   return {
     questionCount: readOptionalBoundedInteger(record.questionCount, 'questionCount', 3, 10),
+    title: readOptionalString(record.title, 'title'),
+  };
+}
+
+function readCreateFlashcardsToolArgs(rawArguments: string) {
+  const record = readJsonObject(rawArguments, 'OpenAI tutor returned invalid flashcard tool arguments.');
+
+  return {
+    cardCount: readOptionalBoundedInteger(record.cardCount, 'cardCount', 4, 12),
     title: readOptionalString(record.title, 'title'),
   };
 }
@@ -2530,6 +2767,7 @@ function mapChatSessionRow(row: DbChatSessionRow): ChatSessionRecord {
 
 function mapChatMessageRow(row: DbChatMessageRow): Omit<ChatMessageRecord, 'citations'> {
   const quiz = readQuizAttachmentFromMetadata(row.retrieval_metadata);
+  const flashcards = readFlashcardAttachmentFromMetadata(row.retrieval_metadata);
 
   return {
     id: row.id,
@@ -2543,6 +2781,9 @@ function mapChatMessageRow(row: DbChatMessageRow): Omit<ChatMessageRecord, 'cita
     hasQuiz: quiz.hasQuiz,
     quizId: quiz.quizId,
     quizTitle: quiz.quizTitle,
+    hasFlashcards: flashcards.hasFlashcards,
+    flashcardSetId: flashcards.flashcardSetId,
+    flashcardTitle: flashcards.flashcardTitle,
     createdAt: row.created_at,
   };
 }
@@ -2558,6 +2799,26 @@ function readQuizAttachmentFromMetadata(metadata: unknown): AssistantQuizAttachm
     hasQuiz,
     quizId: hasQuiz ? quizId : null,
     quizTitle: hasQuiz ? quizTitle : null,
+  };
+}
+
+function readFlashcardAttachmentFromMetadata(metadata: unknown): AssistantFlashcardAttachment {
+  const record = readObjectRecord(metadata);
+  const flashcards = readObjectRecord(record?.flashcards);
+  const flashcardSetId =
+    typeof flashcards?.flashcardSetId === 'string' && UUID_REGEX.test(flashcards.flashcardSetId)
+      ? flashcards.flashcardSetId
+      : null;
+  const flashcardTitle =
+    typeof flashcards?.flashcardTitle === 'string' && flashcards.flashcardTitle.trim().length > 0
+      ? flashcards.flashcardTitle.trim()
+      : null;
+  const hasFlashcards = flashcards?.hasFlashcards === true && Boolean(flashcardSetId);
+
+  return {
+    hasFlashcards,
+    flashcardSetId: hasFlashcards ? flashcardSetId : null,
+    flashcardTitle: hasFlashcards ? flashcardTitle : null,
   };
 }
 

@@ -10,12 +10,14 @@ import {
   ScrollView,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import flashcardAnimation from '../../../../assets/animations/flashcard_animation.json';
 import flashcardFinalPopAnimation from '../../../../assets/animations/flashcard_final_pop.json';
 import nextButtonPressFlashCardSoundFx from '../../../../assets/animations/soundfx/next_button_press_flashCard.mp3';
 import poppingAnimationSoundFx from '../../../../assets/animations/soundfx/popping-animation-soundfx.mp3';
 import whooshFlashCardSoundFx from '../../../../assets/animations/soundfx/whoosh_flash_card.mp3';
+import { getResponsiveStudyLayout } from '../../../../components/study/responsive-study-layout';
 import { NativeBackButton } from '../../../../components/ui/native-back-button';
 import { useAppTheme, useSettings } from '../../../../providers/settings-provider';
 
@@ -79,6 +81,7 @@ export default function FlashcardsRoute() {
     courseName?: string;
   }>();
   const theme = useAppTheme();
+  const { width: screenWidth } = useWindowDimensions();
   const settingsState = useSettings();
   const [cardIndex, setCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
@@ -97,6 +100,83 @@ export default function FlashcardsRoute() {
   const currentCard = MOCK_FLASHCARDS[cardIndex] ?? MOCK_FLASHCARDS[0];
   const progressLabel = `${cardIndex + 1} / ${MOCK_FLASHCARDS.length}`;
   const isOnLastCard = cardIndex === MOCK_FLASHCARDS.length - 1;
+  const summaryTitleLayout = getResponsiveStudyLayout(displayCourseName, {
+    screenWidth,
+    baseFontSize: 28,
+    minFontSize: 22,
+    baseLineHeight: 34,
+    minLineHeight: 28,
+    shrinkStartWords: 5,
+    shrinkWordsPerStep: 2,
+  });
+  const summaryTopicLayout = getResponsiveStudyLayout(currentCard.topic, {
+    screenWidth,
+    baseFontSize: 12,
+    minFontSize: 11,
+    baseLineHeight: 16,
+    minLineHeight: 14,
+    shrinkStartWords: 4,
+    shrinkWordsPerStep: 3,
+    baseMinHeight: 36,
+    expandStartWords: 8,
+    expandWordsPerStep: 4,
+    expandHeightStep: 8,
+    maxExtraHeight: 24,
+  });
+  const frontLayout = getResponsiveStudyLayout(currentCard.prompt, {
+    screenWidth,
+    baseFontSize: 30,
+    minFontSize: 21,
+    baseLineHeight: 38,
+    minLineHeight: 28,
+    shrinkStartWords: 12,
+    shrinkWordsPerStep: 4,
+    baseMinHeight: 430,
+    expandStartWords: 28,
+    expandWordsPerStep: 8,
+    expandHeightStep: 34,
+    maxExtraHeight: 204,
+  });
+  const backLayout = getResponsiveStudyLayout(currentCard.answer, {
+    screenWidth,
+    baseFontSize: 28,
+    minFontSize: 18,
+    baseLineHeight: 36,
+    minLineHeight: 25,
+    shrinkStartWords: 12,
+    shrinkWordsPerStep: 4,
+    baseMinHeight: 430,
+    expandStartWords: 26,
+    expandWordsPerStep: 8,
+    expandHeightStep: 42,
+    maxExtraHeight: 252,
+  });
+  const cueLayout = getResponsiveStudyLayout(currentCard.cue, {
+    screenWidth,
+    baseFontSize: 15,
+    minFontSize: 13,
+    baseLineHeight: 22,
+    minLineHeight: 19,
+    shrinkStartWords: 14,
+    shrinkWordsPerStep: 8,
+    baseMinHeight: 72,
+    expandStartWords: 22,
+    expandWordsPerStep: 10,
+    expandHeightStep: 16,
+    maxExtraHeight: 56,
+  });
+  const backTopicLayout = getResponsiveStudyLayout(currentCard.topic, {
+    screenWidth,
+    baseFontSize: 12,
+    minFontSize: 10,
+    baseLineHeight: 16,
+    minLineHeight: 13,
+    shrinkStartWords: 4,
+    shrinkWordsPerStep: 2,
+  });
+  const backTopicBadgeHeight = 44;
+  const backFaceBottomInset = backTopicBadgeHeight + 18;
+  const flashcardMinHeight = Math.max(frontLayout.minHeight ?? 430, backLayout.minHeight ?? 430);
 
   useEffect(() => {
     void setAudioModeAsync({
@@ -317,7 +397,14 @@ export default function FlashcardsRoute() {
             </View>
 
             <View style={{ gap: 6 }}>
-              <Text style={{ color: theme.colors.text, fontSize: 28, lineHeight: 34, fontWeight: '900' }}>
+              <Text
+                style={{
+                  color: theme.colors.text,
+                  fontSize: summaryTitleLayout.fontSize,
+                  lineHeight: summaryTitleLayout.lineHeight,
+                  fontWeight: '900',
+                }}
+              >
                 {displayCourseName}
               </Text>
               <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20 }}>
@@ -328,20 +415,30 @@ export default function FlashcardsRoute() {
             <View
               style={{
                 flexDirection: 'row',
-                alignItems: 'center',
+                alignItems: 'flex-start',
                 justifyContent: 'space-between',
                 gap: 12,
               }}
             >
               <View
                 style={{
+                  flex: 1,
                   borderRadius: 999,
                   paddingHorizontal: 12,
                   paddingVertical: 7,
                   backgroundColor: theme.colors.pill,
+                  minHeight: summaryTopicLayout.minHeight,
+                  justifyContent: 'center',
                 }}
               >
-                <Text style={{ color: theme.colors.textMuted, fontSize: 12, fontWeight: '800' }}>
+                <Text
+                  style={{
+                    color: theme.colors.textMuted,
+                    fontSize: summaryTopicLayout.fontSize,
+                    lineHeight: summaryTopicLayout.lineHeight,
+                    fontWeight: '800',
+                  }}
+                >
                   Topic: {currentCard.topic}
                 </Text>
               </View>
@@ -367,7 +464,7 @@ export default function FlashcardsRoute() {
                   flipCard(!isFlipped);
                 }}
                 style={({ pressed }) => ({
-                  minHeight: 430,
+                  minHeight: flashcardMinHeight,
                   borderRadius: 32,
                   borderCurve: 'continuous',
                   backgroundColor: theme.colors.card,
@@ -401,7 +498,14 @@ export default function FlashcardsRoute() {
                       <Text style={{ color: theme.colors.textSubtle, fontSize: 12, fontWeight: '800' }}>
                         FRONT
                       </Text>
-                      <Text style={{ color: theme.colors.text, fontSize: 30, lineHeight: 38, fontWeight: '900' }}>
+                      <Text
+                        style={{
+                          color: theme.colors.text,
+                          fontSize: frontLayout.fontSize,
+                          lineHeight: frontLayout.lineHeight,
+                          fontWeight: '900',
+                        }}
+                      >
                         {currentCard.prompt}
                       </Text>
                     </View>
@@ -415,12 +519,19 @@ export default function FlashcardsRoute() {
                         backgroundColor: theme.colors.cardMuted,
                         borderWidth: 1,
                         borderColor: theme.colors.border,
+                        minHeight: cueLayout.minHeight,
                       }}
                     >
                       <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '800' }}>
                         Cue
                       </Text>
-                      <Text style={{ color: theme.colors.text, fontSize: 15, lineHeight: 22 }}>
+                      <Text
+                        style={{
+                          color: theme.colors.text,
+                          fontSize: cueLayout.fontSize,
+                          lineHeight: cueLayout.lineHeight,
+                        }}
+                      >
                         {currentCard.cue}
                       </Text>
                     </View>
@@ -441,7 +552,6 @@ export default function FlashcardsRoute() {
                       borderWidth: 1,
                       borderColor: theme.colors.accentBorder,
                       padding: 24,
-                      justifyContent: 'space-between',
                       transform: [{ perspective: 1400 }, { rotateY: backRotation }],
                     }}
                   >
@@ -449,27 +559,46 @@ export default function FlashcardsRoute() {
                       <Text style={{ color: theme.colors.accentMuted, fontSize: 12, fontWeight: '800' }}>
                         BACK
                       </Text>
-                      <Text style={{ color: theme.colors.text, fontSize: 28, lineHeight: 36, fontWeight: '900' }}>
+                      <Text
+                        style={{
+                          color: theme.colors.text,
+                          fontSize: backLayout.fontSize,
+                          lineHeight: backLayout.lineHeight,
+                          fontWeight: '900',
+                          paddingBottom: backFaceBottomInset,
+                        }}
+                      >
                         {currentCard.answer}
                       </Text>
                     </View>
 
                     <View
                       style={{
-                        borderRadius: 22,
+                        position: 'absolute',
+                        left: 20,
+                        bottom: 20,
+                        maxWidth: '66%',
+                        minHeight: backTopicBadgeHeight,
+                        borderRadius: 999,
                         borderCurve: 'continuous',
-                        padding: 16,
-                        gap: 6,
+                        paddingHorizontal: 12,
+                        paddingVertical: 6,
                         backgroundColor: theme.colors.card,
                         borderWidth: 1,
                         borderColor: theme.colors.accentBorder,
+                        justifyContent: 'center',
                       }}
                     >
-                      <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '800' }}>
-                        Topic
-                      </Text>
-                      <Text style={{ color: theme.colors.text, fontSize: 15, lineHeight: 22 }}>
-                        {currentCard.topic}
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          color: theme.colors.text,
+                          fontSize: backTopicLayout.fontSize,
+                          lineHeight: backTopicLayout.lineHeight,
+                          fontWeight: '700',
+                        }}
+                      >
+                        Topic: {currentCard.topic}
                       </Text>
                     </View>
                   </Animated.View>

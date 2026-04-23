@@ -1356,7 +1356,7 @@ export default function HomeRoute() {
                     </Text>
                     {!quickQuizAttempt.isCompleted &&
                     currentQuickQuizAnswer &&
-                    quickQuizQuestionIndex < quickQuiz.questions.length - 1 ? (
+                    quickQuizQuestionIndex < (quickQuiz?.questions.length ?? 0) - 1 ? (
                       <Pressable
                         accessibilityRole="button"
                         onPress={handleAdvanceQuickQuiz}
@@ -1382,7 +1382,7 @@ export default function HomeRoute() {
                       </Pressable>
                     ) : !quickQuizAttempt.isCompleted &&
                       currentQuickQuizAnswer &&
-                      quickQuizQuestionIndex === quickQuiz.questions.length - 1 ? (
+                      quickQuizQuestionIndex === (quickQuiz?.questions.length ?? 0) - 1 ? (
                       <Pressable
                         accessibilityRole="button"
                         disabled={quickQuizSubmittingQuestionId === quickQuizQuestion.id}

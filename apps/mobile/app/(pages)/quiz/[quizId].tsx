@@ -2,11 +2,12 @@ import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import LottieView from 'lottie-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import quizCompletedAnimation from '../../../assets/animations/quiz-completed.json';
 import quickQuizAnimation from '../../../assets/animations/quick-quiz.json';
 import buttonPressSoundFx from '../../../assets/animations/soundfx/button-press-soundfx.mp3';
 import poppingAnimationSoundFx from '../../../assets/animations/soundfx/popping-animation-soundfx.mp3';
+import { getResponsiveStudyLayout } from '../../../components/study/responsive-study-layout';
 import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAuth } from '../../../providers/auth-provider';
 import { useSettings } from '../../../providers/settings-provider';
@@ -27,6 +28,7 @@ type QuizAnswerState = {
 export default function QuizDetailRoute() {
   const settingsState = useSettings();
   const theme = settingsState.theme;
+  const { width: screenWidth } = useWindowDimensions();
   const auth = useAuth();
   const router = useRouter();
   const { quizId } = useLocalSearchParams<{ quizId?: string }>();
@@ -110,6 +112,43 @@ export default function QuizDetailRoute() {
   const score = answers.filter((answer) => answer.isCorrect).length;
   const missedCount = Math.max(0, answeredCount - score);
   const progressRatio = questionCount > 0 ? answeredCount / questionCount : 0;
+  const subtitleLayout = getResponsiveStudyLayout(getQuizSubtitle(quiz), {
+    screenWidth,
+    baseFontSize: 14,
+    minFontSize: 12,
+    baseLineHeight: 20,
+    minLineHeight: 17,
+    shrinkStartWords: 7,
+    shrinkWordsPerStep: 4,
+  });
+  const questionLayout = getResponsiveStudyLayout(currentQuestion?.questionText, {
+    screenWidth,
+    baseFontSize: 22,
+    minFontSize: 17,
+    baseLineHeight: 28,
+    minLineHeight: 22,
+    shrinkStartWords: 12,
+    shrinkWordsPerStep: 5,
+    baseMinHeight: 136,
+    expandStartWords: 24,
+    expandWordsPerStep: 8,
+    expandHeightStep: 26,
+    maxExtraHeight: 156,
+  });
+  const explanationLayout = getResponsiveStudyLayout(currentQuestion?.explanation, {
+    screenWidth,
+    baseFontSize: 14,
+    minFontSize: 13,
+    baseLineHeight: 20,
+    minLineHeight: 18,
+    shrinkStartWords: 18,
+    shrinkWordsPerStep: 10,
+    baseMinHeight: 72,
+    expandStartWords: 28,
+    expandWordsPerStep: 12,
+    expandHeightStep: 18,
+    maxExtraHeight: 72,
+  });
 
   const handleSelectOption = (optionId: string) => {
     if (!currentQuestion || currentAnswer) {
@@ -282,7 +321,14 @@ export default function QuizDetailRoute() {
                 <Text style={{ color: theme.colors.text, fontSize: 30, lineHeight: 34, fontWeight: '900' }}>
                   Quiz
                 </Text>
-                <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
+                <Text
+                  style={{
+                    color: theme.colors.textMuted,
+                    fontSize: subtitleLayout.fontSize,
+                    lineHeight: subtitleLayout.lineHeight,
+                    fontWeight: '700',
+                  }}
+                >
                   {getQuizSubtitle(quiz)}
                 </Text>
               </View>
@@ -427,7 +473,7 @@ export default function QuizDetailRoute() {
 
                 <View
                   style={{
-                    minHeight: 136,
+                    minHeight: questionLayout.minHeight,
                     borderRadius: 22,
                     borderCurve: 'continuous',
                     paddingHorizontal: 18,
@@ -439,13 +485,10 @@ export default function QuizDetailRoute() {
                   }}
                 >
                   <Text
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.72}
-                    numberOfLines={4}
                     style={{
                       color: theme.colors.text,
-                      fontSize: 22,
-                      lineHeight: 28,
+                      fontSize: questionLayout.fontSize,
+                      lineHeight: questionLayout.lineHeight,
                       fontWeight: '900',
                     }}
                   >
@@ -455,66 +498,34 @@ export default function QuizDetailRoute() {
 
                 <View style={{ gap: 10 }}>
                   {currentQuestion.options.map((option, index) => (
-                    <Pressable
+                    <ResponsiveQuizOption
                       key={option.id ?? `${option.optionText}-${index}`}
+                      optionText={option.optionText}
+                      screenWidth={screenWidth}
                       disabled={Boolean(currentAnswer) || submitting}
                       onPress={() => handleSelectOption(option.id)}
-                      style={{
-                        minHeight: 62,
-                        borderRadius: 18,
-                        borderCurve: 'continuous',
-                        paddingHorizontal: 14,
-                        paddingVertical: 12,
-                        flexDirection: 'row',
-                        gap: 12,
-                        alignItems: 'center',
-                        backgroundColor: getOptionBackgroundColor({
-                          option,
-                          answer: currentAnswer,
-                          theme,
-                        }),
-                        borderWidth: 1,
-                        borderColor: getOptionBorderColor({
-                          option,
-                          answer: currentAnswer,
-                          theme,
-                        }),
-                        opacity: submitting ? 0.72 : 1,
-                      }}
+                      backgroundColor={getOptionBackgroundColor({
+                        option,
+                        answer: currentAnswer,
+                        theme,
+                      })}
+                      borderColor={getOptionBorderColor({
+                        option,
+                        answer: currentAnswer,
+                        theme,
+                      })}
+                      opacity={submitting ? 0.72 : 1}
+                      textColor={theme.colors.text}
+                      badgeColor={getOptionBadgeColor({
+                        option,
+                        answer: currentAnswer,
+                        theme,
+                      })}
+                      badgeLabel={option.optionLabel ?? String.fromCharCode(65 + index)}
+                      isSelected={currentAnswer?.selectedOptionId === option.id}
                     >
-                      <View
-                        style={{
-                          width: 32,
-                          height: 32,
-                          borderRadius: 16,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          backgroundColor: getOptionBadgeColor({
-                            option,
-                            answer: currentAnswer,
-                            theme,
-                          }),
-                        }}
-                      >
-                        <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '900' }}>
-                          {option.optionLabel ?? String.fromCharCode(65 + index)}
-                        </Text>
-                      </View>
-                      <Text
-                        adjustsFontSizeToFit
-                        minimumFontScale={0.8}
-                        numberOfLines={2}
-                        style={{
-                          flex: 1,
-                          color: theme.colors.text,
-                          fontSize: 15,
-                          lineHeight: 20,
-                          fontWeight: currentAnswer?.selectedOptionId === option.id ? '800' : '600',
-                        }}
-                      >
-                        {option.optionText}
-                      </Text>
-                    </Pressable>
+                      {option.optionText}
+                    </ResponsiveQuizOption>
                   ))}
                 </View>
 
@@ -541,16 +552,18 @@ export default function QuizDetailRoute() {
                       {currentAnswer.isCorrect ? 'Correct answer' : 'Incorrect answer'}
                     </Text>
                     {currentQuestion.explanation ? (
-                      <Text
-                        style={{
-                          color: theme.colors.text,
-                          fontSize: 14,
-                          lineHeight: 20,
-                          fontWeight: '600',
-                        }}
-                      >
-                        {currentQuestion.explanation}
-                      </Text>
+                      <View style={{ minHeight: explanationLayout.minHeight, justifyContent: 'center' }}>
+                        <Text
+                          style={{
+                            color: theme.colors.text,
+                            fontSize: explanationLayout.fontSize,
+                            lineHeight: explanationLayout.lineHeight,
+                            fontWeight: '600',
+                          }}
+                        >
+                          {currentQuestion.explanation}
+                        </Text>
+                      </View>
                     ) : null}
                   </View>
                 ) : null}
@@ -792,6 +805,81 @@ function ResultPill(input: {
       <Text style={{ color: input.textColor, fontSize: 12, fontWeight: '800' }}>{input.label}</Text>
       <Text style={{ color: input.textColor, fontSize: 24, lineHeight: 26, fontWeight: '900' }}>{input.value}</Text>
     </View>
+  );
+}
+
+function ResponsiveQuizOption(input: {
+  optionText: string;
+  screenWidth: number;
+  disabled: boolean;
+  onPress: () => void;
+  backgroundColor: string;
+  borderColor: string;
+  opacity: number;
+  textColor: string;
+  badgeColor: string;
+  badgeLabel: string;
+  isSelected: boolean;
+  children: string;
+}) {
+  const optionLayout = getResponsiveStudyLayout(input.optionText, {
+    screenWidth: input.screenWidth,
+    baseFontSize: 15,
+    minFontSize: 13,
+    baseLineHeight: 20,
+    minLineHeight: 18,
+    shrinkStartWords: 8,
+    shrinkWordsPerStep: 4,
+    baseMinHeight: 62,
+    expandStartWords: 16,
+    expandWordsPerStep: 6,
+    expandHeightStep: 14,
+    maxExtraHeight: 70,
+  });
+
+  return (
+    <Pressable
+      disabled={input.disabled}
+      onPress={input.onPress}
+      style={{
+        minHeight: optionLayout.minHeight,
+        borderRadius: 18,
+        borderCurve: 'continuous',
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        flexDirection: 'row',
+        gap: 12,
+        alignItems: 'center',
+        backgroundColor: input.backgroundColor,
+        borderWidth: 1,
+        borderColor: input.borderColor,
+        opacity: input.opacity,
+      }}
+    >
+      <View
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 16,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: input.badgeColor,
+        }}
+      >
+        <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '900' }}>{input.badgeLabel}</Text>
+      </View>
+      <Text
+        style={{
+          flex: 1,
+          color: input.textColor,
+          fontSize: optionLayout.fontSize,
+          lineHeight: optionLayout.lineHeight,
+          fontWeight: input.isSelected ? '800' : '600',
+        }}
+      >
+        {input.children}
+      </Text>
+    </Pressable>
   );
 }
 
