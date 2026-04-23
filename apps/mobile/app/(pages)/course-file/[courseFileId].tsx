@@ -2,7 +2,7 @@ import { File } from 'expo-file-system';
 import { Image } from 'expo-image';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState, type ReactNode } from 'react';
-import { Linking, ScrollView, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAppTheme } from '../../../providers/settings-provider';
 import {
