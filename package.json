@@ -78,8 +78,8 @@
   "dependencies": {
     "@react-native-community/datetimepicker": "8.6.0",
     "@supabase/supabase-js": "^2.57.4",
-    "expo": "~55.0.15",
-    "expo-audio": "~55.0.13",
+    "expo": "~55.0.17",
+    "expo-audio": "~55.0.14",
     "expo-gl": "~55.0.13",
     "expo-secure-store": "~55.0.13",
     "expo-speech": "~55.0.13",
