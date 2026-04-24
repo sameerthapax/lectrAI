@@ -27,12 +27,18 @@ import { LokiConversationPanel } from '../../components/ai/loki-conversation-pan
 import { useAppTheme } from '../../providers/settings-provider';
 import { useAuth } from '../../providers/auth-provider';
 import {
+  buildLokiAudioSource,
+  buildLokiSpeechSource,
+  createLokiReplyJob,
+  getLokiReplyJobEvents,
   getLokiSession,
+  getLokiReplyJobResult,
   listLokiSessions,
-  sendLokiReply,
+  streamLokiReplyJob,
   type RemoteLokiMessage,
+  type RemoteLokiReplyJobCompletedMetadata,
+  type RemoteLokiReplyJobEvent,
   transcribeLokiAudio,
-  writeLokiAudioToFile,
 } from '../../services/ai-chat-api';
 
 const LokiNativeVoiceVisualizer = require('../../components/ai/loki-native-voice-visualizer').default;
@@ -44,6 +50,10 @@ const TYPE_BUTTON_FLEX = 1;
 const TALK_BUTTON_EXPANDED_FLEX = TALK_BUTTON_FLEX + TYPE_BUTTON_FLEX;
 const SPEECH_METER_FLOOR_DB = -55;
 const SPEECH_METER_CEILING_DB = -35;
+const PROGRESS_MESSAGE_DELAY_MS = 2000;
+const PROGRESS_MESSAGE_MIN_VISIBLE_MS = 2400;
+const PROGRESS_TRANSITION_MS = 380;
+const ENABLE_LOKI_ATTACHMENT_DEBUG = true;
 
 export default function AiAssistanceRoute() {
   const theme = useAppTheme();
@@ -53,6 +63,8 @@ export default function AiAssistanceRoute() {
   const isCompact = width < 390;
   const conversationScrollRef = useRef<ScrollView | null>(null);
   const [messages, setMessages] = useState<RemoteLokiMessage[]>([]);
+  const [transientProgressMessage, setTransientProgressMessage] = useState<RemoteLokiMessage | null>(null);
+  const [transitioningFinalMessage, setTransitioningFinalMessage] = useState<RemoteLokiMessage | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -60,6 +72,7 @@ export default function AiAssistanceRoute() {
   const [voiceRecordingActive, setVoiceRecordingActive] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [assistantWaiting, setAssistantWaiting] = useState(false);
+  const [assistantStageLabel, setAssistantStageLabel] = useState<string | null>(null);
   const [assistantSpeechLevel, setAssistantSpeechLevel] = useState(0);
   const [audioMuted, setAudioMuted] = useState(false);
   const [composerText, setComposerText] = useState('');
@@ -74,6 +87,10 @@ export default function AiAssistanceRoute() {
   const controlsOpacity = useRef(new Animated.Value(1)).current;
   const composerOpacity = useRef(new Animated.Value(0)).current;
   const assistantSpeechLevelRef = useRef(0);
+  const activeReplyJobAbortRef = useRef<AbortController | null>(null);
+  const transientProgressMessageRef = useRef<RemoteLokiMessage | null>(null);
+  const progressShownAtRef = useRef<number | null>(null);
+  const progressGatePromiseRef = useRef<Promise<void> | null>(null);
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
     isMeteringEnabled: true,
@@ -114,6 +131,23 @@ export default function AiAssistanceRoute() {
       shouldRouteThroughEarpiece: false,
     });
   }, []);
+
+  useEffect(() => {
+    return () => {
+      activeReplyJobAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!assistantWaiting) {
+      setTransientProgressMessage(null);
+      setTransitioningFinalMessage(null);
+      setAssistantStageLabel(null);
+      transientProgressMessageRef.current = null;
+      progressShownAtRef.current = null;
+      progressGatePromiseRef.current = null;
+    }
+  }, [assistantWaiting]);
 
   const shouldExpandTalkButton = talkHoldActive || assistantWaiting;
 
@@ -279,7 +313,19 @@ export default function AiAssistanceRoute() {
           return;
         }
 
-        setMessages(detail.messages);
+        setMessages((current) => {
+          logLokiAttachmentDebug('session-detail-before-merge', {
+            sessionId: activeSessionId,
+            remoteMessages: detail.messages,
+            currentMessages: current,
+          });
+          const mergedMessages = mergeSessionMessagesWithHydratedLocalMessages(detail.messages, current);
+          logLokiAttachmentDebug('session-detail-after-merge', {
+            sessionId: activeSessionId,
+            mergedMessages,
+          });
+          return mergedMessages;
+        });
       } catch (error) {
         if (!cancelled) {
           setErrorMessage(error instanceof Error ? error.message : 'Could not load conversation.');
@@ -347,6 +393,149 @@ export default function AiAssistanceRoute() {
     return recordingUri;
   }, [recorder, recorderState.isRecording]);
 
+  const runReplyJob = useCallback(
+    async (input: {
+      accessToken: string;
+      sessionId: string | null;
+      messageText: string;
+      optimisticUserMessageId: string;
+      muteAudioResponse: boolean;
+    }) => {
+      activeReplyJobAbortRef.current?.abort();
+      const abortController = new AbortController();
+      activeReplyJobAbortRef.current = abortController;
+
+      try {
+        const created = await createLokiReplyJob(input.accessToken, {
+          sessionId: input.sessionId,
+          message: input.messageText,
+          muteAudioResponse: input.muteAudioResponse,
+        });
+        setAssistantStageLabel('Acknowledged');
+
+        setActiveSessionId(created.session.id);
+        setMessages((current) => {
+          const withoutPendingUser = current.filter((message) => message.id !== input.optimisticUserMessageId);
+          return [...withoutPendingUser, created.userMessage];
+        });
+
+        const completedMetadata = await streamLokiReplyJob(
+          input.accessToken,
+          created.job.id,
+          {
+            onEvent: (event) => {
+              if (event.eventType === 'completed') {
+                return;
+              }
+
+              if (event.eventType !== 'retrieving_lecture') {
+                return;
+              }
+              setAssistantStageLabel('Retrieving');
+              if (progressGatePromiseRef.current) {
+                return;
+              }
+
+              progressGatePromiseRef.current = (async () => {
+                await waitForDuration(PROGRESS_MESSAGE_DELAY_MS, abortController.signal);
+                const progressMessage = createProgressMessage(created.job.id, event);
+                progressShownAtRef.current = Date.now();
+                transientProgressMessageRef.current = progressMessage;
+                setTransientProgressMessage(progressMessage);
+
+                if (!input.muteAudioResponse) {
+                  player.replace(buildLokiSpeechSource(input.accessToken, event.message));
+                  player.play();
+                }
+
+                setAssistantStageLabel('Creating');
+                await waitForDuration(PROGRESS_MESSAGE_MIN_VISIBLE_MS, abortController.signal);
+              })().catch(() => undefined);
+            },
+          },
+          {
+            abortSignal: abortController.signal,
+          }
+        );
+
+        const finalResult = await getLokiReplyJobResult(input.accessToken, created.job.id);
+        const finalEvents = await getLokiReplyJobEvents(input.accessToken, created.job.id);
+        logLokiAttachmentDebug('reply-job-result', {
+          jobId: created.job.id,
+          assistantMessage: finalResult.assistantMessage,
+          completedMetadata,
+          events: finalEvents.events,
+        });
+        setAssistantStageLabel('Loading');
+        const assistantMessage = mergeFinalAssistantMessage(
+          finalResult.assistantMessage,
+          completedMetadata,
+          finalEvents.events
+        );
+        logLokiAttachmentDebug('reply-job-merged-assistant-message', {
+          jobId: created.job.id,
+          assistantMessage,
+        });
+        const finalAudioMessageId =
+          finalResult.audioMessageId ??
+          completedMetadata.audioMessageId ??
+          assistantMessage.id;
+
+        await progressGatePromiseRef.current;
+
+        if (transientProgressMessageRef.current) {
+          setTransitioningFinalMessage(assistantMessage);
+          await waitForDuration(PROGRESS_TRANSITION_MS);
+        }
+
+        setActiveSessionId(finalResult.session.id);
+        setMessages((current) => {
+          const existingIndex = current.findIndex((message) => message.id === assistantMessage.id);
+
+          if (existingIndex >= 0) {
+            const nextMessages = [...current];
+            nextMessages[existingIndex] = assistantMessage;
+            logLokiAttachmentDebug('reply-job-set-messages-replace', {
+              jobId: created.job.id,
+              assistantMessageId: assistantMessage.id,
+              messages: nextMessages,
+            });
+            return nextMessages;
+          }
+
+          const nextMessages = [...current, assistantMessage];
+          logLokiAttachmentDebug('reply-job-set-messages-append', {
+            jobId: created.job.id,
+            assistantMessageId: assistantMessage.id,
+            messages: nextMessages,
+          });
+          return nextMessages;
+        });
+        setTransientProgressMessage(null);
+        setTransitioningFinalMessage(null);
+        transientProgressMessageRef.current = null;
+        progressShownAtRef.current = null;
+        progressGatePromiseRef.current = null;
+
+        if ((finalResult.shouldAutoPlayAudio || completedMetadata.shouldAutoPlayAudio) && finalAudioMessageId) {
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            interruptionMode: 'doNotMix',
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          });
+
+          player.replace(buildLokiAudioSource(input.accessToken, finalAudioMessageId));
+          player.play();
+        }
+      } finally {
+        activeReplyJobAbortRef.current = null;
+      }
+    },
+    [player]
+  );
+
   const processVoiceInput = useCallback(
     async (recordingUri: string) => {
       if (auth.status !== 'authenticated') {
@@ -389,38 +578,19 @@ export default function AiAssistanceRoute() {
           return [optimisticUserMessage];
         });
 
-      const reply = await sendLokiReply(accessToken, {
-        sessionId: activeSessionId,
-        message: transcriptText,
-        muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
-      });
-      const assistantMessage = withReplyQuizMetadata(reply);
-
-      setActiveSessionId(reply.session.id);
-      setMessages((current) => {
-        const withoutPendingUser = current.filter((message) => message.id !== optimisticUserMessage.id);
-          return [...withoutPendingUser, reply.userMessage, assistantMessage];
-      });
-
-      if (reply.audio) {
-          await setAudioModeAsync({
-            allowsRecording: false,
-            playsInSilentMode: true,
-            interruptionMode: 'doNotMix',
-            shouldPlayInBackground: false,
-            shouldRouteThroughEarpiece: false,
-          });
-
-          const nextAudioUri = await writeLokiAudioToFile(reply.audio, assistantMessage.id);
-          player.replace(nextAudioUri);
-          player.play();
-        }
+        await runReplyJob({
+          accessToken,
+          sessionId: activeSessionId,
+          messageText: transcriptText,
+          optimisticUserMessageId: optimisticUserMessage.id,
+          muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
+        });
       } finally {
         setAssistantWaiting(false);
         setVoiceBusy(false);
       }
     },
-    [activeSessionId, audioMuted, auth, player, typingMode, visualizerCollapsed]
+    [activeSessionId, audioMuted, auth, runReplyJob, typingMode, visualizerCollapsed]
   );
 
   const handleSendText = useCallback(async () => {
@@ -451,32 +621,13 @@ export default function AiAssistanceRoute() {
       setComposerText('');
       setMessages((current) => (activeSessionId ? [...current, optimisticUserMessage] : [optimisticUserMessage]));
 
-      const reply = await sendLokiReply(accessToken, {
+      await runReplyJob({
+        accessToken,
         sessionId: activeSessionId,
-        message: messageText,
+        messageText,
+        optimisticUserMessageId: optimisticUserMessage.id,
         muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
       });
-      const assistantMessage = withReplyQuizMetadata(reply);
-
-      setActiveSessionId(reply.session.id);
-      setMessages((current) => {
-        const withoutPendingUser = current.filter((message) => message.id !== optimisticUserMessage.id);
-        return [...withoutPendingUser, reply.userMessage, assistantMessage];
-      });
-
-      if (reply.audio) {
-        await setAudioModeAsync({
-          allowsRecording: false,
-          playsInSilentMode: true,
-          interruptionMode: 'doNotMix',
-          shouldPlayInBackground: false,
-          shouldRouteThroughEarpiece: false,
-        });
-
-        const nextAudioUri = await writeLokiAudioToFile(reply.audio, assistantMessage.id);
-        player.replace(nextAudioUri);
-        player.play();
-      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Unable to send your message right now.');
     } finally {
@@ -491,6 +642,7 @@ export default function AiAssistanceRoute() {
     composerText,
     player,
     playerStatus.playing,
+    runReplyJob,
     typingMode,
     visualizerCollapsed,
   ]);
@@ -630,14 +782,14 @@ export default function AiAssistanceRoute() {
   const talkButtonLabel = voiceRecordingActive
     ? 'Listening'
     : assistantWaiting
-      ? 'Thinking...'
+      ? (assistantStageLabel ?? 'Thinking...')
     : talkHoldActive
       ? 'Keep Holding'
       : 'Hold To Talk';
-  const visualizerMode = assistantWaiting
-    ? 'waiting'
-    : playerStatus.playing
-      ? 'speaking'
+  const visualizerMode = playerStatus.playing
+    ? 'speaking'
+    : assistantWaiting
+      ? 'waiting'
       : 'idle';
   const visualizerPlaybackTimeSeconds = playerStatus.currentTime;
 
@@ -798,6 +950,8 @@ export default function AiAssistanceRoute() {
           theme={theme}
           isCompact={isCompact}
           messages={messages}
+          transientProgressMessage={transientProgressMessage}
+          transitioningFinalMessage={transitioningFinalMessage}
           loading={loading}
           errorMessage={errorMessage}
           emptyMessage="Start a conversation and Loki will decide when to search your class material before answering."
@@ -1076,16 +1230,235 @@ function createPendingMessage(
   };
 }
 
-function withReplyQuizMetadata(reply: Awaited<ReturnType<typeof sendLokiReply>>) {
+function createProgressMessage(jobId: string, event: RemoteLokiReplyJobEvent): RemoteLokiMessage {
   return {
-    ...reply.assistantMessage,
-    hasQuiz: reply.assistantMessage.hasQuiz || reply.hasQuiz,
-    quizId: reply.assistantMessage.quizId ?? reply.quizId ?? null,
-    quizTitle: reply.assistantMessage.quizTitle ?? reply.quizTitle ?? null,
-    hasFlashcards: reply.assistantMessage.hasFlashcards || reply.hasFlashcards,
-    flashcardSetId: reply.assistantMessage.flashcardSetId ?? reply.flashcardSetId ?? null,
-    flashcardTitle: reply.assistantMessage.flashcardTitle ?? reply.flashcardTitle ?? null,
+    id: `progress-${jobId}-${event.sequenceNumber}`,
+    role: 'assistant',
+    messageText: event.message,
+    modelName: 'progress',
+    promptTokens: null,
+    completionTokens: null,
+    totalTokens: null,
+    retrievalMetadata: {
+      kind: 'reply_job_progress',
+      jobId,
+      eventType: event.eventType,
+      sequenceNumber: event.sequenceNumber,
+    },
+    hasQuiz: false,
+    quizId: null,
+    quizTitle: null,
+    hasFlashcards: false,
+    flashcardSetId: null,
+    flashcardTitle: null,
+    createdAt: event.createdAt,
+    citations: [],
   };
+}
+
+function mergeFinalAssistantMessage(
+  message: RemoteLokiMessage,
+  completedMetadata: RemoteLokiReplyJobCompletedMetadata,
+  events: RemoteLokiReplyJobEvent[]
+): RemoteLokiMessage {
+  const eventAttachments = readAttachmentMetadataFromEvents(events);
+  const hasQuiz = message.hasQuiz || completedMetadata.hasQuiz || eventAttachments.hasQuiz;
+  const quizId = message.quizId ?? completedMetadata.quizId ?? eventAttachments.quizId ?? null;
+  const quizTitle = message.quizTitle ?? completedMetadata.quizTitle ?? eventAttachments.quizTitle ?? null;
+  const hasFlashcards =
+    message.hasFlashcards || completedMetadata.hasFlashcards || eventAttachments.hasFlashcards;
+  const flashcardSetId =
+    message.flashcardSetId ?? completedMetadata.flashcardSetId ?? eventAttachments.flashcardSetId ?? null;
+  const flashcardTitle =
+    message.flashcardTitle ?? completedMetadata.flashcardTitle ?? eventAttachments.flashcardTitle ?? null;
+
+  return {
+    ...message,
+    retrievalMetadata: mergeAttachmentDataIntoRetrievalMetadata(message.retrievalMetadata, {
+      hasQuiz,
+      quizId,
+      quizTitle,
+      hasFlashcards,
+      flashcardSetId,
+      flashcardTitle,
+    }),
+    hasQuiz,
+    quizId,
+    quizTitle,
+    hasFlashcards,
+    flashcardSetId,
+    flashcardTitle,
+  };
+}
+
+function mergeSessionMessagesWithHydratedLocalMessages(
+  remoteMessages: RemoteLokiMessage[],
+  currentMessages: RemoteLokiMessage[]
+) {
+  const currentById = new Map(currentMessages.map((message) => [message.id, message]));
+  const remoteMessageIds = new Set(remoteMessages.map((message) => message.id));
+
+  const mergedRemoteMessages = remoteMessages.map((remoteMessage) => {
+    const currentMessage = currentById.get(remoteMessage.id);
+
+    if (!currentMessage) {
+      return remoteMessage;
+    }
+
+    return {
+      ...remoteMessage,
+      retrievalMetadata: mergeAttachmentDataIntoRetrievalMetadata(
+        remoteMessage.retrievalMetadata ?? currentMessage.retrievalMetadata,
+        {
+          hasQuiz: remoteMessage.hasQuiz || currentMessage.hasQuiz,
+          quizId: remoteMessage.quizId ?? currentMessage.quizId ?? null,
+          quizTitle: remoteMessage.quizTitle ?? currentMessage.quizTitle ?? null,
+          hasFlashcards: remoteMessage.hasFlashcards || currentMessage.hasFlashcards,
+          flashcardSetId: remoteMessage.flashcardSetId ?? currentMessage.flashcardSetId ?? null,
+          flashcardTitle: remoteMessage.flashcardTitle ?? currentMessage.flashcardTitle ?? null,
+        }
+      ),
+      hasQuiz: remoteMessage.hasQuiz || currentMessage.hasQuiz,
+      quizId: remoteMessage.quizId ?? currentMessage.quizId ?? null,
+      quizTitle: remoteMessage.quizTitle ?? currentMessage.quizTitle ?? null,
+      hasFlashcards: remoteMessage.hasFlashcards || currentMessage.hasFlashcards,
+      flashcardSetId: remoteMessage.flashcardSetId ?? currentMessage.flashcardSetId ?? null,
+      flashcardTitle: remoteMessage.flashcardTitle ?? currentMessage.flashcardTitle ?? null,
+    };
+  });
+
+  const localOnlyMessages = currentMessages.filter((message) => !remoteMessageIds.has(message.id));
+
+  if (localOnlyMessages.length === 0) {
+    return mergedRemoteMessages;
+  }
+
+  return [...mergedRemoteMessages, ...localOnlyMessages].sort(compareMessagesByCreatedAt);
+}
+
+function compareMessagesByCreatedAt(left: RemoteLokiMessage, right: RemoteLokiMessage) {
+  const leftTime = Date.parse(left.createdAt);
+  const rightTime = Date.parse(right.createdAt);
+
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+    return leftTime - rightTime;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function logLokiAttachmentDebug(label: string, payload: unknown) {
+  if (!ENABLE_LOKI_ATTACHMENT_DEBUG) {
+    return;
+  }
+
+  try {
+    console.log(`[loki-attachment-debug] ${label}`, JSON.stringify(payload, null, 2));
+  } catch (error) {
+    console.log(`[loki-attachment-debug] ${label}`, payload, error);
+  }
+}
+
+function mergeAttachmentDataIntoRetrievalMetadata(
+  retrievalMetadata: RemoteLokiMessage['retrievalMetadata'],
+  attachments: {
+    hasQuiz: boolean;
+    quizId: string | null;
+    quizTitle: string | null;
+    hasFlashcards: boolean;
+    flashcardSetId: string | null;
+    flashcardTitle: string | null;
+  }
+) {
+  const metadata =
+    retrievalMetadata && typeof retrievalMetadata === 'object' && !Array.isArray(retrievalMetadata)
+      ? { ...(retrievalMetadata as Record<string, unknown>) }
+      : {};
+
+  if (attachments.hasQuiz && attachments.quizId) {
+    metadata.quiz = {
+      hasQuiz: true,
+      quizId: attachments.quizId,
+      quizTitle: attachments.quizTitle,
+    };
+  }
+
+  if (attachments.hasFlashcards && attachments.flashcardSetId) {
+    metadata.flashcards = {
+      hasFlashcards: true,
+      flashcardSetId: attachments.flashcardSetId,
+      flashcardTitle: attachments.flashcardTitle,
+    };
+  }
+
+  return metadata;
+}
+
+function readAttachmentMetadataFromEvents(events: RemoteLokiReplyJobEvent[]) {
+  let quizId: string | null = null;
+  let quizTitle: string | null = null;
+  let flashcardSetId: string | null = null;
+  let flashcardTitle: string | null = null;
+
+  for (const event of events) {
+    if (!event.metadata || typeof event.metadata !== 'object' || Array.isArray(event.metadata)) {
+      continue;
+    }
+
+    const metadata = event.metadata as Record<string, unknown>;
+
+    if (event.eventType === 'quiz_generation_completed') {
+      if (typeof metadata.quizId === 'string' && metadata.quizId.length > 0) {
+        quizId = metadata.quizId;
+      }
+
+      if (typeof metadata.quizTitle === 'string' && metadata.quizTitle.trim().length > 0) {
+        quizTitle = metadata.quizTitle.trim();
+      }
+    }
+
+    if (event.eventType === 'flashcards_generation_completed') {
+      if (typeof metadata.flashcardSetId === 'string' && metadata.flashcardSetId.length > 0) {
+        flashcardSetId = metadata.flashcardSetId;
+      }
+
+      if (typeof metadata.flashcardTitle === 'string' && metadata.flashcardTitle.trim().length > 0) {
+        flashcardTitle = metadata.flashcardTitle.trim();
+      }
+    }
+  }
+
+  return {
+    hasQuiz: Boolean(quizId),
+    quizId,
+    quizTitle,
+    hasFlashcards: Boolean(flashcardSetId),
+    flashcardSetId,
+    flashcardTitle,
+  };
+}
+
+function waitForDuration(milliseconds: number, abortSignal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, milliseconds);
+
+    const handleAbort = () => {
+      cleanup();
+      reject(new Error('The request was cancelled.'));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      abortSignal?.removeEventListener('abort', handleAbort);
+    };
+
+    if (abortSignal) {
+      abortSignal.addEventListener('abort', handleAbort, { once: true });
+    }
+  });
 }
 
 function inferAudioFilename(recordingUri: string) {
