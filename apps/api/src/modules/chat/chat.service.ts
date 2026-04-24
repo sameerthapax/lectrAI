@@ -5,6 +5,7 @@ import { Memory } from 'mem0ai/oss';
 import OpenAI from 'openai';
 import { env } from '../../config/env.js';
 import { HttpError } from '../../lib/http-error.js';
+import { publishChatReplyJobSignal } from './chat-reply-jobs-broker.js';
 import { listCourseFilesForUser, listCoursesForUser, type CourseFileRecord, type CourseRecord } from '../courses/courses.service.js';
 import { listLectureRecordingsForUser, type LectureRecordingListItem } from '../lectures/lectures.service.js';
 import {
@@ -52,6 +53,7 @@ const CREATE_QUIZ_TOOL_NAME = 'create_quiz';
 const CREATE_FLASHCARDS_TOOL_NAME = 'create_flashcards';
 const GET_CURRENT_DATE_AND_TIME_TOOL_NAME = 'get_current_date_and_time';
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const ENABLE_LOKI_ATTACHMENT_DEBUG = true;
 
 let openAiClient: OpenAI | null = null;
 let mem0Memory: Memory | null | undefined;
@@ -60,6 +62,13 @@ type DbClient = ReturnType<typeof getDb>;
 
 type ChatSessionType = 'lecture_chat' | 'course_chat' | 'exam_review';
 type ChatMessageRole = 'user' | 'assistant' | 'system';
+type ChatReplyJobStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type ChatReplyJobEventType =
+  | 'retrieving_lecture'
+  | 'quiz_generation_completed'
+  | 'flashcards_generation_completed'
+  | 'completed'
+  | 'failed';
 
 type OpenAiResponsesOutputContent = {
   type?: unknown;
@@ -255,6 +264,50 @@ export type AssistantAudioPayload = {
   fileName: string;
 };
 
+export type ChatReplyJobRecord = {
+  id: string;
+  chatSessionId: string;
+  userId: string;
+  requestMessageId: string;
+  finalAssistantMessageId: string | null;
+  status: ChatReplyJobStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ChatReplyJobEventRecord = {
+  id: string;
+  jobId: string;
+  eventType: ChatReplyJobEventType;
+  message: string;
+  metadata: unknown;
+  sequenceNumber: number;
+  createdAt: string;
+};
+
+export type CreatedChatReplyJob = {
+  job: ChatReplyJobRecord;
+  session: ChatSessionRecord;
+  userMessage: ChatMessageRecord;
+};
+
+type ChatReplyJobCompletedMetadata = {
+  session: ChatSessionRecord;
+  assistantMessage: ChatMessageRecord;
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
+  shouldAutoPlayAudio: boolean;
+  audioMessageId: string | null;
+};
+
+type ChatReplyProgressReporter = {
+  emit: (eventType: ChatReplyJobEventType, message: string, metadata?: unknown) => Promise<void>;
+};
+
 export function parseChatReplyRequest(payload: unknown): ChatReplyRequest {
   const record = readObject(payload);
   const sessionId = readOptionalUuid(record.sessionId, 'sessionId');
@@ -380,16 +433,6 @@ export async function generateChatReplyForUser(
   userId: string,
   input: ChatReplyRequest
 ): Promise<GeneratedAssistantReply> {
-  const resolvedScope = await resolveChatScopeForUser(userId, {
-    courseId: input.courseId,
-    lectureId: input.lectureId,
-    sessionId: input.sessionId,
-  });
-  const sessionScopeHint = input.sessionId
-    ? await getRecentSessionScopeHintForUser(userId, input.sessionId)
-    : null;
-  const retrievalDecision = await decideRetrievalForUser(userId, resolvedScope, input.message, sessionScopeHint);
-  const sessionScope = retrievalDecision.scope;
   const session = input.sessionId
     ? await getChatSessionForUser(userId, input.sessionId)
     : await createChatSessionForUser(
@@ -397,11 +440,29 @@ export async function generateChatReplyForUser(
         { courseId: null, lectureId: null, sessionType: 'exam_review' },
         input.message
       );
-  const history = await listRecentChatHistory(session.id, MAX_HISTORY_MESSAGES);
-  const memories = await searchLokiMemories({
+  const userMessage = await createChatMessage({
+    chatSessionId: session.id,
+    role: 'user',
+    messageText: input.message,
     userId,
-    query: input.message,
   });
+  return completeChatReplyWorkflowForUser({
+    userId,
+    input,
+    session,
+    userMessage,
+    progressReporter: null,
+  });
+}
+
+export async function createChatReplyJobForUser(userId: string, input: ChatReplyRequest): Promise<CreatedChatReplyJob> {
+  const session = input.sessionId
+    ? await getChatSessionForUser(userId, input.sessionId)
+    : await createChatSessionForUser(
+        userId,
+        { courseId: null, lectureId: null, sessionType: 'exam_review' },
+        input.message
+      );
 
   const userMessage = await createChatMessage({
     chatSessionId: session.id,
@@ -409,53 +470,96 @@ export async function generateChatReplyForUser(
     messageText: input.message,
     userId,
   });
-  const retrieval = retrievalDecision.retrieval;
-  const modelResponse = await requestTutorResponse({
-    userId,
-    scope: sessionScope,
-    history,
-    retrieval,
-    memories,
-    currentMessage: input.message,
-  });
-  const assistantMessage = await createAssistantMessageWithCitations({
+
+  const job = await createChatReplyJob({
     chatSessionId: session.id,
     userId,
-    messageText: modelResponse.messageText,
-    modelName: modelResponse.modelName,
-    usage: modelResponse.usage,
-    retrieval,
-    memories,
-    quiz: modelResponse.quiz,
-    flashcards: modelResponse.flashcards,
+    requestMessageId: userMessage.id,
   });
-  const audio = input.muteAudioResponse ? null : await generateAssistantAudio(modelResponse.messageText);
 
-  await touchChatSession(session.id, {
-    title: deriveSessionTitle(session.title, input.message),
-    scope: sessionScope,
-  });
-  void rememberLokiConversationTurn({
-    userId,
-    sessionId: session.id,
-    scope: sessionScope,
-    userMessage: input.message,
-    assistantMessage: modelResponse.messageText,
-  });
+  void runChatReplyJob(job.id, userId, input, session, userMessage);
 
   return {
-    session: {
-      ...session,
-      title: deriveSessionTitle(session.title, input.message),
-      updatedAt: new Date().toISOString(),
-    },
+    job,
+    session,
     userMessage,
-    assistantMessage,
-    retrieval,
-    audio,
-    quiz: modelResponse.quiz,
-    flashcards: modelResponse.flashcards,
   };
+}
+
+export async function getChatReplyJobForUser(userId: string, jobId: string) {
+  const db = getDb();
+  const rows = await db<DbChatReplyJobRow[]>`
+    select
+      id::text as id,
+      chat_session_id::text as chat_session_id,
+      user_id::text as user_id,
+      request_message_id::text as request_message_id,
+      final_assistant_message_id::text as final_assistant_message_id,
+      status,
+      created_at::text as created_at,
+      updated_at::text as updated_at
+    from public.chat_reply_jobs
+    where id = ${jobId}::uuid
+      and user_id = ${userId}::uuid
+    limit 1
+  `;
+
+  return mapSingleChatReplyJob(rows, 'Chat reply job not found.', 404);
+}
+
+export async function getChatReplyJobResultForUser(userId: string, jobId: string) {
+  const job = await getChatReplyJobForUser(userId, jobId);
+  const detail = await getChatSessionDetailForUser(userId, job.chatSessionId);
+  const events = await listChatReplyJobEventsForUser(userId, jobId, 0);
+  const assistantMessage =
+    detail.messages.find((message) => message.id === job.finalAssistantMessageId) ??
+    [...detail.messages].reverse().find((message) => message.role === 'assistant') ??
+    null;
+
+  if (!assistantMessage) {
+    throw new HttpError(404, 'Final assistant message not found for chat reply job.');
+  }
+
+  const eventAttachments = readJobAttachmentMetadata(events);
+
+  return {
+    job,
+    session: detail.session,
+    assistantMessage: {
+      ...assistantMessage,
+      hasQuiz: assistantMessage.hasQuiz || eventAttachments.hasQuiz,
+      quizId: assistantMessage.quizId ?? eventAttachments.quizId ?? null,
+      quizTitle: assistantMessage.quizTitle ?? eventAttachments.quizTitle ?? null,
+      hasFlashcards: assistantMessage.hasFlashcards || eventAttachments.hasFlashcards,
+      flashcardSetId: assistantMessage.flashcardSetId ?? eventAttachments.flashcardSetId ?? null,
+      flashcardTitle: assistantMessage.flashcardTitle ?? eventAttachments.flashcardTitle ?? null,
+    },
+    shouldAutoPlayAudio: true,
+    audioMessageId: assistantMessage.id,
+  };
+}
+
+export async function listChatReplyJobEventsForUser(userId: string, jobId: string, afterSequence = 0) {
+  const db = getDb();
+  const rows = await db<DbChatReplyJobEventRow[]>`
+    select
+      e.id::text as id,
+      e.job_id::text as job_id,
+      e.event_type,
+      e.message,
+      e.metadata_json,
+      e.sequence_number,
+      e.created_at::text as created_at
+    from public.chat_reply_job_events e
+    inner join public.chat_reply_jobs j
+      on j.id = e.job_id
+    where e.job_id = ${jobId}::uuid
+      and j.user_id = ${userId}::uuid
+      and e.sequence_number > ${afterSequence}
+    order by e.sequence_number asc
+  `;
+
+  return rows.map(mapChatReplyJobEventRow);
 }
 
 export async function getAssistantMessageForAudio(userId: string, messageId: string) {
@@ -492,6 +596,146 @@ export async function getAssistantMessageForAudio(userId: string, messageId: str
     outputFormat: DEFAULT_TTS_OUTPUT_FORMAT,
     ttsModel: DEFAULT_TTS_MODEL,
   };
+}
+
+async function completeChatReplyWorkflowForUser(input: {
+  userId: string;
+  input: ChatReplyRequest;
+  session: ChatSessionRecord;
+  userMessage: ChatMessageRecord;
+  progressReporter: ChatReplyProgressReporter | null;
+}): Promise<GeneratedAssistantReply> {
+  const resolvedScope = await resolveChatScopeForUser(input.userId, {
+    courseId: input.input.courseId,
+    lectureId: input.input.lectureId,
+    sessionId: input.input.sessionId,
+  });
+  const sessionScopeHint = input.input.sessionId
+    ? await getRecentSessionScopeHintForUser(input.userId, input.input.sessionId)
+    : null;
+
+  await input.progressReporter?.emit(
+    'retrieving_lecture',
+    buildSingleProgressMessage(input.input.message, resolvedScope)
+  );
+
+  const retrievalDecision = await decideRetrievalForUser(input.userId, resolvedScope, input.input.message, sessionScopeHint);
+  const sessionScope = retrievalDecision.scope;
+  const retrieval = retrievalDecision.retrieval;
+
+  const history = await listRecentChatHistoryExcludingMessage(input.session.id, input.userMessage.id, MAX_HISTORY_MESSAGES);
+  const memories = await searchLokiMemories({
+    userId: input.userId,
+    query: input.input.message,
+  });
+
+  const modelResponse = await requestTutorResponse({
+    userId: input.userId,
+    scope: sessionScope,
+    history,
+    retrieval,
+    memories,
+    currentMessage: input.input.message,
+    progressReporter: input.progressReporter,
+  });
+  logLokiAttachmentDebug('complete-chat-reply-workflow-model-response', {
+    sessionId: input.session.id,
+    userId: input.userId,
+    messageText: modelResponse.messageText,
+    quiz: modelResponse.quiz,
+    flashcards: modelResponse.flashcards,
+  });
+  const assistantMessage = await createAssistantMessageWithCitations({
+    chatSessionId: input.session.id,
+    userId: input.userId,
+    messageText: modelResponse.messageText,
+    modelName: modelResponse.modelName,
+    usage: modelResponse.usage,
+    retrieval,
+    memories,
+    quiz: modelResponse.quiz,
+    flashcards: modelResponse.flashcards,
+  });
+
+  const nextSession = {
+    ...input.session,
+    title: deriveSessionTitle(input.session.title, input.input.message),
+    updatedAt: new Date().toISOString(),
+  };
+
+  await touchChatSession(input.session.id, {
+    title: nextSession.title,
+    scope: sessionScope,
+  });
+  void rememberLokiConversationTurn({
+    userId: input.userId,
+    sessionId: input.session.id,
+    scope: sessionScope,
+    userMessage: input.input.message,
+    assistantMessage: modelResponse.messageText,
+  });
+
+  const audio = input.input.muteAudioResponse ? null : await generateAssistantAudio(modelResponse.messageText);
+
+  return {
+    session: nextSession,
+    userMessage: input.userMessage,
+    assistantMessage,
+    retrieval,
+    audio,
+    quiz: modelResponse.quiz,
+    flashcards: modelResponse.flashcards,
+  };
+}
+
+async function runChatReplyJob(
+  jobId: string,
+  userId: string,
+  input: ChatReplyRequest,
+  session: ChatSessionRecord,
+  userMessage: ChatMessageRecord
+) {
+  try {
+    await updateChatReplyJobStatus(jobId, 'running');
+
+    const progressReporter: ChatReplyProgressReporter = {
+      emit: async (eventType, message, metadata) => {
+        await appendChatReplyJobEvent(jobId, eventType, message, metadata);
+      },
+    };
+    const result = await completeChatReplyWorkflowForUser({
+      userId,
+      input,
+      session,
+      userMessage,
+      progressReporter,
+    });
+
+    await appendChatReplyJobEvent(jobId, 'completed', 'Loki finished this reply.', {
+      session: result.session,
+      assistantMessage: result.assistantMessage,
+      hasQuiz: result.quiz?.hasQuiz ?? false,
+      quizId: result.quiz?.quizId ?? null,
+      quizTitle: result.quiz?.quizTitle ?? null,
+      hasFlashcards: result.flashcards?.hasFlashcards ?? false,
+      flashcardSetId: result.flashcards?.flashcardSetId ?? null,
+      flashcardTitle: result.flashcards?.flashcardTitle ?? null,
+      shouldAutoPlayAudio: !input.muteAudioResponse,
+      audioMessageId: input.muteAudioResponse ? null : result.assistantMessage.id,
+    } satisfies ChatReplyJobCompletedMetadata);
+    await updateChatReplyJobCompletion(jobId, result.assistantMessage.id, 'completed');
+  } catch (error) {
+    console.error('[ chat ] Loki reply job failed.', { jobId, error });
+    await appendChatReplyJobEvent(
+      jobId,
+      'failed',
+      error instanceof Error ? error.message : 'Loki could not complete this request.',
+      {
+        error: error instanceof Error ? error.message : 'Loki could not complete this request.',
+      }
+    );
+    await updateChatReplyJobStatus(jobId, 'failed');
+  }
 }
 
 export async function requestTutorSpeechStream(input: {
@@ -583,6 +827,7 @@ async function requestTutorResponse(input: {
   retrieval: RetrievedContext;
   memories: LokiMemory[];
   currentMessage: string;
+  progressReporter: ChatReplyProgressReporter | null;
 }) {
   let response = (await getOpenAiClient().responses.create({
     model: DEFAULT_CHAT_MODEL,
@@ -695,10 +940,42 @@ async function requestTutorResponse(input: {
 
       if (result.quiz) {
         latestQuiz = result.quiz;
+        logLokiAttachmentDebug('request-tutor-response-tool-quiz', {
+          quiz: {
+            id: result.quiz.id,
+            title: result.quiz.title,
+            questionCount: result.quiz.questionCount,
+          },
+        });
+        await input.progressReporter?.emit(
+          'quiz_generation_completed',
+          `Your quiz "${result.quiz.title ?? 'Generated quiz'}" is ready.`,
+          {
+            hasQuiz: true,
+            quizId: result.quiz.id,
+            quizTitle: result.quiz.title,
+          }
+        );
       }
 
       if (result.flashcards) {
         latestFlashcards = result.flashcards;
+        logLokiAttachmentDebug('request-tutor-response-tool-flashcards', {
+          flashcards: {
+            id: result.flashcards.id,
+            title: result.flashcards.title,
+            cardCount: result.flashcards.cardCount,
+          },
+        });
+        await input.progressReporter?.emit(
+          'flashcards_generation_completed',
+          `Your flashcards "${result.flashcards.title ?? 'Generated flashcards'}" are ready.`,
+          {
+            hasFlashcards: true,
+            flashcardSetId: result.flashcards.id,
+            flashcardTitle: result.flashcards.title,
+          }
+        );
       }
 
       toolOutputs.push({
@@ -768,7 +1045,7 @@ async function requestTutorResponse(input: {
     throw new HttpError(502, 'OpenAI tutor response did not include assistant text.');
   }
 
-  return {
+  const finalResponse = {
     messageText,
     modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
     usage: latestUsage,
@@ -787,6 +1064,10 @@ async function requestTutorResponse(input: {
         }
       : null,
   };
+
+  logLokiAttachmentDebug('request-tutor-response-final', finalResponse);
+
+  return finalResponse;
 }
 
 function buildOpenAiInput(input: {
@@ -1279,6 +1560,62 @@ async function createChatSessionForUser(userId: string, scope: ChatScope, firstM
   return mapSingleSession(rows, 'Failed to create chat session.');
 }
 
+async function createChatReplyJob(input: {
+  chatSessionId: string;
+  userId: string;
+  requestMessageId: string;
+}) {
+  const db = getDb();
+  const rows = await db<DbChatReplyJobRow[]>`
+    insert into public.chat_reply_jobs (
+      chat_session_id,
+      user_id,
+      request_message_id,
+      status
+    ) values (
+      ${input.chatSessionId}::uuid,
+      ${input.userId}::uuid,
+      ${input.requestMessageId}::uuid,
+      'queued'
+    )
+    returning
+      id::text as id,
+      chat_session_id::text as chat_session_id,
+      user_id::text as user_id,
+      request_message_id::text as request_message_id,
+      final_assistant_message_id::text as final_assistant_message_id,
+      status,
+      created_at::text as created_at,
+      updated_at::text as updated_at
+  `;
+
+  return mapSingleChatReplyJob(rows, 'Failed to create chat reply job.');
+}
+
+async function updateChatReplyJobStatus(jobId: string, status: ChatReplyJobStatus) {
+  const db = getDb();
+  await db`
+    update public.chat_reply_jobs
+    set status = ${status}
+    where id = ${jobId}::uuid
+  `;
+}
+
+async function updateChatReplyJobCompletion(
+  jobId: string,
+  finalAssistantMessageId: string,
+  status: Extract<ChatReplyJobStatus, 'completed'>
+) {
+  const db = getDb();
+  await db`
+    update public.chat_reply_jobs
+    set
+      status = ${status},
+      final_assistant_message_id = ${finalAssistantMessageId}::uuid
+    where id = ${jobId}::uuid
+  `;
+}
+
 async function getChatSessionForUser(userId: string, sessionId: string) {
   const db = getDb();
   const rows = await db<DbChatSessionRow[]>`
@@ -1300,12 +1637,13 @@ async function getChatSessionForUser(userId: string, sessionId: string) {
   return mapSingleSession(rows, 'Chat session not found.', 404);
 }
 
-async function listRecentChatHistory(sessionId: string, limit: number) {
+async function listRecentChatHistoryExcludingMessage(sessionId: string, excludedMessageId: string, limit: number) {
   const db = getDb();
   const rows = await db<{ role: ChatMessageRole; message_text: string }[]>`
     select role, message_text
     from public.chat_messages
     where chat_session_id = ${sessionId}::uuid
+      and id <> ${excludedMessageId}::uuid
     order by created_at desc
     limit ${limit}
   `;
@@ -1317,6 +1655,99 @@ async function listRecentChatHistory(sessionId: string, limit: number) {
       role: row.role,
       messageText: row.message_text,
     }));
+}
+
+async function appendChatReplyJobEvent(
+  jobId: string,
+  eventType: ChatReplyJobEventType,
+  message: string,
+  metadata: unknown = null
+) {
+  const db = getDb();
+  if (eventType === 'quiz_generation_completed' || eventType === 'flashcards_generation_completed' || eventType === 'completed') {
+    logLokiAttachmentDebug('append-chat-reply-job-event', {
+      jobId,
+      eventType,
+      message,
+      metadata,
+    });
+  }
+  const rows = await db<DbChatReplyJobEventRow[]>`
+    with next_sequence as (
+      select coalesce(max(sequence_number), 0) + 1 as value
+      from public.chat_reply_job_events
+      where job_id = ${jobId}::uuid
+    )
+    insert into public.chat_reply_job_events (
+      job_id,
+      event_type,
+      message,
+      metadata_json,
+      sequence_number
+    )
+    select
+      ${jobId}::uuid,
+      ${eventType},
+      ${message},
+      ${JSON.stringify(metadata)}::jsonb,
+      next_sequence.value
+    from next_sequence
+    returning
+      id::text as id,
+      job_id::text as job_id,
+      event_type,
+      message,
+      metadata_json,
+      sequence_number,
+      created_at::text as created_at
+  `;
+
+  publishChatReplyJobSignal(jobId);
+  return mapSingleChatReplyJobEvent(rows, 'Failed to append chat reply job event.');
+}
+
+function readJobAttachmentMetadata(events: ChatReplyJobEventRecord[]) {
+  let quizId: string | null = null;
+  let quizTitle: string | null = null;
+  let flashcardSetId: string | null = null;
+  let flashcardTitle: string | null = null;
+
+  for (const event of events) {
+    if (!event.metadata || typeof event.metadata !== 'object' || Array.isArray(event.metadata)) {
+      continue;
+    }
+
+    const metadata = event.metadata as Record<string, unknown>;
+
+    if (event.eventType === 'quiz_generation_completed') {
+      if (typeof metadata.quizId === 'string' && metadata.quizId.length > 0) {
+        quizId = metadata.quizId;
+      }
+
+      if (typeof metadata.quizTitle === 'string' && metadata.quizTitle.trim().length > 0) {
+        quizTitle = metadata.quizTitle.trim();
+      }
+    }
+
+    if (event.eventType === 'flashcards_generation_completed') {
+      if (typeof metadata.flashcardSetId === 'string' && metadata.flashcardSetId.length > 0) {
+        flashcardSetId = metadata.flashcardSetId;
+      }
+
+      if (typeof metadata.flashcardTitle === 'string' && metadata.flashcardTitle.trim().length > 0) {
+        flashcardTitle = metadata.flashcardTitle.trim();
+      }
+    }
+  }
+
+  return {
+    hasQuiz: Boolean(quizId),
+    quizId,
+    quizTitle,
+    hasFlashcards: Boolean(flashcardSetId),
+    flashcardSetId,
+    flashcardTitle,
+  };
 }
 
 async function getRecentSessionScopeHintForUser(userId: string, sessionId: string): Promise<ChatScope | null> {
@@ -1446,6 +1877,13 @@ async function createAssistantMessageWithCitations(input: {
   flashcards: AssistantFlashcardAttachment | null;
 }) {
   const db = getDb();
+  const retrievalMetadata = buildRetrievalMetadata(input.retrieval, input.memories, input.quiz, input.flashcards);
+  logLokiAttachmentDebug('create-assistant-message-with-citations-input', {
+    chatSessionId: input.chatSessionId,
+    quiz: input.quiz,
+    flashcards: input.flashcards,
+    retrievalMetadata,
+  });
 
   return db.begin(async (transaction) => {
     const tx = transaction as unknown as DbClient;
@@ -1469,7 +1907,7 @@ async function createAssistantMessageWithCitations(input: {
         ${input.usage.promptTokens},
         ${input.usage.completionTokens},
         ${input.usage.totalTokens},
-        ${JSON.stringify(buildRetrievalMetadata(input.retrieval, input.memories, input.quiz, input.flashcards))}::jsonb
+        ${JSON.stringify(retrievalMetadata)}::jsonb
       )
       returning
         id::text as id,
@@ -1484,6 +1922,16 @@ async function createAssistantMessageWithCitations(input: {
     `;
 
     const message = mapSingleMessage(messageRows, 'Failed to save assistant response.');
+    logLokiAttachmentDebug('create-assistant-message-with-citations-saved-message', {
+      messageId: message.id,
+      retrievalMetadata: message.retrievalMetadata,
+      hasQuiz: message.hasQuiz,
+      quizId: message.quizId,
+      quizTitle: message.quizTitle,
+      hasFlashcards: message.hasFlashcards,
+      flashcardSetId: message.flashcardSetId,
+      flashcardTitle: message.flashcardTitle,
+    });
 
     const citations: ChatCitationRecord[] = [];
 
@@ -1602,6 +2050,18 @@ async function touchChatSession(
       updated_at = timezone('utc', now())
     where id = ${sessionId}::uuid
   `;
+}
+
+function logLokiAttachmentDebug(label: string, payload: unknown) {
+  if (!ENABLE_LOKI_ATTACHMENT_DEBUG) {
+    return;
+  }
+
+  try {
+    console.log(`[loki-attachment-debug] ${label}`, JSON.stringify(payload, null, 2));
+  } catch (error) {
+    console.log(`[loki-attachment-debug] ${label}`, payload, error);
+  }
 }
 
 function buildRetrievalMetadata(
@@ -2016,6 +2476,24 @@ function deriveDynamicScopeFromResults(chunks: TranscriptChunkSearchResult[], sc
   };
 }
 
+function buildSingleProgressMessage(message: string, scope: ChatScope) {
+  const normalized = message.trim().toLowerCase();
+  const requestedAsset = /(flashcards?|study cards?|revision cards?)/i.test(normalized)
+    ? 'a flashcard set'
+    : /(quiz|practice questions?|mcq|multiple choice|test me)/i.test(normalized)
+      ? 'a quiz'
+      : 'a study output';
+  const requestedSource = scope.lectureId
+    ? 'the requested lecture'
+    : scope.courseId
+      ? 'the requested course'
+      : /(doc|document|notes|pdf|slide|file)/i.test(normalized)
+        ? 'the requested documents'
+        : 'the requested material';
+
+  return `I am retrieving ${requestedSource} information and creating ${requestedAsset} for you.`;
+}
+
 function readUsage(usage: unknown) {
   const source = usage as OpenAiResponsesUsage | null | undefined;
 
@@ -2309,6 +2787,15 @@ function shouldRetryWithFallbackVoice(errorDetails: unknown) {
 }
 
 function readObjectRecord(value: unknown) {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return readObjectRecord(parsed);
+    } catch {
+      return null;
+    }
+  }
+
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
   }
@@ -2752,6 +3239,26 @@ function mapSingleMessage(rows: DbChatMessageRow[], errorMessage: string) {
   return mapChatMessageRow(row);
 }
 
+function mapSingleChatReplyJob(rows: DbChatReplyJobRow[], errorMessage: string, statusCode = 500) {
+  const row = rows[0];
+
+  if (!row) {
+    throw new HttpError(statusCode, errorMessage);
+  }
+
+  return mapChatReplyJobRow(row);
+}
+
+function mapSingleChatReplyJobEvent(rows: DbChatReplyJobEventRow[], errorMessage: string, statusCode = 500) {
+  const row = rows[0];
+
+  if (!row) {
+    throw new HttpError(statusCode, errorMessage);
+  }
+
+  return mapChatReplyJobEventRow(row);
+}
+
 function mapChatSessionRow(row: DbChatSessionRow): ChatSessionRecord {
   return {
     id: row.id,
@@ -2766,8 +3273,9 @@ function mapChatSessionRow(row: DbChatSessionRow): ChatSessionRecord {
 }
 
 function mapChatMessageRow(row: DbChatMessageRow): Omit<ChatMessageRecord, 'citations'> {
-  const quiz = readQuizAttachmentFromMetadata(row.retrieval_metadata);
-  const flashcards = readFlashcardAttachmentFromMetadata(row.retrieval_metadata);
+  const normalizedRetrievalMetadata = readObjectRecord(row.retrieval_metadata);
+  const quiz = readQuizAttachmentFromMetadata(normalizedRetrievalMetadata);
+  const flashcards = readFlashcardAttachmentFromMetadata(normalizedRetrievalMetadata);
 
   return {
     id: row.id,
@@ -2777,7 +3285,7 @@ function mapChatMessageRow(row: DbChatMessageRow): Omit<ChatMessageRecord, 'cita
     promptTokens: row.prompt_tokens,
     completionTokens: row.completion_tokens,
     totalTokens: row.total_tokens,
-    retrievalMetadata: row.retrieval_metadata,
+    retrievalMetadata: normalizedRetrievalMetadata ?? {},
     hasQuiz: quiz.hasQuiz,
     quizId: quiz.quizId,
     quizTitle: quiz.quizTitle,
@@ -2833,6 +3341,31 @@ function mapChatCitationRow(row: DbChatCitationRow): ChatCitationRecord {
   };
 }
 
+function mapChatReplyJobRow(row: DbChatReplyJobRow): ChatReplyJobRecord {
+  return {
+    id: row.id,
+    chatSessionId: row.chat_session_id,
+    userId: row.user_id,
+    requestMessageId: row.request_message_id,
+    finalAssistantMessageId: row.final_assistant_message_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapChatReplyJobEventRow(row: DbChatReplyJobEventRow): ChatReplyJobEventRecord {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    eventType: row.event_type,
+    message: row.message,
+    metadata: row.metadata_json,
+    sequenceNumber: row.sequence_number,
+    createdAt: row.created_at,
+  };
+}
+
 type DbChatSessionRow = {
   id: string;
   title: string | null;
@@ -2864,6 +3397,27 @@ type DbChatCitationRow = {
   citation_order: number;
   relevance_score: number | string | null;
   cited_text: string | null;
+};
+
+type DbChatReplyJobRow = {
+  id: string;
+  chat_session_id: string;
+  user_id: string;
+  request_message_id: string;
+  final_assistant_message_id: string | null;
+  status: ChatReplyJobStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+type DbChatReplyJobEventRow = {
+  id: string;
+  job_id: string;
+  event_type: ChatReplyJobEventType;
+  message: string;
+  metadata_json: unknown;
+  sequence_number: number;
+  created_at: string;
 };
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
