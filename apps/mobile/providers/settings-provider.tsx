@@ -215,9 +215,10 @@ export function SettingsProvider({ children }: PropsWithChildren) {
   };
 
   const topEmail = auth.user?.email ?? settings?.profile.email ?? 'unknown user';
+  const normalizedSystemColorScheme = systemColorScheme === 'unspecified' ? null : systemColorScheme;
   const resolvedThemeMode = resolveThemeMode(
     settings?.appearance.themeMode ?? defaultSettings.appearance.themeMode,
-    systemColorScheme
+    normalizedSystemColorScheme
   );
   const theme = useMemo(
     () =>

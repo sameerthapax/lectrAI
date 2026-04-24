@@ -3,6 +3,7 @@ import { Image } from 'expo-image';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState, type ReactNode } from 'react';
 import { Linking, Pressable, ScrollView, Text, View } from 'react-native';
+import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAppTheme } from '../../../providers/settings-provider';
 import {
   getCourseFile,
@@ -94,25 +95,9 @@ export default function CourseFileDetailRoute() {
             justifyContent: 'center',
           }}
         >
-          <Pressable
-            onPress={() => router.back()}
-            style={({ pressed }) => ({
-              position: 'absolute',
-              left: 0,
-              width: 38,
-              height: 38,
-              borderRadius: 999,
-              borderCurve: 'continuous',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: theme.colors.overlay,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              opacity: pressed ? 0.88 : 1,
-            })}
-          >
-            <Text style={{ color: theme.colors.text, fontSize: 18, fontWeight: '900' }}>←</Text>
-          </Pressable>
+          <View style={{ position: 'absolute', left: 0 }}>
+            <NativeBackButton theme={theme} onPress={() => router.back()} />
+          </View>
 
           <Text style={{ color: theme.colors.text, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
             File Review

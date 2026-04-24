@@ -1,4 +1,5 @@
 import rateLimit from 'express-rate-limit';
+import type { Request } from 'express';
 import { env } from '../config/env.js';
 
 function createRateLimitMessage(retryAfterSeconds?: number) {
@@ -8,11 +9,28 @@ function createRateLimitMessage(retryAfterSeconds?: number) {
   };
 }
 
+function shouldSkipApiRateLimit(request: Request) {
+  if (request.method !== 'GET') {
+    return false;
+  }
+
+  const path = request.baseUrl ? `${request.baseUrl}${request.path}` : request.path;
+
+  return (
+    /^\/(?:api\/)?chat\/sessions(?:\/[^/]+)?$/.test(path) ||
+    /^\/(?:api\/)?chat\/reply-jobs\/[^/]+(?:\/(events|result|stream))?$/.test(path) ||
+    /^\/(?:api\/)?chat\/messages\/[^/]+\/audio$/.test(path) ||
+    path === '/chat/speech' ||
+    path === '/api/chat/speech'
+  );
+}
+
 export const apiRateLimit = rateLimit({
   windowMs: env.rateLimitWindowMs,
   max: env.rateLimitMaxRequests,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: shouldSkipApiRateLimit,
   handler: (req, res) => {
     const retryAfterHeader = res.getHeader('Retry-After');
     const retryAfterSeconds =

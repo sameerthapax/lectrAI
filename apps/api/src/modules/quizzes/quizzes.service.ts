@@ -5,7 +5,12 @@ import { refreshDailyQuizStreakForUser } from '../stats/stats.service.js';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_DAILY_QUIZ_MODEL = 'gpt-4o-2024-08-06';
 const DAILY_QUIZ_SCOPE = 'daily_quick';
+const LOKI_QUIZ_SCOPE = 'loki';
 const DAILY_QUIZ_QUESTION_COUNT = 5;
+const DEFAULT_LOKI_QUIZ_QUESTION_COUNT = 5;
+const MIN_LOKI_QUIZ_QUESTION_COUNT = 3;
+const MAX_LOKI_QUIZ_QUESTION_COUNT = 10;
+const MAX_LOKI_QUIZ_GENERATION_ATTEMPTS = 2;
 const MAX_TRANSCRIPT_CONTEXTS = 5;
 const MAX_FILE_CONTEXTS = 5;
 const MAX_CONTEXT_CHARS = 4_000;
@@ -86,6 +91,57 @@ export type DailyQuickQuizOptionRecord = {
   isCorrect: boolean;
   optionOrder: number;
   createdAt: string | null;
+};
+
+export type StoredQuizRecord = {
+  id: string;
+  title: string | null;
+  quizType: string;
+  difficulty: string;
+  questionCount: number | null;
+  estimatedMinutes: number | null;
+  availableOn: string | null;
+  createdAt: string;
+  updatedAt: string;
+  questions: StoredQuizQuestionRecord[];
+};
+
+export type StoredQuizQuestionRecord = {
+  id: string;
+  questionOrder: number;
+  questionType: string;
+  questionText: string;
+  explanation: string | null;
+  difficulty: string | null;
+  isRelatedToAnyCourse: boolean;
+  createdAt: string | null;
+  options: StoredQuizOptionRecord[];
+};
+
+export type StoredQuizOptionRecord = {
+  id: string;
+  optionLabel: string | null;
+  optionText: string;
+  isCorrect: boolean;
+  optionOrder: number;
+  createdAt: string | null;
+};
+
+export type StoredQuizAttemptAnswerRecord = DailyQuickQuizAttemptAnswerRecord;
+export type StoredQuizAttemptRecord = DailyQuickQuizAttemptRecord;
+
+export type StoredQuizBundle = {
+  quiz: StoredQuizRecord;
+  attempt: StoredQuizAttemptRecord | null;
+};
+
+export type LokiQuizSourceContext = {
+  lectureId: string;
+  lectureTitle: string;
+  courseId: string;
+  courseName: string;
+  similarity: number;
+  content: string;
 };
 
 type SemesterWindow = {
@@ -205,6 +261,16 @@ export type SubmitDailyQuickQuizAttemptInput = {
     selectedOptionId: string;
   }>;
   timeSpentSeconds?: number | null;
+};
+
+export type SubmitStoredQuizAttemptInput = SubmitDailyQuickQuizAttemptInput;
+
+export type GenerateLokiQuizForUserInput = {
+  userId: string;
+  message: string;
+  contexts: LokiQuizSourceContext[];
+  questionCount?: number;
+  titleHint?: string | null;
 };
 
 export async function getDailyQuickQuizForUser(userId: string): Promise<DailyQuickQuizRecord | null> {
@@ -343,6 +409,48 @@ export async function generateDailyQuickQuizBundleForUser(userId: string): Promi
     quiz,
     attempt: await getDailyQuickQuizAttemptForUser(userId, quiz.id),
   };
+}
+
+export async function getStoredQuizBundleForUser(userId: string, quizId: string): Promise<StoredQuizBundle> {
+  const quiz = await findStoredQuizForUser(userId, {
+    quizId,
+    scopes: [DAILY_QUIZ_SCOPE, LOKI_QUIZ_SCOPE],
+  });
+
+  if (!quiz) {
+    throw new HttpError(404, 'Quiz not found for this user.');
+  }
+
+  return {
+    quiz,
+    attempt: await getDailyQuickQuizAttemptForUser(userId, quiz.id),
+  };
+}
+
+export async function generateLokiQuizForUser(input: GenerateLokiQuizForUserInput): Promise<StoredQuizRecord> {
+  const questionCount = resolveLokiQuizQuestionCount(input.questionCount, input.message);
+  const generatedQuiz = await generateLokiQuizWithOpenAi({
+    message: input.message,
+    titleHint: input.titleHint ?? null,
+    contexts: input.contexts,
+    questionCount,
+  });
+  const quizId = await persistGeneratedStoredQuiz({
+    userId: input.userId,
+    scope: LOKI_QUIZ_SCOPE,
+    availableOn: null,
+    generatedQuiz,
+  });
+  const quiz = await findStoredQuizForUser(input.userId, {
+    quizId,
+    scopes: [LOKI_QUIZ_SCOPE],
+  });
+
+  if (!quiz) {
+    throw new HttpError(500, 'Quiz was generated but could not be loaded.');
+  }
+
+  return quiz;
 }
 
 export async function upsertDailyQuickQuizAnswerForUser(
@@ -499,8 +607,40 @@ export async function submitDailyQuickQuizAttemptForUser(
   userId: string,
   input: SubmitDailyQuickQuizAttemptInput
 ): Promise<DailyQuickQuizBundle> {
-  if (input.answers.length !== DAILY_QUIZ_QUESTION_COUNT) {
-    throw new HttpError(400, `Daily quiz submissions must include exactly ${DAILY_QUIZ_QUESTION_COUNT} answers.`);
+  const result = await submitStoredQuizAttemptInternal(userId, input, [DAILY_QUIZ_SCOPE]);
+
+  if (result.quiz.quizType && result.quiz.id) {
+    await refreshDailyQuizStreakForUser(userId);
+  }
+
+  return {
+    quiz: mapStoredQuizToDailyQuickQuiz(result.quiz),
+    attempt: result.attempt,
+  };
+}
+
+export async function submitStoredQuizAttemptForUser(
+  userId: string,
+  input: SubmitStoredQuizAttemptInput
+): Promise<StoredQuizBundle> {
+  const result = await submitStoredQuizAttemptInternal(userId, input, [DAILY_QUIZ_SCOPE, LOKI_QUIZ_SCOPE]);
+
+  const quizScope = await getQuizScopeForUser(userId, input.quizId);
+
+  if (quizScope === DAILY_QUIZ_SCOPE) {
+    await refreshDailyQuizStreakForUser(userId);
+  }
+
+  return result;
+}
+
+async function submitStoredQuizAttemptInternal(
+  userId: string,
+  input: SubmitStoredQuizAttemptInput,
+  allowedScopes: string[]
+): Promise<StoredQuizBundle> {
+  if (input.answers.length === 0) {
+    throw new HttpError(400, 'Quiz submissions must include at least one answer.');
   }
 
   const normalizedAnswers = new Map<string, string>();
@@ -524,13 +664,13 @@ export async function submitDailyQuickQuizAttemptForUser(
     join public.quiz_questions qq on qq.quiz_id = q.id
     join public.quiz_options qo on qo.question_id = qq.id
     where q.id = ${input.quizId}::uuid
-      and q.scope = ${DAILY_QUIZ_SCOPE}
+      and q.scope = any(${allowedScopes}::text[])
       and q.generated_by_user_id = ${userId}::uuid
     order by qq.question_order asc, qo.option_order asc
   `;
 
   if (validationRows.length === 0) {
-    throw new HttpError(404, 'Daily quiz not found for this user.');
+    throw new HttpError(404, 'Quiz not found for this user.');
   }
 
   const answersToPersist = new Map<
@@ -565,15 +705,15 @@ export async function submitDailyQuickQuizAttemptForUser(
     }
   }
 
-  if (questionIds.size !== DAILY_QUIZ_QUESTION_COUNT || answersToPersist.size !== DAILY_QUIZ_QUESTION_COUNT) {
-    throw new HttpError(400, 'Daily quiz submission must answer every question with a valid option.');
+  if (questionIds.size !== answersToPersist.size || questionIds.size !== normalizedAnswers.size) {
+    throw new HttpError(400, 'Quiz submission must answer every question with a valid option.');
   }
 
   const orderedAnswers = Array.from(answersToPersist.values()).sort(
     (left, right) => left.questionOrder - right.questionOrder
   );
   const score = orderedAnswers.reduce((total, answer) => total + answer.awardedPoints, 0);
-  const maxScore = DAILY_QUIZ_QUESTION_COUNT;
+  const maxScore = questionIds.size;
 
   await db.begin(async (transaction) => {
     const tx = transaction as unknown as ReturnType<typeof getDb>;
@@ -666,13 +806,14 @@ export async function submitDailyQuickQuizAttemptForUser(
     }
   });
 
-  await refreshDailyQuizStreakForUser(userId);
-
   return {
     quiz:
-      (await findDailyQuickQuizForUser(userId, '', input.quizId)) ??
+      (await findStoredQuizForUser(userId, {
+        quizId: input.quizId,
+        scopes: allowedScopes,
+      })) ??
       (() => {
-        throw new HttpError(404, 'Daily quiz not found after submitting the attempt.');
+        throw new HttpError(404, 'Quiz not found after submitting the attempt.');
       })(),
     attempt: await getDailyQuickQuizAttemptForUser(userId, input.quizId),
   };
@@ -683,45 +824,102 @@ async function findDailyQuickQuizForUser(
   todayKey: string,
   quizId?: string
 ): Promise<DailyQuickQuizRecord | null> {
+  const quiz = await findStoredQuizForUser(userId, {
+    quizId,
+    availableOn: quizId ? undefined : todayKey,
+    scopes: [DAILY_QUIZ_SCOPE],
+  });
+
+  if (!quiz) {
+    return null;
+  }
+
+  return {
+    id: quiz.id,
+    title: quiz.title,
+    quizType: quiz.quizType,
+    difficulty: quiz.difficulty,
+    questionCount: quiz.questionCount,
+    estimatedMinutes: quiz.estimatedMinutes,
+    availableOn: quiz.availableOn ?? '',
+    createdAt: quiz.createdAt,
+    updatedAt: quiz.updatedAt,
+    questions: quiz.questions.map((question) => ({
+      id: question.id,
+      questionOrder: question.questionOrder,
+      questionType: question.questionType,
+      questionText: question.questionText,
+      explanation: question.explanation,
+      difficulty: question.difficulty,
+      isRelatedToAnyCourse: question.isRelatedToAnyCourse,
+      createdAt: question.createdAt,
+      options: question.options.map((option) => ({
+        id: option.id,
+        optionLabel: option.optionLabel,
+        optionText: option.optionText,
+        isCorrect: option.isCorrect,
+        optionOrder: option.optionOrder,
+        createdAt: option.createdAt,
+      })),
+    })),
+  };
+}
+
+async function findStoredQuizForUser(
+  userId: string,
+  input: {
+    quizId?: string;
+    availableOn?: string;
+    scopes: string[];
+  }
+): Promise<StoredQuizRecord | null> {
   const db = getDb();
-  const quizRows = quizId
-    ? await db<DbDailyQuickQuizRow[]>`
-        select
-          id::text as id,
-          title,
-          quiz_type as "quizType",
-          difficulty,
-          question_count as "questionCount",
-          estimated_minutes as "estimatedMinutes",
-          available_on::text as "availableOn",
-          created_at::text as "createdAt",
-          updated_at::text as "updatedAt"
-        from public.quizzes
-        where id = ${quizId}::uuid
-          and scope = ${DAILY_QUIZ_SCOPE}
-          and generated_by_user_id = ${userId}::uuid
-          and is_published = true
-        limit 1
-      `
-    : await db<DbDailyQuickQuizRow[]>`
-        select
-          id::text as id,
-          title,
-          quiz_type as "quizType",
-          difficulty,
-          question_count as "questionCount",
-          estimated_minutes as "estimatedMinutes",
-          available_on::text as "availableOn",
-          created_at::text as "createdAt",
-          updated_at::text as "updatedAt"
-        from public.quizzes
-        where scope = ${DAILY_QUIZ_SCOPE}
-          and generated_by_user_id = ${userId}::uuid
-          and is_published = true
-          and available_on = ${todayKey}::date
-        order by created_at desc
-        limit 1
-      `;
+  let quizRows: DbDailyQuickQuizRow[];
+
+  if (input.quizId) {
+    quizRows = await db<DbDailyQuickQuizRow[]>`
+      select
+        id::text as id,
+        title,
+        quiz_type as "quizType",
+        difficulty,
+        question_count as "questionCount",
+        estimated_minutes as "estimatedMinutes",
+        available_on::text as "availableOn",
+        created_at::text as "createdAt",
+        updated_at::text as "updatedAt"
+      from public.quizzes
+      where id = ${input.quizId}::uuid
+        and scope = any(${input.scopes}::text[])
+        and generated_by_user_id = ${userId}::uuid
+        and is_published = true
+      limit 1
+    `;
+  } else {
+    if (!input.availableOn) {
+      throw new HttpError(400, 'availableOn is required when quizId is missing.');
+    }
+
+    quizRows = await db<DbDailyQuickQuizRow[]>`
+      select
+        id::text as id,
+        title,
+        quiz_type as "quizType",
+        difficulty,
+        question_count as "questionCount",
+        estimated_minutes as "estimatedMinutes",
+        available_on::text as "availableOn",
+        created_at::text as "createdAt",
+        updated_at::text as "updatedAt"
+      from public.quizzes
+      where scope = any(${input.scopes}::text[])
+        and generated_by_user_id = ${userId}::uuid
+        and is_published = true
+        and available_on = ${input.availableOn}::date
+      order by created_at desc
+      limit 1
+    `;
+  }
 
   const quiz = quizRows[0];
 
@@ -1161,14 +1359,135 @@ async function generateQuizWithOpenAi(input: {
   }
 
   const rawResponse = (await response.json()) as OpenAiResponsesResponse;
-  return normalizeGeneratedDailyQuizPayload(parseGeneratedDailyQuizPayload(rawResponse));
+  return normalizeGeneratedQuizPayload(parseGeneratedQuizPayload(rawResponse), DAILY_QUIZ_QUESTION_COUNT);
 }
 
-async function persistGeneratedDailyQuiz(
-  userId: string,
-  todayKey: string,
-  generatedQuiz: GeneratedDailyQuizPayload
-) {
+async function generateLokiQuizWithOpenAi(input: {
+  message: string;
+  titleHint: string | null;
+  contexts: LokiQuizSourceContext[];
+  questionCount: number;
+}): Promise<GeneratedDailyQuizPayload> {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new HttpError(500, 'Missing OpenAI API key. Set OPENAI_API_KEY for Loki quiz generation.');
+  }
+
+  const modelName = process.env.OPENAI_DAILY_QUIZ_MODEL ?? DEFAULT_DAILY_QUIZ_MODEL;
+  let lastError: unknown = null;
+  let previousFailureMessage: string | null = null;
+
+  for (let attempt = 1; attempt <= MAX_LOKI_QUIZ_GENERATION_ATTEMPTS; attempt += 1) {
+    const response = await fetch(OPENAI_RESPONSES_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        input: [
+          {
+            role: 'system',
+            content: [
+              {
+                type: 'input_text',
+                text:
+                  'You generate multiple-choice quizzes for students inside a tutoring chat. ' +
+                  `Return exactly ${input.questionCount} questions in valid JSON. ` +
+                  'Keep the quiz grounded in the provided lecture context when available, but use the lecture only as reference knowledge. ' +
+                  'If context is thin, use the student request as the topic and keep the quiz high-level and educational. ' +
+                  'Every question must have exactly 4 answer options with exactly 1 correct option. ' +
+                  'Do not ask speaker-identification, quote-matching, transcript-order, or exact-transcript recall questions. ' +
+                  'Do not refer to speakers, students, or labels such as Student A, Speaker 1, professor, or lecturer in the question text or answer options unless the concept itself is explicitly about roles in a scenario. ' +
+                  'Do not test whether the student remembers the wording of the lecture. ' +
+                  'Rewrite lecture content into clean standalone knowledge questions that test understanding, application, and conceptual reasoning. ' +
+                  'If a transcript chunk looks like dialogue, ignore identity labels and extract only the underlying subject-matter ideas.',
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: JSON.stringify({
+                  request: input.message,
+                  titleHint: input.titleHint,
+                  targetQuestionCount: input.questionCount,
+                  previousFailureMessage,
+                  contexts: input.contexts.map((context) => ({
+                    lectureId: context.lectureId,
+                    lectureTitle: context.lectureTitle,
+                    courseId: context.courseId,
+                    courseName: context.courseName,
+                    similarity: context.similarity,
+                    content: truncateText(normalizeQuizContextText(context.content), MAX_CONTEXT_CHARS),
+                  })),
+                }),
+              },
+            ],
+          },
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'loki_quiz',
+            strict: true,
+            schema: buildQuizSchema(input.questionCount),
+          },
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorDetails = await readOpenAiErrorDetails(response);
+      throw new HttpError(502, 'OpenAI Loki quiz generation failed.', errorDetails);
+    }
+
+    try {
+      const rawResponse = (await response.json()) as OpenAiResponsesResponse;
+      const normalizedQuiz = normalizeGeneratedQuizPayload(
+        parseGeneratedQuizPayload(rawResponse),
+        input.questionCount,
+        input.titleHint
+      );
+      assertQuizDoesNotDependOnTranscriptTrivia(normalizedQuiz);
+      return normalizedQuiz;
+    } catch (error) {
+      lastError = error;
+      previousFailureMessage = describeQuizGenerationFailure(error);
+      console.warn('[ quizzes ] Loki quiz generation attempt failed.', {
+        attempt,
+        modelName,
+        failure: previousFailureMessage,
+      });
+    }
+  }
+
+  throw new HttpError(
+    502,
+    'Loki could not generate a valid quiz from that lecture yet. Please try again.',
+    lastError
+  );
+}
+
+async function persistGeneratedDailyQuiz(userId: string, todayKey: string, generatedQuiz: GeneratedDailyQuizPayload) {
+  return persistGeneratedStoredQuiz({
+    userId,
+    scope: DAILY_QUIZ_SCOPE,
+    availableOn: todayKey,
+    generatedQuiz,
+  });
+}
+
+async function persistGeneratedStoredQuiz(input: {
+  userId: string;
+  scope: typeof DAILY_QUIZ_SCOPE | typeof LOKI_QUIZ_SCOPE;
+  availableOn: string | null;
+  generatedQuiz: GeneratedDailyQuizPayload;
+}) {
   const db = getDb();
 
   return db.begin(async (transaction) => {
@@ -1186,16 +1505,16 @@ async function persistGeneratedDailyQuiz(
         scope,
         available_on
       ) values (
-        ${userId}::uuid,
-        ${generatedQuiz.title},
+        ${input.userId}::uuid,
+        ${input.generatedQuiz.title},
         'mcq',
         'mixed',
-        ${generatedQuiz.questions.length},
-        ${generatedQuiz.estimatedMinutes},
+        ${input.generatedQuiz.questions.length},
+        ${input.generatedQuiz.estimatedMinutes},
         true,
         true,
-        ${DAILY_QUIZ_SCOPE},
-        ${todayKey}::date
+        ${input.scope},
+        ${input.availableOn}::date
       )
       on conflict do nothing
       returning id::text as id
@@ -1204,16 +1523,20 @@ async function persistGeneratedDailyQuiz(
     const insertedQuizId = quizInsertRows[0]?.id;
 
     if (!insertedQuizId) {
-      const existingQuiz = await findDailyQuickQuizForUser(userId, todayKey);
+      if (input.scope === DAILY_QUIZ_SCOPE && input.availableOn) {
+        const existingQuiz = await findDailyQuickQuizForUser(input.userId, input.availableOn);
 
-      if (!existingQuiz) {
-        throw new HttpError(409, 'Daily quiz generation is already in progress for today.');
+        if (!existingQuiz) {
+          throw new HttpError(409, 'Daily quiz generation is already in progress for today.');
+        }
+
+        return existingQuiz.id;
       }
 
-      return existingQuiz.id;
+      throw new HttpError(409, 'Quiz generation is already in progress.');
     }
 
-    for (const question of generatedQuiz.questions) {
+    for (const question of input.generatedQuiz.questions) {
       const questionRows = await tx<{ id: string }[]>`
         insert into public.quiz_questions (
           quiz_id,
@@ -1338,7 +1661,7 @@ async function readOpenAiErrorDetails(response: Response) {
   }
 }
 
-function parseGeneratedDailyQuizPayload(response: OpenAiResponsesResponse): GeneratedDailyQuizPayload {
+function parseGeneratedQuizPayload(response: OpenAiResponsesResponse): GeneratedDailyQuizPayload {
   const outputText = extractOutputText(response);
 
   if (!outputText) {
@@ -1348,13 +1671,17 @@ function parseGeneratedDailyQuizPayload(response: OpenAiResponsesResponse): Gene
   return JSON.parse(outputText) as GeneratedDailyQuizPayload;
 }
 
-function normalizeGeneratedDailyQuizPayload(payload: GeneratedDailyQuizPayload): GeneratedDailyQuizPayload {
-  if (!Array.isArray(payload.questions) || payload.questions.length !== DAILY_QUIZ_QUESTION_COUNT) {
+function normalizeGeneratedQuizPayload(
+  payload: GeneratedDailyQuizPayload,
+  expectedQuestionCount: number,
+  fallbackTitle?: string | null
+): GeneratedDailyQuizPayload {
+  if (!Array.isArray(payload.questions) || payload.questions.length !== expectedQuestionCount) {
     throw new HttpError(502, 'OpenAI daily quiz generation returned an unexpected number of questions.');
   }
 
   return {
-    title: cleanText(payload.title) || 'Daily quiz',
+    title: cleanText(payload.title) || cleanText(fallbackTitle ?? '') || 'Generated quiz',
     estimatedMinutes:
       typeof payload.estimatedMinutes === 'number' && Number.isFinite(payload.estimatedMinutes)
         ? Math.max(1, Math.min(30, Math.round(payload.estimatedMinutes)))
@@ -1392,6 +1719,46 @@ function normalizeGeneratedDailyQuizPayload(payload: GeneratedDailyQuizPayload):
       };
     }),
   };
+}
+
+function assertQuizDoesNotDependOnTranscriptTrivia(payload: GeneratedDailyQuizPayload) {
+  const forbiddenPattern =
+    /\b(student\s*[a-z0-9]+|speaker\s*[a-z0-9]+|who said|which speaker|according to the lecture|according to the transcript|in the lecture, who|what did [^?]* say)\b/i;
+
+  for (const question of payload.questions) {
+    if (forbiddenPattern.test(question.questionText) || forbiddenPattern.test(question.explanation)) {
+      throw new HttpError(502, 'OpenAI Loki quiz generation returned transcript-trivia content.', {
+        questionText: question.questionText,
+      });
+    }
+
+    for (const option of question.options) {
+      if (forbiddenPattern.test(option.optionText)) {
+        throw new HttpError(502, 'OpenAI Loki quiz generation returned transcript-trivia answer options.', {
+          questionText: question.questionText,
+          optionText: option.optionText,
+        });
+      }
+    }
+  }
+}
+
+function describeQuizGenerationFailure(error: unknown) {
+  if (error instanceof HttpError) {
+    const detail =
+      typeof error.details === 'string'
+        ? error.details
+        : error.details && typeof error.details === 'object'
+          ? JSON.stringify(error.details)
+          : null;
+    return detail ? `${error.message} Details: ${detail}` : error.message;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Unknown quiz generation failure.';
 }
 
 function extractOutputText(response: OpenAiResponsesResponse) {
@@ -1438,6 +1805,125 @@ function cleanText(value: string) {
   return value.replace(/\r\n/g, '\n').split('\u0000').join('').trim();
 }
 
+function normalizeQuizContextText(value: string) {
+  return cleanText(value)
+    .split('\n')
+    .map((line) => line.replace(/^\s*(student|speaker|professor|lecturer|teacher)\s*[a-z0-9_-]*\s*:\s*/i, ''))
+    .map((line) => line.replace(/^\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s*:\s*/, ''))
+    .filter((line) => line.trim().length > 0)
+    .join('\n');
+}
+
+function resolveLokiQuizQuestionCount(questionCount: number | undefined, message: string) {
+  const requestedCount =
+    typeof questionCount === 'number' && Number.isFinite(questionCount)
+      ? questionCount
+      : (() => {
+          const match = message.match(/\b(\d{1,2})\s+(?:question|questions|quiz questions)\b/i);
+          return match ? Number.parseInt(match[1] ?? '', 10) : DEFAULT_LOKI_QUIZ_QUESTION_COUNT;
+        })();
+
+  return Math.max(MIN_LOKI_QUIZ_QUESTION_COUNT, Math.min(MAX_LOKI_QUIZ_QUESTION_COUNT, Math.round(requestedCount)));
+}
+
+async function getQuizScopeForUser(userId: string, quizId: string) {
+  const db = getDb();
+  const rows = await db<{ scope: string }[]>`
+    select scope
+    from public.quizzes
+    where id = ${quizId}::uuid
+      and generated_by_user_id = ${userId}::uuid
+    limit 1
+  `;
+
+  return rows[0]?.scope ?? null;
+}
+
+function mapStoredQuizToDailyQuickQuiz(quiz: StoredQuizRecord): DailyQuickQuizRecord {
+  return {
+    id: quiz.id,
+    title: quiz.title,
+    quizType: quiz.quizType,
+    difficulty: quiz.difficulty,
+    questionCount: quiz.questionCount,
+    estimatedMinutes: quiz.estimatedMinutes,
+    availableOn: quiz.availableOn ?? '',
+    createdAt: quiz.createdAt,
+    updatedAt: quiz.updatedAt,
+    questions: quiz.questions.map((question) => ({
+      id: question.id,
+      questionOrder: question.questionOrder,
+      questionType: question.questionType,
+      questionText: question.questionText,
+      explanation: question.explanation,
+      difficulty: question.difficulty,
+      isRelatedToAnyCourse: question.isRelatedToAnyCourse,
+      createdAt: question.createdAt,
+      options: question.options.map((option) => ({
+        id: option.id,
+        optionLabel: option.optionLabel,
+        optionText: option.optionText,
+        isCorrect: option.isCorrect,
+        optionOrder: option.optionOrder,
+        createdAt: option.createdAt,
+      })),
+    })),
+  };
+}
+
+function buildQuizSchema(questionCount: number) {
+  return {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      estimatedMinutes: { type: 'integer' },
+      questions: {
+        type: 'array',
+        minItems: questionCount,
+        maxItems: questionCount,
+        items: {
+          type: 'object',
+          properties: {
+            questionOrder: { type: 'integer' },
+            questionText: { type: 'string' },
+            explanation: { type: 'string' },
+            difficulty: { type: 'string', enum: ['easy', 'medium', 'hard'] },
+            isRelatedToAnyCourse: { type: 'boolean' },
+            sourceExcerpt: { type: ['string', 'null'] },
+            options: {
+              type: 'array',
+              minItems: 4,
+              maxItems: 4,
+              items: {
+                type: 'object',
+                properties: {
+                  optionLabel: { type: 'string' },
+                  optionText: { type: 'string' },
+                  isCorrect: { type: 'boolean' },
+                },
+                required: ['optionLabel', 'optionText', 'isCorrect'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: [
+            'questionOrder',
+            'questionText',
+            'explanation',
+            'difficulty',
+            'isRelatedToAnyCourse',
+            'sourceExcerpt',
+            'options',
+          ],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['title', 'estimatedMinutes', 'questions'],
+    additionalProperties: false,
+  } as const;
+}
+
 function nullable(value: string | null) {
   return value?.trim() ? value.trim() : null;
 }
@@ -1446,56 +1932,7 @@ function normalizeOptionalInteger(value: number | null | undefined) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
 }
 
-const DAILY_QUIZ_SCHEMA = {
-  type: 'object',
-  properties: {
-    title: { type: 'string' },
-    estimatedMinutes: { type: 'integer' },
-    questions: {
-      type: 'array',
-      minItems: DAILY_QUIZ_QUESTION_COUNT,
-      maxItems: DAILY_QUIZ_QUESTION_COUNT,
-      items: {
-        type: 'object',
-        properties: {
-          questionOrder: { type: 'integer' },
-          questionText: { type: 'string' },
-          explanation: { type: 'string' },
-          difficulty: { type: 'string', enum: ['easy', 'medium', 'hard'] },
-          isRelatedToAnyCourse: { type: 'boolean' },
-          sourceExcerpt: { type: ['string', 'null'] },
-          options: {
-            type: 'array',
-            minItems: 4,
-            maxItems: 4,
-            items: {
-              type: 'object',
-              properties: {
-                optionLabel: { type: 'string' },
-                optionText: { type: 'string' },
-                isCorrect: { type: 'boolean' },
-              },
-              required: ['optionLabel', 'optionText', 'isCorrect'],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: [
-          'questionOrder',
-          'questionText',
-          'explanation',
-          'difficulty',
-          'isRelatedToAnyCourse',
-          'sourceExcerpt',
-          'options',
-        ],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['title', 'estimatedMinutes', 'questions'],
-  additionalProperties: false,
-} as const;
+const DAILY_QUIZ_SCHEMA = buildQuizSchema(DAILY_QUIZ_QUESTION_COUNT);
 
 type DbDailyQuickQuizRow = {
   id: string;
@@ -1504,7 +1941,7 @@ type DbDailyQuickQuizRow = {
   difficulty: string;
   questionCount: number | null;
   estimatedMinutes: number | null;
-  availableOn: string;
+  availableOn: string | null;
   createdAt: string;
   updatedAt: string;
 };

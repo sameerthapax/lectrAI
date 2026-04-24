@@ -1,5 +1,6 @@
 import type { AudioSource } from 'expo-audio';
 import { Directory, File, Paths } from 'expo-file-system';
+import { Platform } from 'react-native';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
@@ -32,6 +33,12 @@ export type RemoteLokiMessage = {
   completionTokens: number | null;
   totalTokens: number | null;
   retrievalMetadata: unknown;
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
   createdAt: string;
   citations: RemoteLokiCitation[];
 };
@@ -72,6 +79,73 @@ export type RemoteLokiReply = {
   assistantMessage: RemoteLokiMessage;
   retrieval: { chunks: RemoteLokiRetrievedChunk[] };
   audio: RemoteLokiAudioPayload | null;
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
+};
+
+export type RemoteLokiReplyJob = {
+  id: string;
+  chatSessionId: string;
+  userId: string;
+  requestMessageId: string;
+  finalAssistantMessageId: string | null;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RemoteLokiReplyJobCreated = {
+  job: RemoteLokiReplyJob;
+  session: RemoteLokiSession;
+  userMessage: RemoteLokiMessage;
+};
+
+type RemoteLokiReplyJobLookup = {
+  job: RemoteLokiReplyJob;
+};
+
+type RemoteLokiReplyJobEventsLookup = {
+  events: RemoteLokiReplyJobEvent[];
+};
+
+export type RemoteLokiReplyJobCompletedMetadata = {
+  session: RemoteLokiSession;
+  assistantMessage?: RemoteLokiMessage;
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
+  shouldAutoPlayAudio: boolean;
+  audioMessageId: string | null;
+};
+
+export type RemoteLokiReplyJobResult = {
+  job: RemoteLokiReplyJob;
+  session: RemoteLokiSession;
+  assistantMessage: RemoteLokiMessage;
+  shouldAutoPlayAudio: boolean;
+  audioMessageId: string | null;
+};
+
+export type RemoteLokiReplyJobEvent = {
+  id: string;
+  jobId: string;
+  eventType:
+    | 'retrieving_lecture'
+    | 'quiz_generation_completed'
+    | 'flashcards_generation_completed'
+    | 'completed'
+    | 'failed';
+  message: string;
+  metadata: unknown;
+  sequenceNumber: number;
+  createdAt: string;
 };
 
 type RequestOptions = {
@@ -160,6 +234,24 @@ export async function sendLokiReply(
   );
 }
 
+export async function createLokiReplyJob(
+  accessToken: string,
+  input: {
+    sessionId?: string | null;
+    message: string;
+    muteAudioResponse?: boolean;
+  }
+) {
+  return authorizedJsonRequest<RemoteLokiReplyJobCreated>(
+    '/chat/reply-jobs',
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+    { accessToken }
+  );
+}
+
 export async function transcribeLokiAudio(
   accessToken: string,
   input: {
@@ -178,6 +270,164 @@ export async function transcribeLokiAudio(
   );
 }
 
+export async function getLokiReplyJobResult(accessToken: string, jobId: string) {
+  return authorizedJsonRequest<RemoteLokiReplyJobResult>(
+    `/chat/reply-jobs/${encodeURIComponent(jobId)}/result`,
+    { method: 'GET' },
+    { accessToken }
+  );
+}
+
+export async function getLokiReplyJobEvents(
+  accessToken: string,
+  jobId: string,
+  afterSequence = 0
+) {
+  return authorizedJsonRequest<RemoteLokiReplyJobEventsLookup>(
+    `/chat/reply-jobs/${encodeURIComponent(jobId)}/events?afterSequence=${afterSequence}`,
+    { method: 'GET' },
+    { accessToken }
+  );
+}
+
+export async function streamLokiReplyJob(
+  accessToken: string,
+  jobId: string,
+  handlers: {
+    onEvent?: (event: RemoteLokiReplyJobEvent) => void;
+    onOpen?: () => void;
+  },
+  options: {
+    abortSignal?: AbortSignal;
+    afterSequence?: number;
+  } = {}
+): Promise<RemoteLokiReplyJobCompletedMetadata> {
+  if (Platform.OS !== 'web') {
+    return pollLokiReplyJob(accessToken, jobId, handlers, options);
+  }
+
+  const query = options.afterSequence && options.afterSequence > 0 ? `?afterSequence=${options.afterSequence}` : '';
+  const response = await fetch(`${requireApiBaseUrl()}/chat/reply-jobs/${encodeURIComponent(jobId)}/stream${query}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'text/event-stream',
+    },
+    signal: options.abortSignal,
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  if (!response.body) {
+    return pollLokiReplyJob(accessToken, jobId, handlers, options);
+  }
+
+  handlers.onOpen?.();
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split('\n\n');
+    buffer = frames.pop() ?? '';
+
+    for (const frame of frames) {
+      const parsed = parseSseFrame(frame);
+
+      if (!parsed.data) {
+        continue;
+      }
+
+      if (parsed.eventName !== 'job-event') {
+        continue;
+      }
+
+      const event = JSON.parse(parsed.data) as RemoteLokiReplyJobEvent;
+      handlers.onEvent?.(event);
+
+      if (event.eventType === 'completed') {
+        return event.metadata as RemoteLokiReplyJobCompletedMetadata;
+      }
+
+      if (event.eventType === 'failed') {
+        const metadata =
+          event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+            ? (event.metadata as { error?: string })
+            : null;
+        throw new Error(metadata?.error ?? event.message ?? 'Loki could not complete this request.');
+      }
+    }
+  }
+
+  throw new Error('Loki progress stream ended before the reply finished.');
+}
+
+async function pollLokiReplyJob(
+  accessToken: string,
+  jobId: string,
+  handlers: {
+    onEvent?: (event: RemoteLokiReplyJobEvent) => void;
+    onOpen?: () => void;
+  },
+  options: {
+    abortSignal?: AbortSignal;
+    afterSequence?: number;
+  } = {}
+): Promise<RemoteLokiReplyJobCompletedMetadata> {
+  handlers.onOpen?.();
+  let lastSequence = options.afterSequence ?? 0;
+
+  while (true) {
+    throwIfAborted(options.abortSignal);
+
+    const [jobResponse, eventsResponse] = await Promise.all([
+      authorizedJsonRequest<RemoteLokiReplyJobLookup>(
+        `/chat/reply-jobs/${encodeURIComponent(jobId)}`,
+        { method: 'GET', signal: options.abortSignal },
+        { accessToken }
+      ),
+      authorizedJsonRequest<RemoteLokiReplyJobEventsLookup>(
+        `/chat/reply-jobs/${encodeURIComponent(jobId)}/events?afterSequence=${lastSequence}`,
+        { method: 'GET', signal: options.abortSignal },
+        { accessToken }
+      ),
+    ]);
+
+    for (const event of eventsResponse.events) {
+      lastSequence = Math.max(lastSequence, event.sequenceNumber);
+      handlers.onEvent?.(event);
+
+      if (event.eventType === 'completed') {
+        return event.metadata as RemoteLokiReplyJobCompletedMetadata;
+      }
+
+      if (event.eventType === 'failed') {
+        const metadata =
+          event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+            ? (event.metadata as { error?: string })
+            : null;
+        throw new Error(metadata?.error ?? event.message ?? 'Loki could not complete this request.');
+      }
+    }
+
+    if (jobResponse.job.status === 'completed' || jobResponse.job.status === 'failed') {
+      throw new Error('Loki finished processing, but the final progress event could not be recovered.');
+    }
+
+    await delay(450, options.abortSignal);
+  }
+}
+
 export function buildLokiAudioSource(accessToken: string, messageId: string): AudioSource {
   return {
     uri: `${requireApiBaseUrl()}/chat/messages/${encodeURIComponent(messageId)}/audio`,
@@ -185,6 +435,16 @@ export function buildLokiAudioSource(accessToken: string, messageId: string): Au
       Authorization: `Bearer ${accessToken}`,
     },
     name: 'Loki response',
+  };
+}
+
+export function buildLokiSpeechSource(accessToken: string, text: string): AudioSource {
+  return {
+    uri: `${requireApiBaseUrl()}/chat/speech?text=${encodeURIComponent(text)}`,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    name: 'Loki progress',
   };
 }
 
@@ -215,4 +475,60 @@ async function readErrorMessage(response: Response) {
   } catch {
     return 'Request failed. Please try again.';
   }
+}
+
+function parseSseFrame(frame: string) {
+  let eventName = 'message';
+  const dataLines: string[] = [];
+
+  for (const rawLine of frame.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+
+    if (!line || line.startsWith(':')) {
+      continue;
+    }
+
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim() || 'message';
+      continue;
+    }
+
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  return {
+    eventName,
+    data: dataLines.length > 0 ? dataLines.join('\n') : null,
+  };
+}
+
+function throwIfAborted(abortSignal?: AbortSignal) {
+  if (abortSignal?.aborted) {
+    throw new Error('The request was cancelled.');
+  }
+}
+
+function delay(milliseconds: number, abortSignal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, milliseconds);
+
+    const handleAbort = () => {
+      cleanup();
+      reject(new Error('The request was cancelled.'));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      abortSignal?.removeEventListener('abort', handleAbort);
+    };
+
+    if (abortSignal) {
+      abortSignal.addEventListener('abort', handleAbort, { once: true });
+    }
+  });
 }

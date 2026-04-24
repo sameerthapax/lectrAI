@@ -1,13 +1,27 @@
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { getDb } from '@lectrai/db';
+import { Memory } from 'mem0ai/oss';
 import OpenAI from 'openai';
 import { env } from '../../config/env.js';
 import { HttpError } from '../../lib/http-error.js';
+import { publishChatReplyJobSignal } from './chat-reply-jobs-broker.js';
 import { listCourseFilesForUser, listCoursesForUser, type CourseFileRecord, type CourseRecord } from '../courses/courses.service.js';
 import { listLectureRecordingsForUser, type LectureRecordingListItem } from '../lectures/lectures.service.js';
 import {
   searchTranscriptChunks,
   type TranscriptChunkSearchResult,
 } from '../lectures/transcript-embeddings.service.js';
+import {
+  generateLokiFlashcardsForUser,
+  type LokiFlashcardSourceContext,
+  type StoredFlashcardSetRecord,
+} from '../flashcards/flashcards.service.js';
+import {
+  generateLokiQuizForUser,
+  type LokiQuizSourceContext,
+  type StoredQuizRecord,
+} from '../quizzes/quizzes.service.js';
 
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
@@ -24,20 +38,37 @@ const SPECIFIC_RETRIEVAL_TOP_K = 5;
 const MAX_RETRIEVAL_TOP_K = 25;
 const DEFAULT_SCOPE_ITEM_LIMIT = 5;
 const MAX_RETRIEVAL_PLANNER_STEPS = 4;
+const MAX_TUTOR_TOOL_STEPS = 4;
 const MAX_HISTORY_MESSAGES = 12;
+const MAX_MEM0_RESULTS = 5;
+const MEM0_SEARCH_TIMEOUT_MS = 1500;
+const MEM0_AGENT_ID = 'loki';
+const MEM0_COLLECTION_NAME = 'loki_memories';
 const OPENAI_AUDIO_FILE_LIMIT_BYTES = 25 * 1024 * 1024;
 const LIST_COURSES_TOOL_NAME = 'list_courses_catalog';
 const LIST_RECENT_LECTURES_TOOL_NAME = 'list_recent_course_lectures';
 const LIST_RECENT_FILES_TOOL_NAME = 'list_recent_course_files';
 const TRANSCRIPT_SEARCH_TOOL_NAME = 'search_transcript_chunks';
+const CREATE_QUIZ_TOOL_NAME = 'create_quiz';
+const CREATE_FLASHCARDS_TOOL_NAME = 'create_flashcards';
+const GET_CURRENT_DATE_AND_TIME_TOOL_NAME = 'get_current_date_and_time';
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const ENABLE_LOKI_ATTACHMENT_DEBUG = true;
 
 let openAiClient: OpenAI | null = null;
+let mem0Memory: Memory | null | undefined;
 
 type DbClient = ReturnType<typeof getDb>;
 
 type ChatSessionType = 'lecture_chat' | 'course_chat' | 'exam_review';
 type ChatMessageRole = 'user' | 'assistant' | 'system';
+type ChatReplyJobStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type ChatReplyJobEventType =
+  | 'retrieving_lecture'
+  | 'quiz_generation_completed'
+  | 'flashcards_generation_completed'
+  | 'completed'
+  | 'failed';
 
 type OpenAiResponsesOutputContent = {
   type?: unknown;
@@ -118,6 +149,17 @@ type PlannerFunctionCall = {
   callId: string;
 };
 
+type TutorFunctionCall = PlannerFunctionCall;
+
+type CurrentDateTimeToolResult = {
+  isoDateTime: string;
+  timezone: string;
+  localDate: string;
+  localTime: string;
+  localDateTime: string;
+  weekday: string;
+};
+
 export type ChatScope = {
   courseId: string | null;
   lectureId: string | null;
@@ -153,6 +195,12 @@ export type ChatMessageRecord = {
   completionTokens: number | null;
   totalTokens: number | null;
   retrievalMetadata: unknown;
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
   createdAt: string;
   citations: ChatCitationRecord[];
 };
@@ -182,18 +230,82 @@ export type RetrievedContext = {
   decision?: RetrievalDecisionMetadata;
 };
 
+type LokiMemory = {
+  id: string;
+  text: string;
+  score: number | null;
+};
+
+type AssistantQuizAttachment = {
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
+};
+
+type AssistantFlashcardAttachment = {
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
+};
+
 export type GeneratedAssistantReply = {
   session: ChatSessionRecord;
   userMessage: ChatMessageRecord;
   assistantMessage: ChatMessageRecord;
   retrieval: RetrievedContext;
   audio: AssistantAudioPayload | null;
+  quiz: AssistantQuizAttachment | null;
+  flashcards: AssistantFlashcardAttachment | null;
 };
 
 export type AssistantAudioPayload = {
   base64: string;
   mimeType: string;
   fileName: string;
+};
+
+export type ChatReplyJobRecord = {
+  id: string;
+  chatSessionId: string;
+  userId: string;
+  requestMessageId: string;
+  finalAssistantMessageId: string | null;
+  status: ChatReplyJobStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ChatReplyJobEventRecord = {
+  id: string;
+  jobId: string;
+  eventType: ChatReplyJobEventType;
+  message: string;
+  metadata: unknown;
+  sequenceNumber: number;
+  createdAt: string;
+};
+
+export type CreatedChatReplyJob = {
+  job: ChatReplyJobRecord;
+  session: ChatSessionRecord;
+  userMessage: ChatMessageRecord;
+};
+
+type ChatReplyJobCompletedMetadata = {
+  session: ChatSessionRecord;
+  assistantMessage: ChatMessageRecord;
+  hasQuiz: boolean;
+  quizId: string | null;
+  quizTitle: string | null;
+  hasFlashcards: boolean;
+  flashcardSetId: string | null;
+  flashcardTitle: string | null;
+  shouldAutoPlayAudio: boolean;
+  audioMessageId: string | null;
+};
+
+type ChatReplyProgressReporter = {
+  emit: (eventType: ChatReplyJobEventType, message: string, metadata?: unknown) => Promise<void>;
 };
 
 export function parseChatReplyRequest(payload: unknown): ChatReplyRequest {
@@ -321,16 +433,6 @@ export async function generateChatReplyForUser(
   userId: string,
   input: ChatReplyRequest
 ): Promise<GeneratedAssistantReply> {
-  const resolvedScope = await resolveChatScopeForUser(userId, {
-    courseId: input.courseId,
-    lectureId: input.lectureId,
-    sessionId: input.sessionId,
-  });
-  const sessionScopeHint = input.sessionId
-    ? await getRecentSessionScopeHintForUser(userId, input.sessionId)
-    : null;
-  const retrievalDecision = await decideRetrievalForUser(userId, resolvedScope, input.message, sessionScopeHint);
-  const sessionScope = retrievalDecision.scope;
   const session = input.sessionId
     ? await getChatSessionForUser(userId, input.sessionId)
     : await createChatSessionForUser(
@@ -338,7 +440,29 @@ export async function generateChatReplyForUser(
         { courseId: null, lectureId: null, sessionType: 'exam_review' },
         input.message
       );
-  const history = await listRecentChatHistory(session.id, MAX_HISTORY_MESSAGES);
+  const userMessage = await createChatMessage({
+    chatSessionId: session.id,
+    role: 'user',
+    messageText: input.message,
+    userId,
+  });
+  return completeChatReplyWorkflowForUser({
+    userId,
+    input,
+    session,
+    userMessage,
+    progressReporter: null,
+  });
+}
+
+export async function createChatReplyJobForUser(userId: string, input: ChatReplyRequest): Promise<CreatedChatReplyJob> {
+  const session = input.sessionId
+    ? await getChatSessionForUser(userId, input.sessionId)
+    : await createChatSessionForUser(
+        userId,
+        { courseId: null, lectureId: null, sessionType: 'exam_review' },
+        input.message
+      );
 
   const userMessage = await createChatMessage({
     chatSessionId: session.id,
@@ -346,39 +470,96 @@ export async function generateChatReplyForUser(
     messageText: input.message,
     userId,
   });
-  const retrieval = retrievalDecision.retrieval;
-  const modelResponse = await requestTutorResponse({
-    scope: sessionScope,
-    history,
-    retrieval,
-    currentMessage: input.message,
-  });
-  const assistantMessage = await createAssistantMessageWithCitations({
+
+  const job = await createChatReplyJob({
     chatSessionId: session.id,
     userId,
-    messageText: modelResponse.messageText,
-    modelName: modelResponse.modelName,
-    usage: modelResponse.usage,
-    retrieval,
+    requestMessageId: userMessage.id,
   });
-  const audio = input.muteAudioResponse ? null : await generateAssistantAudio(modelResponse.messageText);
 
-  await touchChatSession(session.id, {
-    title: deriveSessionTitle(session.title, input.message),
-    scope: sessionScope,
-  });
+  void runChatReplyJob(job.id, userId, input, session, userMessage);
 
   return {
-    session: {
-      ...session,
-      title: deriveSessionTitle(session.title, input.message),
-      updatedAt: new Date().toISOString(),
-    },
+    job,
+    session,
     userMessage,
-    assistantMessage,
-    retrieval,
-    audio,
   };
+}
+
+export async function getChatReplyJobForUser(userId: string, jobId: string) {
+  const db = getDb();
+  const rows = await db<DbChatReplyJobRow[]>`
+    select
+      id::text as id,
+      chat_session_id::text as chat_session_id,
+      user_id::text as user_id,
+      request_message_id::text as request_message_id,
+      final_assistant_message_id::text as final_assistant_message_id,
+      status,
+      created_at::text as created_at,
+      updated_at::text as updated_at
+    from public.chat_reply_jobs
+    where id = ${jobId}::uuid
+      and user_id = ${userId}::uuid
+    limit 1
+  `;
+
+  return mapSingleChatReplyJob(rows, 'Chat reply job not found.', 404);
+}
+
+export async function getChatReplyJobResultForUser(userId: string, jobId: string) {
+  const job = await getChatReplyJobForUser(userId, jobId);
+  const detail = await getChatSessionDetailForUser(userId, job.chatSessionId);
+  const events = await listChatReplyJobEventsForUser(userId, jobId, 0);
+  const assistantMessage =
+    detail.messages.find((message) => message.id === job.finalAssistantMessageId) ??
+    [...detail.messages].reverse().find((message) => message.role === 'assistant') ??
+    null;
+
+  if (!assistantMessage) {
+    throw new HttpError(404, 'Final assistant message not found for chat reply job.');
+  }
+
+  const eventAttachments = readJobAttachmentMetadata(events);
+
+  return {
+    job,
+    session: detail.session,
+    assistantMessage: {
+      ...assistantMessage,
+      hasQuiz: assistantMessage.hasQuiz || eventAttachments.hasQuiz,
+      quizId: assistantMessage.quizId ?? eventAttachments.quizId ?? null,
+      quizTitle: assistantMessage.quizTitle ?? eventAttachments.quizTitle ?? null,
+      hasFlashcards: assistantMessage.hasFlashcards || eventAttachments.hasFlashcards,
+      flashcardSetId: assistantMessage.flashcardSetId ?? eventAttachments.flashcardSetId ?? null,
+      flashcardTitle: assistantMessage.flashcardTitle ?? eventAttachments.flashcardTitle ?? null,
+    },
+    shouldAutoPlayAudio: true,
+    audioMessageId: assistantMessage.id,
+  };
+}
+
+export async function listChatReplyJobEventsForUser(userId: string, jobId: string, afterSequence = 0) {
+  const db = getDb();
+  const rows = await db<DbChatReplyJobEventRow[]>`
+    select
+      e.id::text as id,
+      e.job_id::text as job_id,
+      e.event_type,
+      e.message,
+      e.metadata_json,
+      e.sequence_number,
+      e.created_at::text as created_at
+    from public.chat_reply_job_events e
+    inner join public.chat_reply_jobs j
+      on j.id = e.job_id
+    where e.job_id = ${jobId}::uuid
+      and j.user_id = ${userId}::uuid
+      and e.sequence_number > ${afterSequence}
+    order by e.sequence_number asc
+  `;
+
+  return rows.map(mapChatReplyJobEventRow);
 }
 
 export async function getAssistantMessageForAudio(userId: string, messageId: string) {
@@ -415,6 +596,146 @@ export async function getAssistantMessageForAudio(userId: string, messageId: str
     outputFormat: DEFAULT_TTS_OUTPUT_FORMAT,
     ttsModel: DEFAULT_TTS_MODEL,
   };
+}
+
+async function completeChatReplyWorkflowForUser(input: {
+  userId: string;
+  input: ChatReplyRequest;
+  session: ChatSessionRecord;
+  userMessage: ChatMessageRecord;
+  progressReporter: ChatReplyProgressReporter | null;
+}): Promise<GeneratedAssistantReply> {
+  const resolvedScope = await resolveChatScopeForUser(input.userId, {
+    courseId: input.input.courseId,
+    lectureId: input.input.lectureId,
+    sessionId: input.input.sessionId,
+  });
+  const sessionScopeHint = input.input.sessionId
+    ? await getRecentSessionScopeHintForUser(input.userId, input.input.sessionId)
+    : null;
+
+  await input.progressReporter?.emit(
+    'retrieving_lecture',
+    buildSingleProgressMessage(input.input.message, resolvedScope)
+  );
+
+  const retrievalDecision = await decideRetrievalForUser(input.userId, resolvedScope, input.input.message, sessionScopeHint);
+  const sessionScope = retrievalDecision.scope;
+  const retrieval = retrievalDecision.retrieval;
+
+  const history = await listRecentChatHistoryExcludingMessage(input.session.id, input.userMessage.id, MAX_HISTORY_MESSAGES);
+  const memories = await searchLokiMemories({
+    userId: input.userId,
+    query: input.input.message,
+  });
+
+  const modelResponse = await requestTutorResponse({
+    userId: input.userId,
+    scope: sessionScope,
+    history,
+    retrieval,
+    memories,
+    currentMessage: input.input.message,
+    progressReporter: input.progressReporter,
+  });
+  logLokiAttachmentDebug('complete-chat-reply-workflow-model-response', {
+    sessionId: input.session.id,
+    userId: input.userId,
+    messageText: modelResponse.messageText,
+    quiz: modelResponse.quiz,
+    flashcards: modelResponse.flashcards,
+  });
+  const assistantMessage = await createAssistantMessageWithCitations({
+    chatSessionId: input.session.id,
+    userId: input.userId,
+    messageText: modelResponse.messageText,
+    modelName: modelResponse.modelName,
+    usage: modelResponse.usage,
+    retrieval,
+    memories,
+    quiz: modelResponse.quiz,
+    flashcards: modelResponse.flashcards,
+  });
+
+  const nextSession = {
+    ...input.session,
+    title: deriveSessionTitle(input.session.title, input.input.message),
+    updatedAt: new Date().toISOString(),
+  };
+
+  await touchChatSession(input.session.id, {
+    title: nextSession.title,
+    scope: sessionScope,
+  });
+  void rememberLokiConversationTurn({
+    userId: input.userId,
+    sessionId: input.session.id,
+    scope: sessionScope,
+    userMessage: input.input.message,
+    assistantMessage: modelResponse.messageText,
+  });
+
+  const audio = input.input.muteAudioResponse ? null : await generateAssistantAudio(modelResponse.messageText);
+
+  return {
+    session: nextSession,
+    userMessage: input.userMessage,
+    assistantMessage,
+    retrieval,
+    audio,
+    quiz: modelResponse.quiz,
+    flashcards: modelResponse.flashcards,
+  };
+}
+
+async function runChatReplyJob(
+  jobId: string,
+  userId: string,
+  input: ChatReplyRequest,
+  session: ChatSessionRecord,
+  userMessage: ChatMessageRecord
+) {
+  try {
+    await updateChatReplyJobStatus(jobId, 'running');
+
+    const progressReporter: ChatReplyProgressReporter = {
+      emit: async (eventType, message, metadata) => {
+        await appendChatReplyJobEvent(jobId, eventType, message, metadata);
+      },
+    };
+    const result = await completeChatReplyWorkflowForUser({
+      userId,
+      input,
+      session,
+      userMessage,
+      progressReporter,
+    });
+
+    await appendChatReplyJobEvent(jobId, 'completed', 'Loki finished this reply.', {
+      session: result.session,
+      assistantMessage: result.assistantMessage,
+      hasQuiz: result.quiz?.hasQuiz ?? false,
+      quizId: result.quiz?.quizId ?? null,
+      quizTitle: result.quiz?.quizTitle ?? null,
+      hasFlashcards: result.flashcards?.hasFlashcards ?? false,
+      flashcardSetId: result.flashcards?.flashcardSetId ?? null,
+      flashcardTitle: result.flashcards?.flashcardTitle ?? null,
+      shouldAutoPlayAudio: !input.muteAudioResponse,
+      audioMessageId: input.muteAudioResponse ? null : result.assistantMessage.id,
+    } satisfies ChatReplyJobCompletedMetadata);
+    await updateChatReplyJobCompletion(jobId, result.assistantMessage.id, 'completed');
+  } catch (error) {
+    console.error('[ chat ] Loki reply job failed.', { jobId, error });
+    await appendChatReplyJobEvent(
+      jobId,
+      'failed',
+      error instanceof Error ? error.message : 'Loki could not complete this request.',
+      {
+        error: error instanceof Error ? error.message : 'Loki could not complete this request.',
+      }
+    );
+    await updateChatReplyJobStatus(jobId, 'failed');
+  }
 }
 
 export async function requestTutorSpeechStream(input: {
@@ -500,34 +821,260 @@ async function generateAssistantAudio(text: string): Promise<AssistantAudioPaylo
 }
 
 async function requestTutorResponse(input: {
+  userId: string;
   scope: ChatScope;
   history: Array<{ role: ChatMessageRole; messageText: string }>;
   retrieval: RetrievedContext;
+  memories: LokiMemory[];
   currentMessage: string;
+  progressReporter: ChatReplyProgressReporter | null;
 }) {
-  const rawResponse = (await getOpenAiClient().responses.create({
+  let response = (await getOpenAiClient().responses.create({
     model: DEFAULT_CHAT_MODEL,
     input: buildOpenAiInput(input) as any,
+    tools: buildTutorTools() as any,
+    tool_choice: 'auto',
   })) as unknown as OpenAiResponsesResponse;
-  const messageText = extractOutputText(rawResponse)?.trim();
+  let latestQuiz: StoredQuizRecord | null = null;
+  let latestFlashcards: StoredFlashcardSetRecord | null = null;
+  let latestUsage = readUsage(response.usage);
+
+  for (let step = 0; step < MAX_TUTOR_TOOL_STEPS; step += 1) {
+    const toolCalls = extractFunctionCalls(response);
+
+    if (toolCalls.length === 0) {
+      const messageText = extractOutputText(response)?.trim();
+
+      if (!messageText) {
+        if (latestQuiz) {
+          return {
+            messageText: `I generated your quiz "${latestQuiz.title ?? 'Generated quiz'}". Open it from the card below.`,
+            modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+            usage: latestUsage,
+            quiz: {
+              hasQuiz: true,
+              quizId: latestQuiz.id,
+              quizTitle: latestQuiz.title,
+            },
+            flashcards: latestFlashcards
+              ? {
+                  hasFlashcards: true,
+                  flashcardSetId: latestFlashcards.id,
+                  flashcardTitle: latestFlashcards.title,
+                }
+              : null,
+          };
+        }
+
+        if (latestFlashcards) {
+          return {
+            messageText: `I generated your flashcards "${latestFlashcards.title ?? 'Generated flashcards'}". Open them from the card below.`,
+            modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+            usage: latestUsage,
+            quiz: null,
+            flashcards: {
+              hasFlashcards: true,
+              flashcardSetId: latestFlashcards.id,
+              flashcardTitle: latestFlashcards.title,
+            },
+          };
+        }
+
+        throw new HttpError(502, 'OpenAI tutor response did not include assistant text.');
+      }
+
+      return {
+        messageText,
+        modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+        usage: latestUsage,
+        quiz: latestQuiz
+          ? {
+              hasQuiz: true,
+              quizId: latestQuiz.id,
+              quizTitle: latestQuiz.title,
+            }
+          : null,
+        flashcards: latestFlashcards
+          ? {
+              hasFlashcards: true,
+              flashcardSetId: latestFlashcards.id,
+              flashcardTitle: latestFlashcards.title,
+            }
+          : null,
+      };
+    }
+
+    const toolOutputs: Array<Record<string, unknown>> = [];
+
+    for (const toolCall of toolCalls) {
+      let result;
+
+      try {
+        result = await executeTutorToolCall(input, toolCall);
+      } catch (error) {
+        if (toolCall.name === CREATE_FLASHCARDS_TOOL_NAME) {
+          console.warn('[ chat ] Loki flashcard tool failed.', error);
+          return {
+            messageText: 'I am having a little difficulty generating those flashcards right now. Please try again.',
+            modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+            usage: latestUsage,
+            quiz: latestQuiz
+              ? {
+                  hasQuiz: true,
+                  quizId: latestQuiz.id,
+                  quizTitle: latestQuiz.title,
+                }
+              : null,
+            flashcards: latestFlashcards
+              ? {
+                  hasFlashcards: true,
+                  flashcardSetId: latestFlashcards.id,
+                  flashcardTitle: latestFlashcards.title,
+                }
+              : null,
+          };
+        }
+
+        throw error;
+      }
+
+      if (result.quiz) {
+        latestQuiz = result.quiz;
+        logLokiAttachmentDebug('request-tutor-response-tool-quiz', {
+          quiz: {
+            id: result.quiz.id,
+            title: result.quiz.title,
+            questionCount: result.quiz.questionCount,
+          },
+        });
+        await input.progressReporter?.emit(
+          'quiz_generation_completed',
+          `Your quiz "${result.quiz.title ?? 'Generated quiz'}" is ready.`,
+          {
+            hasQuiz: true,
+            quizId: result.quiz.id,
+            quizTitle: result.quiz.title,
+          }
+        );
+      }
+
+      if (result.flashcards) {
+        latestFlashcards = result.flashcards;
+        logLokiAttachmentDebug('request-tutor-response-tool-flashcards', {
+          flashcards: {
+            id: result.flashcards.id,
+            title: result.flashcards.title,
+            cardCount: result.flashcards.cardCount,
+          },
+        });
+        await input.progressReporter?.emit(
+          'flashcards_generation_completed',
+          `Your flashcards "${result.flashcards.title ?? 'Generated flashcards'}" are ready.`,
+          {
+            hasFlashcards: true,
+            flashcardSetId: result.flashcards.id,
+            flashcardTitle: result.flashcards.title,
+          }
+        );
+      }
+
+      toolOutputs.push({
+        type: 'function_call_output',
+        call_id: toolCall.callId,
+        output: JSON.stringify(result.output),
+      });
+    }
+
+    if (typeof response.id !== 'string' || response.id.length === 0) {
+      throw new HttpError(502, 'OpenAI tutor response did not include a response id.');
+    }
+
+    response = (await getOpenAiClient().responses.create({
+      model: DEFAULT_CHAT_MODEL,
+      previous_response_id: response.id,
+      input: toolOutputs as any,
+      tools: buildTutorTools() as any,
+      tool_choice: 'auto',
+    })) as unknown as OpenAiResponsesResponse;
+    latestUsage = readUsage(response.usage);
+  }
+
+  const messageText = extractOutputText(response)?.trim();
+
+  if (!messageText && latestQuiz) {
+    return {
+      messageText: `I generated your quiz "${latestQuiz.title ?? 'Generated quiz'}". Open it from the card below.`,
+      modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+      usage: latestUsage,
+      quiz: {
+        hasQuiz: true,
+        quizId: latestQuiz.id,
+        quizTitle: latestQuiz.title,
+      },
+      flashcards: latestFlashcards
+        ? {
+            hasFlashcards: true,
+            flashcardSetId: latestFlashcards.id,
+            flashcardTitle: latestFlashcards.title,
+          }
+        : null,
+    };
+  }
+
+  if (!messageText && latestFlashcards) {
+    return {
+      messageText: `I generated your flashcards "${latestFlashcards.title ?? 'Generated flashcards'}". Open them from the card below.`,
+      modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+      usage: latestUsage,
+      quiz: latestQuiz
+        ? {
+            hasQuiz: true,
+            quizId: latestQuiz.id,
+            quizTitle: latestQuiz.title,
+          }
+        : null,
+      flashcards: {
+        hasFlashcards: true,
+        flashcardSetId: latestFlashcards.id,
+        flashcardTitle: latestFlashcards.title,
+      },
+    };
+  }
 
   if (!messageText) {
     throw new HttpError(502, 'OpenAI tutor response did not include assistant text.');
   }
 
-  const usage = readUsage(rawResponse.usage);
-
-  return {
+  const finalResponse = {
     messageText,
-    modelName: typeof rawResponse.model === 'string' ? rawResponse.model : DEFAULT_CHAT_MODEL,
-    usage,
+    modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+    usage: latestUsage,
+    quiz: latestQuiz
+      ? {
+          hasQuiz: true,
+          quizId: latestQuiz.id,
+          quizTitle: latestQuiz.title,
+        }
+      : null,
+    flashcards: latestFlashcards
+      ? {
+          hasFlashcards: true,
+          flashcardSetId: latestFlashcards.id,
+          flashcardTitle: latestFlashcards.title,
+        }
+      : null,
   };
+
+  logLokiAttachmentDebug('request-tutor-response-final', finalResponse);
+
+  return finalResponse;
 }
 
 function buildOpenAiInput(input: {
   scope: ChatScope;
   history: Array<{ role: ChatMessageRole; messageText: string }>;
   retrieval: RetrievedContext;
+  memories: LokiMemory[];
   currentMessage: string;
 }) {
   const messageIntent = classifyMessageIntent(input.currentMessage);
@@ -541,8 +1088,19 @@ function buildOpenAiInput(input: {
     'If the user asks for a summary or recap of recent or latest lectures, synthesize across the retrieved lecture set instead of focusing on only one lecture unless the user explicitly named one lecture.',
     'If the retrieved context spans multiple lecture dates or titles, make that synthesis explicit in the answer.',
     'If the user asks for quiz or practice questions, use the lecture material as background knowledge only.',
+    `When the user asks to list the user's courses, count courses, or identify which courses they have, call the ${LIST_COURSES_TOOL_NAME} tool instead of saying you cannot access the course list.`,
+    `When the user asks what course is next, what courses are scheduled today, or any question that depends on the current day or time, call both ${GET_CURRENT_DATE_AND_TIME_TOOL_NAME} and ${LIST_COURSES_TOOL_NAME} before answering.`,
+    `When the user asks you to generate a quiz, practice quiz, or practice test, call the ${CREATE_QUIZ_TOOL_NAME} tool instead of pasting the whole quiz into the chat.`,
+    `When the user asks you to generate flashcards, study cards, or revision cards, call the ${CREATE_FLASHCARDS_TOOL_NAME} tool instead of pasting the whole set into the chat.`,
+    'After a quiz tool succeeds, briefly tell the user the quiz is ready and invite them to open it.',
+    'After a flashcard tool succeeds, briefly tell the user the flashcards are ready and invite them to open them.',
+    'You may execute multiple tool calls in the same response loop when needed.',
+    'When relevant, use the personal memory context to personalize continuity and study help, but never let it override lecture facts.',
+    'If personal memory conflicts with retrieved lecture context, trust the lecture context for subject matter and treat memory as preference context only.',
     'For quiz generation, do not ask speaker-identification questions, quote-matching questions, line-specific transcript questions, or questions about who said something in lecture.',
     'For quiz generation, produce concept-based questions that test understanding of the knowledge taught in the lectures rather than recall of transcript wording.',
+    'For flashcard generation, use lecture and course material only as knowledge background and transform it into standalone concept-based study cards.',
+    'For flashcard generation, do not generate speaker-based, quote-based, line-by-line, or transcript-trivia flashcards.',
   ].join(' ');
 
   const scopeLabel = input.scope.lectureId
@@ -572,6 +1130,14 @@ function buildOpenAiInput(input: {
           .map((item, index) => `Scope ${index + 1}: [${item.type}] ${item.title} - ${item.detail}`)
           .join('\n')
       : 'No extra course, lecture, or file scope metadata was collected for this turn.';
+  const personalMemoryContext =
+    input.memories.length > 0
+      ? input.memories
+          .map((memory, index) =>
+            `Memory ${index + 1}: ${memory.text}${memory.score == null ? '' : ` (score ${memory.score.toFixed(3)})`}`
+          )
+          .join('\n')
+      : 'No relevant personal memory was found for this turn.';
 
   return [
     {
@@ -587,6 +1153,7 @@ function buildOpenAiInput(input: {
           text: [
             `Conversation scope: ${scopeLabel}.`,
             `Detected intent: ${messageIntent}.`,
+            `Personal memory context:\n${personalMemoryContext}`,
             `Retrieved scope metadata:\n${scopeContext}`,
             `Retrieved lecture context:\n${retrievedContext}`,
             `Current student message: ${input.currentMessage}`,
@@ -609,6 +1176,226 @@ function buildOpenAiHistoryMessage(message: { role: ChatMessageRole; messageText
     role: message.role,
     content: [{ type: 'input_text' as const, text: message.messageText }],
   };
+}
+
+function buildTutorTools() {
+  return [
+    {
+      type: 'function',
+      name: LIST_COURSES_TOOL_NAME,
+      description:
+        'Return the available courses for the current user with course metadata, including meeting schedule details for direct listing and scheduling questions.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      type: 'function',
+      name: GET_CURRENT_DATE_AND_TIME_TOOL_NAME,
+      description:
+        'Return the current local date and time for the current user, including timezone and weekday, for questions about today, tomorrow, or what course is next.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      type: 'function',
+      name: CREATE_QUIZ_TOOL_NAME,
+      description:
+        'Generate a stored quiz for the current user when they ask for a quiz, practice quiz, or practice test.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          questionCount: { type: ['integer', 'null'], minimum: 3, maximum: 10 },
+          title: { type: ['string', 'null'] },
+        },
+        required: ['questionCount', 'title'],
+      },
+    },
+    {
+      type: 'function',
+      name: CREATE_FLASHCARDS_TOOL_NAME,
+      description:
+        'Generate a stored flashcard set for the current user when they ask for flashcards, study cards, or revision cards.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          cardCount: { type: ['integer', 'null'], minimum: 4, maximum: 12 },
+          title: { type: ['string', 'null'] },
+        },
+        required: ['cardCount', 'title'],
+      },
+    },
+  ];
+}
+
+async function executeTutorToolCall(
+  input: {
+    userId: string;
+    scope: ChatScope;
+    history: Array<{ role: ChatMessageRole; messageText: string }>;
+    retrieval: RetrievedContext;
+    memories: LokiMemory[];
+    currentMessage: string;
+  },
+  toolCall: TutorFunctionCall
+) {
+  if (toolCall.name === LIST_COURSES_TOOL_NAME) {
+    const courses = await listCoursesForUser(input.userId);
+
+    return {
+      output: {
+        count: courses.length,
+        courses: courses.map(mapCourseForPlanner),
+      },
+      quiz: null,
+      flashcards: null,
+    };
+  }
+
+  if (toolCall.name === GET_CURRENT_DATE_AND_TIME_TOOL_NAME) {
+    const currentDateTime = await getCurrentDateTimeForUser(input.userId);
+
+    return {
+      output: currentDateTime,
+      quiz: null,
+      flashcards: null,
+    };
+  }
+
+  if (toolCall.name === CREATE_QUIZ_TOOL_NAME) {
+    const args = readCreateQuizToolArgs(toolCall.arguments);
+    const quiz = await generateLokiQuizForUser({
+      userId: input.userId,
+      message: input.currentMessage,
+      questionCount: args.questionCount ?? undefined,
+      titleHint: args.title ?? null,
+      contexts: input.retrieval.chunks.map(mapRetrievalChunkToQuizSourceContext),
+    });
+
+    return {
+      output: {
+        quizId: quiz.id,
+        title: quiz.title,
+        questionCount: quiz.questionCount,
+      },
+      quiz,
+      flashcards: null,
+    };
+  }
+
+  if (toolCall.name === CREATE_FLASHCARDS_TOOL_NAME) {
+    const args = readCreateFlashcardsToolArgs(toolCall.arguments);
+    const flashcards = await generateLokiFlashcardsForUser({
+      userId: input.userId,
+      message: input.currentMessage,
+      cardCount: args.cardCount ?? undefined,
+      titleHint: args.title ?? null,
+      contexts: buildFlashcardGenerationContexts(input.retrieval),
+    });
+
+    return {
+      output: {
+        flashcardSetId: flashcards.id,
+        title: flashcards.title,
+        cardCount: flashcards.cardCount,
+      },
+      quiz: null,
+      flashcards,
+    };
+  }
+
+  throw new HttpError(502, `OpenAI tutor requested unsupported function "${toolCall.name}".`);
+}
+
+function mapRetrievalChunkToQuizSourceContext(entry: TranscriptChunkSearchResult): LokiQuizSourceContext {
+  return {
+    lectureId: entry.transcript.lectureId,
+    lectureTitle: entry.transcript.lectureTitle,
+    courseId: entry.transcript.courseId,
+    courseName: entry.transcript.courseName,
+    similarity: entry.chunk.similarity,
+    content: entry.chunk.content,
+  };
+}
+
+function mapRetrievalChunkToFlashcardSourceContext(entry: TranscriptChunkSearchResult): LokiFlashcardSourceContext {
+  return {
+    sourceType: 'transcript',
+    sourceId: entry.chunk.id,
+    lectureId: entry.transcript.lectureId,
+    lectureTitle: entry.transcript.lectureTitle,
+    courseId: entry.transcript.courseId,
+    courseName: entry.transcript.courseName,
+    similarity: entry.chunk.similarity,
+    content: entry.chunk.content,
+  };
+}
+
+function buildFlashcardGenerationContexts(retrieval: RetrievedContext): LokiFlashcardSourceContext[] {
+  const transcriptContexts = retrieval.chunks.map(mapRetrievalChunkToFlashcardSourceContext);
+  const scopeContexts = (retrieval.scopeItems ?? []).map((item): LokiFlashcardSourceContext => {
+    if (item.type === 'file') {
+      return {
+        sourceType: 'course_file',
+        sourceId: item.id,
+        lectureId: null,
+        lectureTitle: null,
+        courseId: item.courseId,
+        courseName: null,
+        similarity: null,
+        content: `${item.title}. ${item.detail}`.trim(),
+      };
+    }
+
+    if (item.type === 'lecture') {
+      return {
+        sourceType: 'lecture_metadata',
+        sourceId: item.id,
+        lectureId: item.id,
+        lectureTitle: item.title,
+        courseId: item.courseId,
+        courseName: null,
+        similarity: null,
+        content: `${item.title}. ${item.detail}`.trim(),
+      };
+    }
+
+    return {
+      sourceType: 'course_metadata',
+      sourceId: item.id,
+      lectureId: null,
+      lectureTitle: null,
+      courseId: item.id,
+      courseName: item.title,
+      similarity: null,
+      content: `${item.title}. ${item.detail}`.trim(),
+    };
+  });
+
+  const deduped = new Map<string, LokiFlashcardSourceContext>();
+
+  for (const context of [...transcriptContexts, ...scopeContexts]) {
+    const key = `${context.sourceType}:${context.sourceId}`;
+
+    if (!deduped.has(key)) {
+      deduped.set(key, context);
+    }
+  }
+
+  return Array.from(deduped.values());
 }
 
 async function decideRetrievalForUser(
@@ -773,6 +1560,62 @@ async function createChatSessionForUser(userId: string, scope: ChatScope, firstM
   return mapSingleSession(rows, 'Failed to create chat session.');
 }
 
+async function createChatReplyJob(input: {
+  chatSessionId: string;
+  userId: string;
+  requestMessageId: string;
+}) {
+  const db = getDb();
+  const rows = await db<DbChatReplyJobRow[]>`
+    insert into public.chat_reply_jobs (
+      chat_session_id,
+      user_id,
+      request_message_id,
+      status
+    ) values (
+      ${input.chatSessionId}::uuid,
+      ${input.userId}::uuid,
+      ${input.requestMessageId}::uuid,
+      'queued'
+    )
+    returning
+      id::text as id,
+      chat_session_id::text as chat_session_id,
+      user_id::text as user_id,
+      request_message_id::text as request_message_id,
+      final_assistant_message_id::text as final_assistant_message_id,
+      status,
+      created_at::text as created_at,
+      updated_at::text as updated_at
+  `;
+
+  return mapSingleChatReplyJob(rows, 'Failed to create chat reply job.');
+}
+
+async function updateChatReplyJobStatus(jobId: string, status: ChatReplyJobStatus) {
+  const db = getDb();
+  await db`
+    update public.chat_reply_jobs
+    set status = ${status}
+    where id = ${jobId}::uuid
+  `;
+}
+
+async function updateChatReplyJobCompletion(
+  jobId: string,
+  finalAssistantMessageId: string,
+  status: Extract<ChatReplyJobStatus, 'completed'>
+) {
+  const db = getDb();
+  await db`
+    update public.chat_reply_jobs
+    set
+      status = ${status},
+      final_assistant_message_id = ${finalAssistantMessageId}::uuid
+    where id = ${jobId}::uuid
+  `;
+}
+
 async function getChatSessionForUser(userId: string, sessionId: string) {
   const db = getDb();
   const rows = await db<DbChatSessionRow[]>`
@@ -794,12 +1637,13 @@ async function getChatSessionForUser(userId: string, sessionId: string) {
   return mapSingleSession(rows, 'Chat session not found.', 404);
 }
 
-async function listRecentChatHistory(sessionId: string, limit: number) {
+async function listRecentChatHistoryExcludingMessage(sessionId: string, excludedMessageId: string, limit: number) {
   const db = getDb();
   const rows = await db<{ role: ChatMessageRole; message_text: string }[]>`
     select role, message_text
     from public.chat_messages
     where chat_session_id = ${sessionId}::uuid
+      and id <> ${excludedMessageId}::uuid
     order by created_at desc
     limit ${limit}
   `;
@@ -811,6 +1655,99 @@ async function listRecentChatHistory(sessionId: string, limit: number) {
       role: row.role,
       messageText: row.message_text,
     }));
+}
+
+async function appendChatReplyJobEvent(
+  jobId: string,
+  eventType: ChatReplyJobEventType,
+  message: string,
+  metadata: unknown = null
+) {
+  const db = getDb();
+  if (eventType === 'quiz_generation_completed' || eventType === 'flashcards_generation_completed' || eventType === 'completed') {
+    logLokiAttachmentDebug('append-chat-reply-job-event', {
+      jobId,
+      eventType,
+      message,
+      metadata,
+    });
+  }
+  const rows = await db<DbChatReplyJobEventRow[]>`
+    with next_sequence as (
+      select coalesce(max(sequence_number), 0) + 1 as value
+      from public.chat_reply_job_events
+      where job_id = ${jobId}::uuid
+    )
+    insert into public.chat_reply_job_events (
+      job_id,
+      event_type,
+      message,
+      metadata_json,
+      sequence_number
+    )
+    select
+      ${jobId}::uuid,
+      ${eventType},
+      ${message},
+      ${JSON.stringify(metadata)}::jsonb,
+      next_sequence.value
+    from next_sequence
+    returning
+      id::text as id,
+      job_id::text as job_id,
+      event_type,
+      message,
+      metadata_json,
+      sequence_number,
+      created_at::text as created_at
+  `;
+
+  publishChatReplyJobSignal(jobId);
+  return mapSingleChatReplyJobEvent(rows, 'Failed to append chat reply job event.');
+}
+
+function readJobAttachmentMetadata(events: ChatReplyJobEventRecord[]) {
+  let quizId: string | null = null;
+  let quizTitle: string | null = null;
+  let flashcardSetId: string | null = null;
+  let flashcardTitle: string | null = null;
+
+  for (const event of events) {
+    if (!event.metadata || typeof event.metadata !== 'object' || Array.isArray(event.metadata)) {
+      continue;
+    }
+
+    const metadata = event.metadata as Record<string, unknown>;
+
+    if (event.eventType === 'quiz_generation_completed') {
+      if (typeof metadata.quizId === 'string' && metadata.quizId.length > 0) {
+        quizId = metadata.quizId;
+      }
+
+      if (typeof metadata.quizTitle === 'string' && metadata.quizTitle.trim().length > 0) {
+        quizTitle = metadata.quizTitle.trim();
+      }
+    }
+
+    if (event.eventType === 'flashcards_generation_completed') {
+      if (typeof metadata.flashcardSetId === 'string' && metadata.flashcardSetId.length > 0) {
+        flashcardSetId = metadata.flashcardSetId;
+      }
+
+      if (typeof metadata.flashcardTitle === 'string' && metadata.flashcardTitle.trim().length > 0) {
+        flashcardTitle = metadata.flashcardTitle.trim();
+      }
+    }
+  }
+
+  return {
+    hasQuiz: Boolean(quizId),
+    quizId,
+    quizTitle,
+    hasFlashcards: Boolean(flashcardSetId),
+    flashcardSetId,
+    flashcardTitle,
+  };
 }
 
 async function getRecentSessionScopeHintForUser(userId: string, sessionId: string): Promise<ChatScope | null> {
@@ -935,8 +1872,18 @@ async function createAssistantMessageWithCitations(input: {
   modelName: string;
   usage: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null };
   retrieval: RetrievedContext;
+  memories: LokiMemory[];
+  quiz: AssistantQuizAttachment | null;
+  flashcards: AssistantFlashcardAttachment | null;
 }) {
   const db = getDb();
+  const retrievalMetadata = buildRetrievalMetadata(input.retrieval, input.memories, input.quiz, input.flashcards);
+  logLokiAttachmentDebug('create-assistant-message-with-citations-input', {
+    chatSessionId: input.chatSessionId,
+    quiz: input.quiz,
+    flashcards: input.flashcards,
+    retrievalMetadata,
+  });
 
   return db.begin(async (transaction) => {
     const tx = transaction as unknown as DbClient;
@@ -960,7 +1907,7 @@ async function createAssistantMessageWithCitations(input: {
         ${input.usage.promptTokens},
         ${input.usage.completionTokens},
         ${input.usage.totalTokens},
-        ${JSON.stringify(buildRetrievalMetadata(input.retrieval))}::jsonb
+        ${JSON.stringify(retrievalMetadata)}::jsonb
       )
       returning
         id::text as id,
@@ -975,6 +1922,16 @@ async function createAssistantMessageWithCitations(input: {
     `;
 
     const message = mapSingleMessage(messageRows, 'Failed to save assistant response.');
+    logLokiAttachmentDebug('create-assistant-message-with-citations-saved-message', {
+      messageId: message.id,
+      retrievalMetadata: message.retrievalMetadata,
+      hasQuiz: message.hasQuiz,
+      quizId: message.quizId,
+      quizTitle: message.quizTitle,
+      hasFlashcards: message.hasFlashcards,
+      flashcardSetId: message.flashcardSetId,
+      flashcardTitle: message.flashcardTitle,
+    });
 
     const citations: ChatCitationRecord[] = [];
 
@@ -1095,10 +2052,32 @@ async function touchChatSession(
   `;
 }
 
-function buildRetrievalMetadata(retrieval: RetrievedContext) {
+function logLokiAttachmentDebug(label: string, payload: unknown) {
+  if (!ENABLE_LOKI_ATTACHMENT_DEBUG) {
+    return;
+  }
+
+  try {
+    console.log(`[loki-attachment-debug] ${label}`, JSON.stringify(payload, null, 2));
+  } catch (error) {
+    console.log(`[loki-attachment-debug] ${label}`, payload, error);
+  }
+}
+
+function buildRetrievalMetadata(
+  retrieval: RetrievedContext,
+  memories: LokiMemory[],
+  quiz: AssistantQuizAttachment | null,
+  flashcards: AssistantFlashcardAttachment | null
+) {
   return {
     decision: retrieval.decision ?? null,
     scopeItems: retrieval.scopeItems ?? [],
+    memories: memories.map((memory) => ({
+      id: memory.id,
+      text: memory.text,
+      score: memory.score,
+    })),
     chunkCount: retrieval.chunks.length,
     chunks: retrieval.chunks.map((entry) => ({
       lectureId: entry.transcript.lectureId,
@@ -1112,6 +2091,8 @@ function buildRetrievalMetadata(retrieval: RetrievedContext) {
       similarity: entry.chunk.similarity,
       content: entry.chunk.content,
     })),
+    quiz: quiz ?? null,
+    flashcards: flashcards ?? null,
   };
 }
 
@@ -1255,6 +2236,8 @@ function buildPlannerIntro(message: string, courses: CourseRecord[]) {
             'Every user message must be treated independently. Do not assume the chat session is tied to a fixed course or lecture.',
             'Use the available tools to identify the best course, lecture set, or file set for this specific message.',
             'You may call tools in sequence, for example: list courses, then list recent lectures or files, then search transcript chunks.',
+            `If the user asks to list their courses, count their courses, or identify which courses they have, call ${LIST_COURSES_TOOL_NAME}.`,
+            `If the user asks what course is next, what courses are scheduled today, or any question that depends on the current day or time, call ${GET_CURRENT_DATE_AND_TIME_TOOL_NAME} and ${LIST_COURSES_TOOL_NAME} before deciding whether transcript search is needed.`,
             'Only call transcript search when the answer should rely on lecture transcript content.',
             'When transcript search is useful, choose topK dynamically using these defaults: around 20 for summaries or recaps, around 10 for quiz or practice-question generation, and around 5 for targeted factual questions.',
             'If the user asks about recent materials or uploaded materials, you may use lecture or file listing tools even before transcript search.',
@@ -1289,6 +2272,19 @@ function buildRetrievalPlannerTools() {
       type: 'function',
       name: LIST_COURSES_TOOL_NAME,
       description: 'Return the available courses for the current user with course metadata.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      type: 'function',
+      name: GET_CURRENT_DATE_AND_TIME_TOOL_NAME,
+      description:
+        'Return the current local date and time for the current user, including timezone and weekday, for schedule-aware planning.',
       strict: true,
       parameters: {
         type: 'object',
@@ -1360,8 +2356,19 @@ async function executePlannerToolCall(
   if (toolCall.name === LIST_COURSES_TOOL_NAME) {
     const courses = await listCoursesForUser(userId);
     return {
-      output: { courses: courses.map(mapCourseForPlanner) },
+      output: { count: courses.length, courses: courses.map(mapCourseForPlanner) },
       scopeItems: courses.map(mapCourseToScopeItem),
+      retrievedChunks: [] as TranscriptChunkSearchResult[],
+      serializedArguments: {},
+    };
+  }
+
+  if (toolCall.name === GET_CURRENT_DATE_AND_TIME_TOOL_NAME) {
+    const currentDateTime = await getCurrentDateTimeForUser(userId);
+
+    return {
+      output: currentDateTime,
+      scopeItems: [] as PlannerScopeItem[],
       retrievedChunks: [] as TranscriptChunkSearchResult[],
       serializedArguments: {},
     };
@@ -1467,6 +2474,24 @@ function deriveDynamicScopeFromResults(chunks: TranscriptChunkSearchResult[], sc
     lectureId: null,
     sessionType: 'exam_review',
   };
+}
+
+function buildSingleProgressMessage(message: string, scope: ChatScope) {
+  const normalized = message.trim().toLowerCase();
+  const requestedAsset = /(flashcards?|study cards?|revision cards?)/i.test(normalized)
+    ? 'a flashcard set'
+    : /(quiz|practice questions?|mcq|multiple choice|test me)/i.test(normalized)
+      ? 'a quiz'
+      : 'a study output';
+  const requestedSource = scope.lectureId
+    ? 'the requested lecture'
+    : scope.courseId
+      ? 'the requested course'
+      : /(doc|document|notes|pdf|slide|file)/i.test(normalized)
+        ? 'the requested documents'
+        : 'the requested material';
+
+  return `I am retrieving ${requestedSource} information and creating ${requestedAsset} for you.`;
 }
 
 function readUsage(usage: unknown) {
@@ -1608,6 +2633,24 @@ function readRecentCourseFilesToolArgs(rawArguments: string): RecentCourseFilesT
   };
 }
 
+function readCreateQuizToolArgs(rawArguments: string) {
+  const record = readJsonObject(rawArguments, 'OpenAI tutor returned invalid quiz tool arguments.');
+
+  return {
+    questionCount: readOptionalBoundedInteger(record.questionCount, 'questionCount', 3, 10),
+    title: readOptionalString(record.title, 'title'),
+  };
+}
+
+function readCreateFlashcardsToolArgs(rawArguments: string) {
+  const record = readJsonObject(rawArguments, 'OpenAI tutor returned invalid flashcard tool arguments.');
+
+  return {
+    cardCount: readOptionalBoundedInteger(record.cardCount, 'cardCount', 4, 12),
+    title: readOptionalString(record.title, 'title'),
+  };
+}
+
 function readJsonObject(rawArguments: string, errorMessage: string) {
   let parsed: unknown;
 
@@ -1629,6 +2672,11 @@ function mapCourseForPlanner(course: CourseRecord) {
     description: course.description,
     semester: course.semester,
     courseType: course.courseType,
+    meetingSchedule: course.meetingSchedule.map((meeting) => ({
+      dayOfWeek: meeting.dayOfWeek,
+      startTime: meeting.startTime,
+      endTime: meeting.endTime,
+    })),
   };
 }
 
@@ -1642,10 +2690,25 @@ function mapCourseToScopeItem(course: CourseRecord): PlannerScopeItem {
       course.instructorName ? `Instructor: ${course.instructorName}` : null,
       course.description ? `Description: ${course.description}` : null,
       course.semester ? `Semester: ${course.semester}` : null,
+      formatCourseScheduleLabel(course),
     ]
       .filter(Boolean)
       .join(' | '),
   };
+}
+
+function formatCourseScheduleLabel(course: CourseRecord) {
+  if (course.meetingSchedule.length === 0) {
+    return null;
+  }
+
+  return `Schedule: ${course.meetingSchedule
+    .map((meeting) => `${formatMeetingDayLabel(meeting.dayOfWeek)} ${meeting.startTime}-${meeting.endTime}`)
+    .join(', ')}`;
+}
+
+function formatMeetingDayLabel(dayOfWeek: string) {
+  return `${dayOfWeek.slice(0, 1).toUpperCase()}${dayOfWeek.slice(1, 3)}`;
 }
 
 function mapLectureForPlanner(lecture: LectureRecordingListItem) {
@@ -1724,6 +2787,15 @@ function shouldRetryWithFallbackVoice(errorDetails: unknown) {
 }
 
 function readObjectRecord(value: unknown) {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return readObjectRecord(parsed);
+    } catch {
+      return null;
+    }
+  }
+
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
   }
@@ -1745,6 +2817,19 @@ function readRequiredString(value: unknown, fieldName: string) {
   }
 
   return value.trim();
+}
+
+function readOptionalString(value: unknown, fieldName: string) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  if (typeof value !== 'string') {
+    throw new HttpError(400, `${fieldName} must be a string.`);
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function readOptionalPositiveInteger(value: unknown, fieldName: string) {
@@ -1878,6 +2963,221 @@ function classifyMessageIntent(message: string) {
   return 'general';
 }
 
+function getMem0Memory() {
+  if (mem0Memory !== undefined) {
+    return mem0Memory;
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+
+  if (!apiKey) {
+    mem0Memory = null;
+    return mem0Memory;
+  }
+
+  const vectorDbPath = resolveMem0StoragePath(env.mem0OssVectorDbPath);
+  const historyDbPath = resolveMem0StoragePath(env.mem0OssHistoryDbPath);
+
+  ensureDirectoryForFile(vectorDbPath);
+  ensureDirectoryForFile(historyDbPath);
+
+  mem0Memory = new Memory({
+    llm: {
+      provider: 'openai',
+      config: {
+        apiKey,
+        model: DEFAULT_CHAT_MODEL,
+      },
+    },
+    embedder: {
+      provider: 'openai',
+      config: {
+        apiKey,
+        model: env.openAiTranscriptEmbeddingModel,
+        embeddingDims: env.openAiTranscriptEmbeddingDimensions,
+      },
+    },
+    vectorStore: {
+      provider: 'memory',
+      config: {
+        collectionName: MEM0_COLLECTION_NAME,
+        dimension: env.openAiTranscriptEmbeddingDimensions,
+        dbPath: vectorDbPath,
+      },
+    },
+    historyDbPath,
+  });
+
+  return mem0Memory;
+}
+
+async function getCurrentDateTimeForUser(userId: string): Promise<CurrentDateTimeToolResult> {
+  const timezone = await getUserTimezoneOrUtc(userId);
+  const now = new Date();
+
+  const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const timeFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const dateTimeFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const weekdayFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    weekday: 'long',
+  });
+
+  return {
+    isoDateTime: now.toISOString(),
+    timezone,
+    localDate: dateFormatter.format(now),
+    localTime: timeFormatter.format(now),
+    localDateTime: dateTimeFormatter.format(now),
+    weekday: weekdayFormatter.format(now),
+  };
+}
+
+async function getUserTimezoneOrUtc(userId: string) {
+  const db = getDb();
+  const rows = await db<{ timezone: string | null }[]>`
+    select timezone
+    from public.users
+    where id = ${userId}::uuid
+    limit 1
+  `;
+  const timezone = rows[0]?.timezone?.trim() || 'UTC';
+
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch {
+    return 'UTC';
+  }
+}
+
+async function searchLokiMemories(input: { userId: string; query: string }): Promise<LokiMemory[]> {
+  const memory = getMem0Memory();
+
+  if (!memory) {
+    return [];
+  }
+
+  const query = input.query.trim();
+
+  if (!query) {
+    return [];
+  }
+
+  try {
+    const response = await withTimeout(
+      memory.search(query, {
+        filters: { user_id: input.userId },
+        topK: MAX_MEM0_RESULTS,
+      }),
+      MEM0_SEARCH_TIMEOUT_MS,
+      'Mem0 search timed out.'
+    );
+    const results = isRecord(response) && Array.isArray(response.results) ? response.results : [];
+
+    return results
+      .map((item): LokiMemory | null => {
+        if (!isRecord(item) || typeof item.memory !== 'string' || item.memory.trim().length === 0) {
+          return null;
+        }
+
+        return {
+          id: typeof item.id === 'string' ? item.id : item.memory,
+          text: item.memory.trim(),
+          score: typeof item.score === 'number' ? item.score : null,
+        };
+      })
+      .filter((item): item is LokiMemory => item !== null);
+  } catch (error) {
+    console.warn('[ chat ] Mem0 search failed.', error);
+    return [];
+  }
+}
+
+async function rememberLokiConversationTurn(input: {
+  userId: string;
+  sessionId: string;
+  scope: ChatScope;
+  userMessage: string;
+  assistantMessage: string;
+}) {
+  const memory = getMem0Memory();
+
+  if (!memory) {
+    return;
+  }
+
+  try {
+    await memory.add(
+      [
+        { role: 'user', content: input.userMessage },
+        { role: 'assistant', content: input.assistantMessage },
+      ],
+      {
+        userId: input.userId,
+        agentId: MEM0_AGENT_ID,
+        runId: input.sessionId,
+        metadata: {
+          courseId: input.scope.courseId,
+          lectureId: input.scope.lectureId,
+          sessionType: input.scope.sessionType,
+        },
+      }
+    );
+  } catch (error) {
+    console.warn('[ chat ] Mem0 add failed.', error);
+  }
+}
+
+function resolveMem0StoragePath(pathValue: string) {
+  return resolve(process.cwd(), pathValue);
+}
+
+function ensureDirectoryForFile(filePath: string) {
+  mkdirSync(dirname(filePath), { recursive: true });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 function resolveTranscriptSearchTopK(requestedTopK: number | undefined, message: string) {
   const intent = classifyMessageIntent(message);
   const normalizedRequested =
@@ -1939,6 +3239,26 @@ function mapSingleMessage(rows: DbChatMessageRow[], errorMessage: string) {
   return mapChatMessageRow(row);
 }
 
+function mapSingleChatReplyJob(rows: DbChatReplyJobRow[], errorMessage: string, statusCode = 500) {
+  const row = rows[0];
+
+  if (!row) {
+    throw new HttpError(statusCode, errorMessage);
+  }
+
+  return mapChatReplyJobRow(row);
+}
+
+function mapSingleChatReplyJobEvent(rows: DbChatReplyJobEventRow[], errorMessage: string, statusCode = 500) {
+  const row = rows[0];
+
+  if (!row) {
+    throw new HttpError(statusCode, errorMessage);
+  }
+
+  return mapChatReplyJobEventRow(row);
+}
+
 function mapChatSessionRow(row: DbChatSessionRow): ChatSessionRecord {
   return {
     id: row.id,
@@ -1953,6 +3273,10 @@ function mapChatSessionRow(row: DbChatSessionRow): ChatSessionRecord {
 }
 
 function mapChatMessageRow(row: DbChatMessageRow): Omit<ChatMessageRecord, 'citations'> {
+  const normalizedRetrievalMetadata = readObjectRecord(row.retrieval_metadata);
+  const quiz = readQuizAttachmentFromMetadata(normalizedRetrievalMetadata);
+  const flashcards = readFlashcardAttachmentFromMetadata(normalizedRetrievalMetadata);
+
   return {
     id: row.id,
     role: row.role,
@@ -1961,8 +3285,48 @@ function mapChatMessageRow(row: DbChatMessageRow): Omit<ChatMessageRecord, 'cita
     promptTokens: row.prompt_tokens,
     completionTokens: row.completion_tokens,
     totalTokens: row.total_tokens,
-    retrievalMetadata: row.retrieval_metadata,
+    retrievalMetadata: normalizedRetrievalMetadata ?? {},
+    hasQuiz: quiz.hasQuiz,
+    quizId: quiz.quizId,
+    quizTitle: quiz.quizTitle,
+    hasFlashcards: flashcards.hasFlashcards,
+    flashcardSetId: flashcards.flashcardSetId,
+    flashcardTitle: flashcards.flashcardTitle,
     createdAt: row.created_at,
+  };
+}
+
+function readQuizAttachmentFromMetadata(metadata: unknown): AssistantQuizAttachment {
+  const record = readObjectRecord(metadata);
+  const quiz = readObjectRecord(record?.quiz);
+  const quizId = typeof quiz?.quizId === 'string' && UUID_REGEX.test(quiz.quizId) ? quiz.quizId : null;
+  const quizTitle = typeof quiz?.quizTitle === 'string' && quiz.quizTitle.trim().length > 0 ? quiz.quizTitle.trim() : null;
+  const hasQuiz = quiz?.hasQuiz === true && Boolean(quizId);
+
+  return {
+    hasQuiz,
+    quizId: hasQuiz ? quizId : null,
+    quizTitle: hasQuiz ? quizTitle : null,
+  };
+}
+
+function readFlashcardAttachmentFromMetadata(metadata: unknown): AssistantFlashcardAttachment {
+  const record = readObjectRecord(metadata);
+  const flashcards = readObjectRecord(record?.flashcards);
+  const flashcardSetId =
+    typeof flashcards?.flashcardSetId === 'string' && UUID_REGEX.test(flashcards.flashcardSetId)
+      ? flashcards.flashcardSetId
+      : null;
+  const flashcardTitle =
+    typeof flashcards?.flashcardTitle === 'string' && flashcards.flashcardTitle.trim().length > 0
+      ? flashcards.flashcardTitle.trim()
+      : null;
+  const hasFlashcards = flashcards?.hasFlashcards === true && Boolean(flashcardSetId);
+
+  return {
+    hasFlashcards,
+    flashcardSetId: hasFlashcards ? flashcardSetId : null,
+    flashcardTitle: hasFlashcards ? flashcardTitle : null,
   };
 }
 
@@ -1974,6 +3338,31 @@ function mapChatCitationRow(row: DbChatCitationRow): ChatCitationRecord {
     citationOrder: row.citation_order,
     relevanceScore: row.relevance_score == null ? null : Number(row.relevance_score),
     citedText: row.cited_text,
+  };
+}
+
+function mapChatReplyJobRow(row: DbChatReplyJobRow): ChatReplyJobRecord {
+  return {
+    id: row.id,
+    chatSessionId: row.chat_session_id,
+    userId: row.user_id,
+    requestMessageId: row.request_message_id,
+    finalAssistantMessageId: row.final_assistant_message_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapChatReplyJobEventRow(row: DbChatReplyJobEventRow): ChatReplyJobEventRecord {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    eventType: row.event_type,
+    message: row.message,
+    metadata: row.metadata_json,
+    sequenceNumber: row.sequence_number,
+    createdAt: row.created_at,
   };
 }
 
@@ -2008,6 +3397,27 @@ type DbChatCitationRow = {
   citation_order: number;
   relevance_score: number | string | null;
   cited_text: string | null;
+};
+
+type DbChatReplyJobRow = {
+  id: string;
+  chat_session_id: string;
+  user_id: string;
+  request_message_id: string;
+  final_assistant_message_id: string | null;
+  status: ChatReplyJobStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+type DbChatReplyJobEventRow = {
+  id: string;
+  job_id: string;
+  event_type: ChatReplyJobEventType;
+  message: string;
+  metadata_json: unknown;
+  sequence_number: number;
+  created_at: string;
 };
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

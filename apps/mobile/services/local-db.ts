@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 const DATABASE_NAME = 'lectrai-cache.db';
 
-export const LOCAL_CACHE_SCHEMA_VERSION = 9;
+export const LOCAL_CACHE_SCHEMA_VERSION = 10;
 
 const SYNC_STATUS_CHECK = `
 CHECK (sync_status IN ('synced', 'pending_pull', 'pending_push', 'conflict'))
@@ -492,12 +492,17 @@ CREATE TABLE IF NOT EXISTS local_quiz_attempt_answers (
 
 CREATE TABLE IF NOT EXISTS cached_flashcard_sets (
   id TEXT PRIMARY KEY NOT NULL,
-  lecture_id TEXT NOT NULL REFERENCES cached_lectures(id) ON DELETE CASCADE,
+  lecture_id TEXT REFERENCES cached_lectures(id) ON DELETE CASCADE,
   generated_by_user_id TEXT REFERENCES cached_users(id) ON DELETE SET NULL,
   processing_job_id TEXT REFERENCES cached_processing_jobs(id) ON DELETE SET NULL,
+  generated_from_chat_message_id TEXT,
   title TEXT,
+  description TEXT,
+  scope TEXT NOT NULL DEFAULT 'lecture',
   is_ai_generated INTEGER NOT NULL DEFAULT 1 CHECK (is_ai_generated IN (0, 1)),
   card_count INTEGER,
+  source_count INTEGER,
+  version_no INTEGER NOT NULL DEFAULT 1,
   created_at TEXT,
   updated_at TEXT,
   sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
@@ -508,9 +513,14 @@ CREATE TABLE IF NOT EXISTS cached_flashcard_sets (
 CREATE TABLE IF NOT EXISTS cached_flashcards (
   id TEXT PRIMARY KEY NOT NULL,
   flashcard_set_id TEXT NOT NULL REFERENCES cached_flashcard_sets(id) ON DELETE CASCADE,
+  lecture_id TEXT REFERENCES cached_lectures(id) ON DELETE SET NULL,
   front_text TEXT NOT NULL,
   back_text TEXT NOT NULL,
   hint_text TEXT,
+  explanation TEXT,
+  source_type TEXT,
+  source_title TEXT,
+  source_excerpt TEXT,
   card_order INTEGER NOT NULL,
   source_segment_index INTEGER,
   created_at TEXT,
@@ -617,8 +627,6 @@ CREATE INDEX IF NOT EXISTS idx_cached_quiz_options_question_id ON cached_quiz_op
 CREATE INDEX IF NOT EXISTS idx_local_quiz_attempts_quiz_id ON local_quiz_attempts(quiz_id);
 CREATE INDEX IF NOT EXISTS idx_local_quiz_attempts_sync_status ON local_quiz_attempts(sync_status);
 CREATE INDEX IF NOT EXISTS idx_local_quiz_attempt_answers_attempt_id ON local_quiz_attempt_answers(quiz_attempt_id);
-CREATE INDEX IF NOT EXISTS idx_cached_flashcard_sets_lecture_id ON cached_flashcard_sets(lecture_id);
-CREATE INDEX IF NOT EXISTS idx_cached_flashcards_set_id ON cached_flashcards(flashcard_set_id);
 CREATE INDEX IF NOT EXISTS idx_cached_chat_sessions_user_id ON cached_chat_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_cached_chat_sessions_course_id ON cached_chat_sessions(course_id);
 CREATE INDEX IF NOT EXISTS idx_cached_chat_sessions_lecture_id ON cached_chat_sessions(lecture_id);
@@ -920,6 +928,7 @@ async function migrateLocalDatabase(db: SQLite.SQLiteDatabase) {
   ]);
 
   await ensureDailyQuickQuizCacheReady(db);
+  await ensureFlashcardCacheReady(db);
 }
 
 export async function ensureDailyQuickQuizCacheReady(db?: SQLite.SQLiteDatabase) {
@@ -1280,6 +1289,192 @@ async function ensureDailyQuickQuizTables(db: SQLite.SQLiteDatabase) {
         CREATE INDEX IF NOT EXISTS idx_local_quiz_attempts_quiz_id ON local_quiz_attempts(quiz_id);
         CREATE INDEX IF NOT EXISTS idx_local_quiz_attempts_sync_status ON local_quiz_attempts(sync_status);
         CREATE INDEX IF NOT EXISTS idx_local_quiz_attempt_answers_attempt_id ON local_quiz_attempt_answers(quiz_attempt_id);
+      `);
+    });
+  } finally {
+    await db.execAsync('PRAGMA foreign_keys = ON;');
+  }
+}
+
+export async function ensureFlashcardCacheReady(db?: SQLite.SQLiteDatabase) {
+  const database = db ?? (await getLocalDatabase());
+  await ensureFlashcardTables(database);
+}
+
+async function ensureFlashcardTables(db: SQLite.SQLiteDatabase) {
+  const flashcardSetColumns = await db.getAllAsync<{
+    name: string;
+    notnull: number;
+  }>('PRAGMA table_info(cached_flashcard_sets);');
+  const flashcardColumns = await db.getAllAsync<{
+    name: string;
+    notnull: number;
+  }>('PRAGMA table_info(cached_flashcards);');
+
+  const setLectureId = flashcardSetColumns.find((column) => column.name === 'lecture_id');
+  const hasSetScopeColumn = flashcardSetColumns.some((column) => column.name === 'scope');
+  const hasSetDescriptionColumn = flashcardSetColumns.some((column) => column.name === 'description');
+  const hasSetSourceCountColumn = flashcardSetColumns.some((column) => column.name === 'source_count');
+  const hasSetVersionNoColumn = flashcardSetColumns.some((column) => column.name === 'version_no');
+  const hasSetChatMessageColumn = flashcardSetColumns.some(
+    (column) => column.name === 'generated_from_chat_message_id'
+  );
+  const hasCardLectureIdColumn = flashcardColumns.some((column) => column.name === 'lecture_id');
+  const hasCardExplanationColumn = flashcardColumns.some((column) => column.name === 'explanation');
+  const hasCardSourceTypeColumn = flashcardColumns.some((column) => column.name === 'source_type');
+  const hasCardSourceTitleColumn = flashcardColumns.some((column) => column.name === 'source_title');
+  const hasCardSourceExcerptColumn = flashcardColumns.some((column) => column.name === 'source_excerpt');
+
+  if (
+    setLectureId?.notnull !== 1 &&
+    hasSetScopeColumn &&
+    hasSetDescriptionColumn &&
+    hasSetSourceCountColumn &&
+    hasSetVersionNoColumn &&
+    hasSetChatMessageColumn &&
+    hasCardLectureIdColumn &&
+    hasCardExplanationColumn &&
+    hasCardSourceTypeColumn &&
+    hasCardSourceTitleColumn &&
+    hasCardSourceExcerptColumn
+  ) {
+    return;
+  }
+
+  await db.execAsync('PRAGMA foreign_keys = OFF;');
+
+  try {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(`
+        ALTER TABLE cached_flashcards RENAME TO cached_flashcards_legacy;
+        ALTER TABLE cached_flashcard_sets RENAME TO cached_flashcard_sets_legacy;
+
+        CREATE TABLE cached_flashcard_sets (
+          id TEXT PRIMARY KEY NOT NULL,
+          lecture_id TEXT REFERENCES cached_lectures(id) ON DELETE CASCADE,
+          generated_by_user_id TEXT REFERENCES cached_users(id) ON DELETE SET NULL,
+          processing_job_id TEXT REFERENCES cached_processing_jobs(id) ON DELETE SET NULL,
+          generated_from_chat_message_id TEXT,
+          title TEXT,
+          description TEXT,
+          scope TEXT NOT NULL DEFAULT 'lecture',
+          is_ai_generated INTEGER NOT NULL DEFAULT 1 CHECK (is_ai_generated IN (0, 1)),
+          card_count INTEGER,
+          source_count INTEGER,
+          version_no INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT,
+          updated_at TEXT,
+          sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
+          dirty_fields_json TEXT,
+          last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE cached_flashcards (
+          id TEXT PRIMARY KEY NOT NULL,
+          flashcard_set_id TEXT NOT NULL REFERENCES cached_flashcard_sets(id) ON DELETE CASCADE,
+          lecture_id TEXT REFERENCES cached_lectures(id) ON DELETE SET NULL,
+          front_text TEXT NOT NULL,
+          back_text TEXT NOT NULL,
+          hint_text TEXT,
+          explanation TEXT,
+          source_type TEXT,
+          source_title TEXT,
+          source_excerpt TEXT,
+          card_order INTEGER NOT NULL,
+          source_segment_index INTEGER,
+          created_at TEXT,
+          sync_status TEXT NOT NULL DEFAULT 'synced' ${SYNC_STATUS_CHECK},
+          dirty_fields_json TEXT,
+          last_synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (flashcard_set_id, card_order)
+        );
+
+        INSERT INTO cached_flashcard_sets (
+          id,
+          lecture_id,
+          generated_by_user_id,
+          processing_job_id,
+          generated_from_chat_message_id,
+          title,
+          description,
+          scope,
+          is_ai_generated,
+          card_count,
+          source_count,
+          version_no,
+          created_at,
+          updated_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        )
+        SELECT
+          id,
+          lecture_id,
+          generated_by_user_id,
+          processing_job_id,
+          null,
+          title,
+          null,
+          'lecture',
+          is_ai_generated,
+          card_count,
+          null,
+          1,
+          created_at,
+          updated_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        FROM cached_flashcard_sets_legacy;
+
+        INSERT INTO cached_flashcards (
+          id,
+          flashcard_set_id,
+          lecture_id,
+          front_text,
+          back_text,
+          hint_text,
+          explanation,
+          source_type,
+          source_title,
+          source_excerpt,
+          card_order,
+          source_segment_index,
+          created_at,
+          sync_status,
+          dirty_fields_json,
+          last_synced_at
+        )
+        SELECT
+          cached_flashcards_legacy.id,
+          cached_flashcards_legacy.flashcard_set_id,
+          cached_flashcard_sets_legacy.lecture_id,
+          cached_flashcards_legacy.front_text,
+          cached_flashcards_legacy.back_text,
+          cached_flashcards_legacy.hint_text,
+          null,
+          null,
+          null,
+          null,
+          cached_flashcards_legacy.card_order,
+          cached_flashcards_legacy.source_segment_index,
+          cached_flashcards_legacy.created_at,
+          cached_flashcards_legacy.sync_status,
+          cached_flashcards_legacy.dirty_fields_json,
+          cached_flashcards_legacy.last_synced_at
+        FROM cached_flashcards_legacy
+        INNER JOIN cached_flashcard_sets_legacy
+          ON cached_flashcard_sets_legacy.id = cached_flashcards_legacy.flashcard_set_id;
+
+        DROP TABLE cached_flashcards_legacy;
+        DROP TABLE cached_flashcard_sets_legacy;
+
+        CREATE INDEX IF NOT EXISTS idx_cached_flashcard_sets_lecture_id ON cached_flashcard_sets(lecture_id);
+        CREATE INDEX IF NOT EXISTS idx_cached_flashcard_sets_scope ON cached_flashcard_sets(scope);
+        CREATE INDEX IF NOT EXISTS idx_cached_flashcard_sets_generated_by_user_id ON cached_flashcard_sets(generated_by_user_id);
+        CREATE INDEX IF NOT EXISTS idx_cached_flashcards_set_id ON cached_flashcards(flashcard_set_id);
+        CREATE INDEX IF NOT EXISTS idx_cached_flashcards_lecture_id ON cached_flashcards(lecture_id);
       `);
     });
   } finally {

@@ -7,7 +7,10 @@ export function errorHandler(
   res: Response,
   next: NextFunction
 ) {
-  void next;
+  if (res.headersSent) {
+    next(error);
+    return;
+  }
 
   if (error instanceof HttpError) {
     res.status(error.statusCode).json({

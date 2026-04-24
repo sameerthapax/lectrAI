@@ -1,7 +1,8 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { LokiConversationPanel } from '../../../components/ai/loki-conversation-panel';
+import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAuth } from '../../../providers/auth-provider';
 import { useAppTheme } from '../../../providers/settings-provider';
 import {
@@ -70,29 +71,34 @@ export default function LokiSessionDetailRoute() {
       <Stack.Screen
         options={{
           headerShown: true,
-          headerTitle: session?.title ?? 'Conversation',
-          headerLeft: () => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Go back"
-              onPress={() => router.back()}
-              style={{ paddingVertical: 6, paddingRight: 10 }}
-            >
-              <Text style={{ color: theme.colors.accent, fontSize: 22, fontWeight: '700' }}>{'<'}</Text>
-            </Pressable>
-          ),
+          headerTitle: 'Chat session',
+          headerStyle: {
+            backgroundColor: theme.colors.screen,
+          },
+          headerShadowVisible: false,
+          headerTitleStyle: {
+            color: theme.colors.text,
+            fontWeight: '700',
+          },
+          headerTintColor: theme.colors.accent,
+          headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
         }}
       />
 
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        style={{ flex: 1, backgroundColor: theme.colors.screen }}
-        contentContainerStyle={{ padding: 16, gap: 12, backgroundColor: theme.colors.screen }}
+      <View
+        style={{
+          flex: 1,
+          paddingTop: 16,
+          backgroundColor: theme.colors.screen,
+        }}
       >
-        <View style={{ gap: 4 }}>
-          <Text selectable style={{ color: theme.colors.text, fontSize: 24, fontWeight: '800' }}>
-            {session?.title ?? 'Conversation'}
-          </Text>
+        <View
+          style={{
+            paddingHorizontal: 16,
+            paddingBottom: 8,
+            gap: 8,
+          }}
+        >
           <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
             Readonly Loki session
             {session ? ` • ${session.sessionType.replace(/_/g, ' ')}` : ''}
@@ -105,8 +111,19 @@ export default function LokiSessionDetailRoute() {
           loading={loading}
           errorMessage={errorMessage}
           emptyMessage="This session does not have any messages yet."
+          showOuterCard={false}
+          fillBody
+          bodyStyle={{
+            marginHorizontal: 16,
+            marginTop: 4,
+            marginBottom: 14,
+            borderTopLeftRadius: 18,
+            borderTopRightRadius: 18,
+            borderBottomLeftRadius: 48,
+            borderBottomRightRadius: 48,
+          }}
         />
-      </ScrollView>
+      </View>
     </>
   );
 }
