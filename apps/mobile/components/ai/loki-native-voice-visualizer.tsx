@@ -8,6 +8,7 @@ type LokiNativeVoiceVisualizerProps = {
   speechLevel?: number;
   playbackTimeSeconds?: number;
   collapsed?: boolean;
+  statusLabel?: string;
 };
 
 function getSpeechEnvelope(playbackTimeSeconds: number, speechLevel: number) {
@@ -23,6 +24,7 @@ export default function LokiNativeVoiceVisualizer({
   speechLevel = 0,
   playbackTimeSeconds = 0,
   collapsed = false,
+  statusLabel,
 }: LokiNativeVoiceVisualizerProps) {
   const waitingFloat = useRef(new Animated.Value(0)).current;
   const waitingPulse = useRef(new Animated.Value(0)).current;
@@ -103,7 +105,6 @@ export default function LokiNativeVoiceVisualizer({
     inputRange: [0, 1],
     outputRange: [1, 1.08],
   });
-
   const orbScale = 0.92 + intensity * 0.52;
   const coreScale = 0.98 + intensity * 0.24;
   const haloScale = 1.02 + intensity * 0.72;
@@ -127,7 +128,7 @@ export default function LokiNativeVoiceVisualizer({
     mode === 'listening'
       ? 'Listening'
       : mode === 'waiting'
-        ? 'Thinking'
+        ? statusLabel ?? 'Thinking'
         : mode === 'speaking'
           ? 'Speaking'
           : 'Ready';
@@ -191,16 +192,16 @@ export default function LokiNativeVoiceVisualizer({
       </View>
 
       <View pointerEvents="none" style={styles.overlay}>
-        <View style={styles.statusBadge}>
+        <View style={[styles.statusBadge, mode === 'waiting' && styles.statusBadgeWaiting]}>
           <View
             style={[
               styles.statusDot,
-              mode === 'waiting'
-                ? styles.statusDotWaiting
-                : mode === 'speaking'
-                  ? styles.statusDotSpeaking
-                  : mode === 'listening'
-                    ? styles.statusDotListening
+              mode === 'speaking'
+                ? styles.statusDotSpeaking
+                : mode === 'listening'
+                  ? styles.statusDotListening
+                  : mode === 'waiting'
+                    ? styles.statusDotWaiting
                     : styles.statusDotIdle,
             ]}
           />
@@ -338,6 +339,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(17, 12, 8, 0.72)',
     borderWidth: 1,
     borderColor: 'rgba(255, 237, 213, 0.08)',
+  },
+  statusBadgeWaiting: {
+    paddingVertical: 8,
   },
   statusDot: {
     width: 8,

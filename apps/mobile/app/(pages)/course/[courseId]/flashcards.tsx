@@ -177,6 +177,9 @@ export default function FlashcardsRoute() {
   const backTopicBadgeHeight = 44;
   const backFaceBottomInset = backTopicBadgeHeight + 18;
   const flashcardMinHeight = Math.max(frontLayout.minHeight ?? 430, backLayout.minHeight ?? 430);
+  const [measuredFrontFaceHeight, setMeasuredFrontFaceHeight] = useState(0);
+  const [measuredBackFaceHeight, setMeasuredBackFaceHeight] = useState(0);
+  const flashcardHeight = Math.max(flashcardMinHeight, measuredFrontFaceHeight, measuredBackFaceHeight);
 
   useEffect(() => {
     void setAudioModeAsync({
@@ -454,8 +457,126 @@ export default function FlashcardsRoute() {
               style={{
                 transform: [{ translateX }, { scale }],
                 opacity,
+                position: 'relative',
               }}
             >
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  opacity: 0,
+                  zIndex: -1,
+                }}
+              >
+                <View
+                  onLayout={(event) => {
+                    const nextHeight = Math.ceil(event.nativeEvent.layout.height + 36);
+                    setMeasuredFrontFaceHeight((currentHeight) =>
+                      Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
+                    );
+                  }}
+                  style={{
+                    margin: 18,
+                    borderRadius: 28,
+                    borderCurve: 'continuous',
+                    padding: 24,
+                    gap: 24,
+                  }}
+                >
+                  <View style={{ gap: 12 }}>
+                    <Text style={{ color: theme.colors.textSubtle, fontSize: 12, fontWeight: '800' }}>FRONT</Text>
+                    <Text
+                      style={{
+                        color: theme.colors.text,
+                        fontSize: frontLayout.fontSize,
+                        lineHeight: frontLayout.lineHeight,
+                        fontWeight: '900',
+                      }}
+                    >
+                      {currentCard.prompt}
+                    </Text>
+                  </View>
+
+                  <View
+                    style={{
+                      borderRadius: 22,
+                      borderCurve: 'continuous',
+                      padding: 16,
+                      gap: 6,
+                      minHeight: cueLayout.minHeight,
+                    }}
+                  >
+                    <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '800' }}>Cue</Text>
+                    <Text
+                      style={{
+                        color: theme.colors.text,
+                        fontSize: cueLayout.fontSize,
+                        lineHeight: cueLayout.lineHeight,
+                      }}
+                    >
+                      {currentCard.cue}
+                    </Text>
+                  </View>
+                </View>
+
+                <View
+                  onLayout={(event) => {
+                    const nextHeight = Math.ceil(event.nativeEvent.layout.height + 36);
+                    setMeasuredBackFaceHeight((currentHeight) =>
+                      Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
+                    );
+                  }}
+                  style={{
+                    margin: 18,
+                    borderRadius: 28,
+                    borderCurve: 'continuous',
+                    padding: 24,
+                    gap: 18,
+                  }}
+                >
+                  <View style={{ gap: 12 }}>
+                    <Text style={{ color: theme.colors.accentMuted, fontSize: 12, fontWeight: '800' }}>BACK</Text>
+                    <Text
+                      style={{
+                        color: theme.colors.text,
+                        fontSize: backLayout.fontSize,
+                        lineHeight: backLayout.lineHeight,
+                        fontWeight: '900',
+                      }}
+                    >
+                      {currentCard.answer}
+                    </Text>
+                  </View>
+
+                  <View
+                    style={{
+                      alignSelf: 'flex-start',
+                      maxWidth: '72%',
+                      minHeight: backTopicBadgeHeight,
+                      borderRadius: 999,
+                      borderCurve: 'continuous',
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: theme.colors.text,
+                        fontSize: backTopicLayout.fontSize,
+                        lineHeight: backTopicLayout.lineHeight,
+                        fontWeight: '700',
+                      }}
+                    >
+                      Topic: {currentCard.topic}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
               <Pressable
                 onPress={() => {
                   if (isTransitioning) {
@@ -464,7 +585,7 @@ export default function FlashcardsRoute() {
                   flipCard(!isFlipped);
                 }}
                 style={({ pressed }) => ({
-                  minHeight: flashcardMinHeight,
+                  height: flashcardHeight,
                   borderRadius: 32,
                   borderCurve: 'continuous',
                   backgroundColor: theme.colors.card,
@@ -577,12 +698,12 @@ export default function FlashcardsRoute() {
                         position: 'absolute',
                         left: 20,
                         bottom: 20,
-                        maxWidth: '66%',
+                        maxWidth: '72%',
                         minHeight: backTopicBadgeHeight,
                         borderRadius: 999,
                         borderCurve: 'continuous',
                         paddingHorizontal: 12,
-                        paddingVertical: 6,
+                        paddingVertical: 8,
                         backgroundColor: theme.colors.card,
                         borderWidth: 1,
                         borderColor: theme.colors.accentBorder,
@@ -590,7 +711,6 @@ export default function FlashcardsRoute() {
                       }}
                     >
                       <Text
-                        numberOfLines={1}
                         style={{
                           color: theme.colors.text,
                           fontSize: backTopicLayout.fontSize,
