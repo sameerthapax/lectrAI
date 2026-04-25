@@ -1056,7 +1056,7 @@ export default function HomeRoute() {
                     fontVariant: ['tabular-nums'],
                   }}
                 >
-                  {statsSummary.progressPercent}%
+                  {statsSummary.daysRemainingInSemester}d
                 </Text>
               }
             />
@@ -1911,7 +1911,7 @@ function getQuickQuizOptionBadgeColor(input: {
 const EMPTY_STATS: LocalStatsRecord = {
   userId: '',
   streakDays: 0,
-  progressPercent: 0,
+  daysRemainingInSemester: 0,
   coursesThisSemester: 0,
   currentSemesterLabel: '',
   lastIncrementedOn: null,
@@ -2158,10 +2158,10 @@ const DIGIT_STRIP = Array.from(
   (_, index) => DIGITS[index % DIGITS.length]
 );
 
-function getStatsCardScale(stats: Pick<LocalStatsRecord, 'streakDays' | 'progressPercent' | 'coursesThisSemester'>) {
+function getStatsCardScale(stats: Pick<LocalStatsRecord, 'streakDays' | 'daysRemainingInSemester' | 'coursesThisSemester'>) {
   const longestValueLength = Math.max(
     String(Math.max(0, stats.streakDays)).length,
-    `${Math.max(0, stats.progressPercent)}%`.length,
+    `${Math.max(0, stats.daysRemainingInSemester)}d`.length,
     String(Math.max(0, stats.coursesThisSemester)).length
   );
 

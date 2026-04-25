@@ -3,7 +3,7 @@ import { HttpError } from '../../lib/http-error.js';
 
 export type StatsOverviewRecord = {
   streakDays: number;
-  progressPercent: number;
+  daysRemainingInSemester: number;
   coursesThisSemester: number;
   currentSemesterLabel: string;
   lastIncrementedOn: string | null;
@@ -101,7 +101,7 @@ function mapStatsRecord(
 ): StatsOverviewRecord {
   return {
     streakDays: row.streak_days,
-    progressPercent: calculateSemesterProgressPercent(new Date(), semester),
+    daysRemainingInSemester: calculateDaysRemainingInSemester(new Date(), semester),
     coursesThisSemester,
     currentSemesterLabel: semester.label,
     lastIncrementedOn: row.last_incremented_on,
@@ -110,55 +110,66 @@ function mapStatsRecord(
   };
 }
 
-function calculateSemesterProgressPercent(now: Date, semester: SemesterWindow) {
-  const start = semester.startDate.getTime();
-  const end = semester.endDate.getTime();
+function calculateDaysRemainingInSemester(now: Date, semester: SemesterWindow) {
   const current = now.getTime();
+  const end = semester.endDate.getTime();
 
-  if (current <= start) {
+  if (current >= end) {
     return 0;
   }
 
-  if (current >= end) {
-    return 100;
-  }
-
-  return Math.max(0, Math.min(100, Math.round(((current - start) / (end - start)) * 100)));
+  const dayMs = 1000 * 60 * 60 * 24;
+  return Math.max(0, Math.ceil((end - current) / dayMs));
 }
 
 function getCurrentSemesterWindow(now: Date): SemesterWindow {
   const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
+  const windows = [year - 1, year, year + 1]
+    .flatMap((windowYear) => buildSemesterWindows(windowYear))
+    .sort((left, right) => left.startDate.getTime() - right.startDate.getTime());
+  const current = now.getTime();
 
-  if (month <= 1 || month === 11) {
-    return {
+  const activeWindow = windows.find(
+    (window) => current >= window.startDate.getTime() && current <= window.endDate.getTime()
+  );
+
+  if (activeWindow) {
+    return activeWindow;
+  }
+
+  const upcomingWindow = windows.find((window) => current < window.startDate.getTime());
+  const fallbackWindow = windows[windows.length - 1];
+
+  if (!fallbackWindow) {
+    throw new HttpError(500, 'Failed to determine the current semester window.');
+  }
+
+  return upcomingWindow ?? fallbackWindow;
+}
+
+function buildSemesterWindows(year: number): SemesterWindow[] {
+  return [
+    {
       label: `Winter ${year}`,
-      startDate: new Date(Date.UTC(year, 11, 1, 0, 0, 0)),
-      endDate: new Date(Date.UTC(year + 1, 1, 28, 23, 59, 59)),
-    };
-  }
-
-  if (month <= 4) {
-    return {
+      startDate: new Date(Date.UTC(year - 1, 11, 15, 0, 0, 0)),
+      endDate: new Date(Date.UTC(year, 0, 15, 23, 59, 59)),
+    },
+    {
       label: `Spring ${year}`,
-      startDate: new Date(Date.UTC(year, 2, 1, 0, 0, 0)),
-      endDate: new Date(Date.UTC(year, 4, 31, 23, 59, 59)),
-    };
-  }
-
-  if (month <= 7) {
-    return {
+      startDate: new Date(Date.UTC(year, 0, 16, 0, 0, 0)),
+      endDate: new Date(Date.UTC(year, 4, 12, 23, 59, 59)),
+    },
+    {
       label: `Summer ${year}`,
       startDate: new Date(Date.UTC(year, 5, 1, 0, 0, 0)),
-      endDate: new Date(Date.UTC(year, 7, 31, 23, 59, 59)),
-    };
-  }
-
-  return {
-    label: `Fall ${year}`,
-    startDate: new Date(Date.UTC(year, 8, 1, 0, 0, 0)),
-    endDate: new Date(Date.UTC(year, 10, 30, 23, 59, 59)),
-  };
+      endDate: new Date(Date.UTC(year, 7, 15, 23, 59, 59)),
+    },
+    {
+      label: `Fall ${year}`,
+      startDate: new Date(Date.UTC(year, 7, 16, 0, 0, 0)),
+      endDate: new Date(Date.UTC(year, 11, 14, 23, 59, 59)),
+    },
+  ];
 }
 
 type SemesterWindow = {

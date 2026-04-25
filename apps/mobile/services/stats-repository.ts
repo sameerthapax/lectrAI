@@ -5,7 +5,7 @@ import { initializeLocalDatabase, runSerializedLocalWrite } from './local-db';
 export type LocalStatsRecord = {
   userId: string;
   streakDays: number;
-  progressPercent: number;
+  daysRemainingInSemester: number;
   coursesThisSemester: number;
   currentSemesterLabel: string;
   lastIncrementedOn: string | null;
@@ -79,7 +79,7 @@ export async function upsertStatsForUser(user: AuthUser, stats: RemoteStatsRecor
         [
           user.id,
           stats.streakDays,
-          stats.progressPercent,
+          stats.daysRemainingInSemester,
           stats.coursesThisSemester,
           stats.currentSemesterLabel,
           stats.lastIncrementedOn,
@@ -96,7 +96,7 @@ function createEmptyStats(userId: string): LocalStatsRecord {
   return {
     userId,
     streakDays: 0,
-    progressPercent: 0,
+    daysRemainingInSemester: 0,
     coursesThisSemester: 0,
     currentSemesterLabel: '',
     lastIncrementedOn: null,
@@ -120,7 +120,7 @@ function mapRow(row: {
   return {
     userId: row.user_id,
     streakDays: row.streak_days,
-    progressPercent: row.progress_percent,
+    daysRemainingInSemester: row.progress_percent,
     coursesThisSemester: row.courses_this_semester,
     currentSemesterLabel: row.current_semester_label ?? '',
     lastIncrementedOn: row.last_incremented_on,
