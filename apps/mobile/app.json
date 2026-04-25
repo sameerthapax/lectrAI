@@ -44,7 +44,8 @@
       ],
       "expo-router",
       "expo-image",
-      "expo-secure-store"
+      "expo-secure-store",
+      "ffmpeg-expo"
     ],
     "owner": "sameerthapa"
   }

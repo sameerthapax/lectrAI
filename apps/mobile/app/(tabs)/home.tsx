@@ -109,7 +109,7 @@ export default function HomeRoute() {
     [courses, selectedCourseId]
   );
   const hasSelectedCourse = selectedCourse !== null;
-  const recordingSeconds = Math.max(0, Math.floor((recorderState.durationMillis ?? 0) / 1000));
+  const recordingSeconds = Math.max(0, Math.floor(Math.max(0, recorderState.durationMillis ?? 0) / 1000));
   const formattedRecordingTime = useMemo(() => {
     const minutes = Math.floor(recordingSeconds / 60)
       .toString()
@@ -703,7 +703,7 @@ export default function HomeRoute() {
   const closeRecording = async (navigateToResults = false) => {
     try {
       setRecordingBusy(true);
-      const durationMillis = recorderState.durationMillis ?? 0;
+      const durationMillis = Math.max(0, recorderState.durationMillis ?? 0);
 
       if (recorderState.isRecording) {
         await recorder.stop();
@@ -720,8 +720,8 @@ export default function HomeRoute() {
           throw new Error('Select a course before saving a recording.');
         }
 
-        if (!recordingUri) {
-          throw new Error('The recorder did not return an audio file.');
+        if (!recordingUri || durationMillis <= 0) {
+          throw new Error('The recorder did not return any audio.');
         }
 
         const accessToken = await auth.getValidAccessToken();
@@ -730,8 +730,8 @@ export default function HomeRoute() {
           accessToken,
           courseId: selectedCourse.id,
           courseName: selectedCourse.courseName,
-          recordingUri,
           durationMillis,
+          recordingUri,
         });
 
         await setAudioModeAsync({

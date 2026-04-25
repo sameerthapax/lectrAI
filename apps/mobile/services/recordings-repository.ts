@@ -6,7 +6,9 @@ import { initializeLocalDatabase, runSerializedLocalWrite } from './local-db';
 import {
   downloadLectureAudio,
   processLectureTranscription,
+  uploadLectureChunk,
   uploadLectureRecording,
+  type RemoteLectureChunkUploadResult,
   type RemoteLectureRecordingRecord,
   type RemoteLectureTranscript,
 } from './recordings-api';
@@ -76,8 +78,12 @@ type SaveRecordedLectureInput = {
   accessToken: string | null;
   courseId: string;
   courseName: string;
-  recordingUri: string;
   durationMillis: number;
+  recordingUri?: string;
+  recordingChunks?: Array<{
+    localUri: string;
+    durationMillis: number;
+  }>;
 };
 
 type PreparedRecording = {
@@ -91,21 +97,42 @@ type PreparedRecording = {
   mimeType: string;
   fileSizeBytes: number;
   localUri: string;
+  chunkFiles: PreparedRecordingChunk[];
   bucketName: string;
   objectPath: string;
 };
+
+type PreparedRecordingChunk = {
+  chunkIndex: number;
+  durationSeconds: number;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  localUri: string;
+};
+
+const AUDIO_BUCKET_NAME_FALLBACK = 'lecture-audio';
+const LECTURE_UPLOAD_CHUNK_DURATION_SECONDS = 10 * 60;
 
 export async function saveRecordedLecture(input: SaveRecordedLectureInput) {
   if (input.courseId === NO_CLASS_COURSE_ID) {
     throw new Error('Select a course before saving a recording.');
   }
 
-  const prepared = prepareRecordingForStorage(input);
+  const prepared = await prepareRecordingForStorage(input);
   await insertLocalRecording(input, prepared);
 
   try {
-    await syncRecordingToApi(input, prepared);
+    const uploadResult = await syncRecordingToApi(input, prepared);
     await markRecordingSyncSucceeded(prepared);
+
+    if (uploadResult?.transcript) {
+      await runSerializedLocalWrite(async (db) => {
+        await db.withTransactionAsync(async () => {
+          await upsertRemoteTranscript(db, uploadResult.transcript);
+        });
+      });
+    }
   } catch (error) {
     await markRecordingSyncFailed(
       prepared,
@@ -478,6 +505,36 @@ async function syncRecordingToApi(input: SaveRecordedLectureInput, prepared: Pre
     throw new Error('Your session expired before the recording could upload.');
   }
 
+  if (prepared.chunkFiles.length > 0) {
+    let lastChunkResult: RemoteLectureChunkUploadResult | null = null;
+
+    for (const chunk of prepared.chunkFiles) {
+      const recordingFile = new File(chunk.localUri);
+      lastChunkResult = await uploadLectureChunk(
+        prepared.lectureId,
+        {
+          audioFileId: prepared.audioFileId,
+          courseId: input.courseId,
+          title: prepared.title,
+          recordedAt: prepared.recordedAt,
+          durationSeconds: prepared.durationSeconds,
+          expectedChunkCount: prepared.chunkFiles.length,
+          chunkIndex: chunk.chunkIndex,
+          chunkDurationSeconds: chunk.durationSeconds,
+          originalFilename: chunk.originalFilename,
+          mimeType: chunk.mimeType,
+          fileSizeBytes: chunk.fileSizeBytes,
+          audioBase64: await recordingFile.base64(),
+        },
+        input.accessToken
+      );
+    }
+
+    prepared.bucketName = lastChunkResult?.audioFile.bucketName ?? AUDIO_BUCKET_NAME_FALLBACK;
+    prepared.objectPath = '';
+    return lastChunkResult;
+  }
+
   const recordingFile = new File(prepared.localUri);
   const uploadResult = await uploadLectureRecording(
     {
@@ -497,6 +554,7 @@ async function syncRecordingToApi(input: SaveRecordedLectureInput, prepared: Pre
 
   prepared.bucketName = uploadResult.audioFile.bucketName;
   prepared.objectPath = uploadResult.audioFile.objectPath;
+  return uploadResult;
 }
 
 async function downloadRemoteLectureAudioForCache(
@@ -582,6 +640,10 @@ async function downloadRemoteLectureAudioForCache(
 }
 
 async function markRecordingSyncSucceeded(prepared: PreparedRecording) {
+  const remoteUri = prepared.objectPath
+    ? `api-upload://${prepared.bucketName}/${prepared.objectPath}`
+    : null;
+
   await runSerializedLocalWrite(async (db) => {
     await db.withTransactionAsync(async () => {
       await db.runAsync(
@@ -619,7 +681,7 @@ async function markRecordingSyncSucceeded(prepared: PreparedRecording) {
          SET remote_uri = ?,
              updated_at = CURRENT_TIMESTAMP
          WHERE owner_type = 'audio_file' AND owner_id = ?`,
-        [`api-upload://${prepared.bucketName}/${prepared.objectPath}`, prepared.audioFileId]
+        [remoteUri, prepared.audioFileId]
       );
 
       await db.runAsync(
@@ -669,13 +731,34 @@ async function markRecordingSyncFailed(prepared: PreparedRecording, errorMessage
   });
 }
 
-function prepareRecordingForStorage(input: SaveRecordedLectureInput): PreparedRecording {
+async function prepareRecordingForStorage(input: SaveRecordedLectureInput): Promise<PreparedRecording> {
   const lectureId = createUuid();
   const audioFileId = createUuid();
   const queueId = createUuid();
   const recordedAt = new Date().toISOString();
-  const durationSeconds = Math.max(1, Math.round(input.durationMillis / 1000));
-  const extension = normalizeExtension(input.recordingUri);
+  const sourceChunks =
+    input.recordingChunks && input.recordingChunks.length > 0
+      ? input.recordingChunks
+      : input.recordingUri
+        ? [
+            {
+              localUri: input.recordingUri,
+              durationMillis: input.durationMillis,
+            },
+          ]
+        : [];
+
+  if (sourceChunks.length === 0) {
+    throw new Error('The recorder did not return any audio chunks.');
+  }
+
+  const durationSeconds = Math.max(
+    1,
+    Math.round(
+      sourceChunks.reduce((totalDuration, chunk) => totalDuration + Math.max(0, chunk.durationMillis), 0) / 1000
+    )
+  );
+  const extension = normalizeExtension(sourceChunks[0]?.localUri ?? '.m4a');
   const originalFilename = `lecture-recording${extension}`;
   const title = buildLectureTitle(input.courseName, recordedAt);
   const recordingsDirectory = new Directory(Paths.document, 'recordings', input.user.id, lectureId);
@@ -685,12 +768,28 @@ function prepareRecordingForStorage(input: SaveRecordedLectureInput): PreparedRe
     intermediates: true,
   });
 
-  const sourceFile = new File(input.recordingUri);
-  const destinationFile = new File(recordingsDirectory, originalFilename);
-  sourceFile.copy(destinationFile);
+  const primaryRecordingFile =
+    input.recordingUri && !input.recordingChunks?.length
+      ? copyPrimaryRecordingFile(input.recordingUri, recordingsDirectory)
+      : null;
+  const chunkFiles =
+    input.recordingChunks && input.recordingChunks.length > 0
+      ? copyPreparedChunks(sourceChunks, recordingsDirectory)
+      : await splitRecordingIntoUploadChunks(
+          primaryRecordingFile,
+          durationSeconds,
+          recordingsDirectory
+        );
 
-  const fileInfo = destinationFile.info();
-  const mimeType = extension === '.wav' ? 'audio/wav' : extension === '.caf' ? 'audio/x-caf' : 'audio/mp4';
+  const primaryRecordingInfo = primaryRecordingFile?.info();
+  const mimeType =
+    primaryRecordingFile
+      ? getMimeTypeForExtension(extension)
+      : chunkFiles[0]?.mimeType ?? 'audio/mp4';
+  const localUri = primaryRecordingFile?.uri ?? chunkFiles[0]?.localUri ?? '';
+  const fileSizeBytes =
+    primaryRecordingInfo?.size ??
+    chunkFiles.reduce((totalBytes, chunk) => totalBytes + chunk.fileSizeBytes, 0);
 
   return {
     lectureId,
@@ -701,11 +800,136 @@ function prepareRecordingForStorage(input: SaveRecordedLectureInput): PreparedRe
     durationSeconds,
     originalFilename,
     mimeType,
-    fileSizeBytes: fileInfo.size ?? 0,
-    localUri: destinationFile.uri,
+    fileSizeBytes,
+    localUri,
+    chunkFiles,
     bucketName: '',
     objectPath: '',
   };
+}
+
+function copyPrimaryRecordingFile(recordingUri: string, recordingsDirectory: Directory) {
+  const extension = normalizeExtension(recordingUri);
+  const sourceFile = new File(recordingUri);
+  const destinationFile = new File(recordingsDirectory, `lecture-recording${extension}`);
+  sourceFile.copy(destinationFile);
+  return destinationFile;
+}
+
+function copyPreparedChunks(
+  sourceChunks: Array<{
+    localUri: string;
+    durationMillis: number;
+  }>,
+  recordingsDirectory: Directory
+) {
+  return sourceChunks.map((chunk, chunkIndex) => {
+    const chunkExtension = normalizeExtension(chunk.localUri);
+    const chunkFilename = `chunk-${String(chunkIndex).padStart(4, '0')}${chunkExtension}`;
+    const sourceFile = new File(chunk.localUri);
+    const destinationFile = new File(recordingsDirectory, chunkFilename);
+    sourceFile.copy(destinationFile);
+    const fileInfo = destinationFile.info();
+
+    return {
+      chunkIndex,
+      durationSeconds: Math.max(1, Math.round(chunk.durationMillis / 1000)),
+      originalFilename: chunkFilename,
+      mimeType:
+        chunkExtension === '.wav' ? 'audio/wav' : chunkExtension === '.caf' ? 'audio/x-caf' : 'audio/mp4',
+      fileSizeBytes: fileInfo.size ?? 0,
+      localUri: destinationFile.uri,
+    };
+  });
+}
+
+async function splitRecordingIntoUploadChunks(
+  recordingFile: File | null,
+  durationSeconds: number,
+  recordingsDirectory: Directory
+) {
+  if (!recordingFile) {
+    return [];
+  }
+
+  const chunkExtension = normalizeExtension(recordingFile.uri);
+  const chunkMimeType = getMimeTypeForExtension(chunkExtension);
+
+  if (durationSeconds <= LECTURE_UPLOAD_CHUNK_DURATION_SECONDS) {
+    const recordingInfo = recordingFile.info();
+
+    return [
+      {
+        chunkIndex: 0,
+        durationSeconds,
+        originalFilename: `chunk-0000${chunkExtension}`,
+        mimeType: chunkMimeType,
+        fileSizeBytes: recordingInfo.size ?? 0,
+        localUri: recordingFile.uri,
+      },
+    ];
+  }
+
+  const chunkDirectory = new Directory(recordingsDirectory, 'chunks');
+  chunkDirectory.create({
+    idempotent: true,
+    intermediates: true,
+  });
+
+  try {
+    const ffmpeg = await loadFFmpegModule();
+
+    await ffmpeg.execute([
+      '-i',
+      recordingFile.uri,
+      '-f',
+      'segment',
+      '-segment_time',
+      String(LECTURE_UPLOAD_CHUNK_DURATION_SECONDS),
+      '-c',
+      'copy',
+      '-reset_timestamps',
+      '1',
+      '-map',
+      '0:a:0',
+      '-y',
+      new File(chunkDirectory, `chunk-%04d${chunkExtension}`).uri,
+    ]);
+  } catch (error) {
+    if (isFFmpegError(error)) {
+      throw new Error(`Failed to split the lecture recording into upload chunks: ${error.output}`);
+    }
+
+    throw error;
+  }
+
+  const chunkFiles = chunkDirectory.list().filter((entry): entry is File => entry instanceof File);
+  const orderedChunkFiles = chunkFiles
+    .sort((left, right) => left.uri.localeCompare(right.uri))
+    .map((file, index, files) => {
+      const fileInfo = file.info();
+      const remainingSeconds =
+        durationSeconds - index * LECTURE_UPLOAD_CHUNK_DURATION_SECONDS;
+      const chunkDurationSeconds =
+        index === files.length - 1
+          ? Math.max(1, remainingSeconds)
+          : Math.min(LECTURE_UPLOAD_CHUNK_DURATION_SECONDS, Math.max(1, remainingSeconds));
+
+      return {
+        chunkIndex: index,
+        durationSeconds: chunkDurationSeconds,
+        originalFilename: file.uri.split('/').pop() ?? `chunk-${String(index).padStart(4, '0')}${chunkExtension}`,
+        mimeType: chunkMimeType,
+        fileSizeBytes: fileInfo.size ?? 0,
+        localUri: file.uri,
+      };
+    });
+
+  if (orderedChunkFiles.length === 0) {
+    throw new Error('FFmpeg did not produce any lecture upload chunks.');
+  }
+
+  return orderedChunkFiles;
 }
 
 function buildLectureTitle(courseName: string, recordedAt: string) {
@@ -720,6 +944,43 @@ function buildLectureTitle(courseName: string, recordedAt: string) {
 function normalizeExtension(recordingUri: string) {
   const match = recordingUri.match(/\.[a-z0-9]+(?:$|\?)/i)?.[0]?.replace(/\?$/, '');
   return match ? match.toLowerCase() : '.m4a';
+}
+
+function getMimeTypeForExtension(extension: string) {
+  if (extension === '.wav') {
+    return 'audio/wav';
+  }
+
+  if (extension === '.caf') {
+    return 'audio/x-caf';
+  }
+
+  return 'audio/mp4';
+}
+
+function isFFmpegError(error: unknown): error is { output: string } {
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      'constructor' in error &&
+      (error as { constructor?: { name?: string } }).constructor?.name === 'FFmpegError' &&
+      'output' in error
+  );
+}
+
+async function loadFFmpegModule(): Promise<{
+  execute: (args: string[]) => Promise<unknown>;
+}> {
+  const module = await import('ffmpeg-expo');
+  const execute =
+    (module as { execute?: (args: string[]) => Promise<unknown> }).execute ??
+    (module as { default?: { execute?: (args: string[]) => Promise<unknown> } }).default?.execute;
+
+  if (typeof execute !== 'function') {
+    throw new Error('FFmpeg module is installed, but its execute() export is unavailable in this build.');
+  }
+
+  return { execute };
 }
 
 function sanitizeFilename(filename: string) {

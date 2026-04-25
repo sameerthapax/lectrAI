@@ -91,6 +91,7 @@ export default function RecordingResultsRoute() {
       !recording ||
       !user ||
       recording.localUri.length > 0 ||
+      !recording.objectPath ||
       recording.uploadStatus !== 'uploaded' ||
       recording.syncStatus !== 'synced' ||
       downloadingAudioLectureIdRef.current === lectureId
@@ -276,6 +277,17 @@ export default function RecordingResultsRoute() {
                   value={`${recording.bucketName}/${recording.objectPath}`}
                   theme={theme}
                 />
+              ) : null}
+              {!recording.localUri && !recording.objectPath ? (
+                <Text
+                  style={{
+                    color: theme.colors.textMuted,
+                    fontSize: 13,
+                    lineHeight: 18,
+                  }}
+                >
+                  Captured as upload chunks. Full-device playback is not available here yet, but transcript processing will continue.
+                </Text>
               ) : null}
               <Pressable
                 disabled={!hasLocalRecordingFile}

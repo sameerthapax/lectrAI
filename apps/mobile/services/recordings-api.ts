@@ -13,6 +13,21 @@ export type RemoteRecordingSyncPayload = {
   audioBase64: string;
 };
 
+export type RemoteLectureChunkUploadPayload = {
+  audioFileId: string;
+  courseId: string;
+  title: string;
+  recordedAt: string;
+  durationSeconds: number;
+  expectedChunkCount: number;
+  chunkIndex: number;
+  chunkDurationSeconds: number;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  audioBase64: string;
+};
+
 export type RemoteRecordingSyncResult = {
   lecture: {
     id: string;
@@ -23,6 +38,31 @@ export type RemoteRecordingSyncResult = {
     bucketName: string;
     objectPath: string;
     uploadStatus: string;
+  };
+  processingJob: {
+    id: string;
+    jobType: string;
+    status: string;
+  };
+  transcript: RemoteLectureTranscript | null;
+};
+
+export type RemoteLectureChunkUploadResult = {
+  lecture: {
+    id: string;
+    status: string;
+    expectedChunkCount: number | null;
+  };
+  audioFile: {
+    id: string;
+    bucketName: string;
+    uploadStatus: string;
+  };
+  chunk: {
+    id: string;
+    chunkIndex: number;
+    storagePath: string;
+    status: string;
   };
   processingJob: {
     id: string;
@@ -108,6 +148,21 @@ export function uploadLectureRecording(
 ) {
   return authorizedRequest<RemoteRecordingSyncResult>(
     '/lectures/recordings',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    accessToken
+  );
+}
+
+export function uploadLectureChunk(
+  lectureId: string,
+  payload: RemoteLectureChunkUploadPayload,
+  accessToken: string
+) {
+  return authorizedRequest<RemoteLectureChunkUploadResult>(
+    `/lectures/${encodeURIComponent(lectureId)}/chunks`,
     {
       method: 'POST',
       body: JSON.stringify(payload),
