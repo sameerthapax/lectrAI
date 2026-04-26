@@ -112,7 +112,6 @@ type PreparedRecordingChunk = {
 };
 
 const AUDIO_BUCKET_NAME_FALLBACK = 'lecture-audio';
-const LECTURE_UPLOAD_CHUNK_DURATION_SECONDS = 10 * 60;
 
 export async function saveRecordedLecture(input: SaveRecordedLectureInput) {
   if (input.courseId === NO_CLASS_COURSE_ID) {
@@ -775,11 +774,18 @@ async function prepareRecordingForStorage(input: SaveRecordedLectureInput): Prom
   const chunkFiles =
     input.recordingChunks && input.recordingChunks.length > 0
       ? copyPreparedChunks(sourceChunks, recordingsDirectory)
-      : await splitRecordingIntoUploadChunks(
-          primaryRecordingFile,
-          durationSeconds,
-          recordingsDirectory
-        );
+      : primaryRecordingFile
+        ? [
+            {
+              chunkIndex: 0,
+              durationSeconds,
+              originalFilename: `chunk-0000${extension}`,
+              mimeType: getMimeTypeForExtension(extension),
+              fileSizeBytes: primaryRecordingFile.info().size ?? 0,
+              localUri: primaryRecordingFile.uri,
+            },
+          ]
+        : [];
 
   const primaryRecordingInfo = primaryRecordingFile?.info();
   const mimeType =
@@ -843,95 +849,6 @@ function copyPreparedChunks(
   });
 }
 
-async function splitRecordingIntoUploadChunks(
-  recordingFile: File | null,
-  durationSeconds: number,
-  recordingsDirectory: Directory
-) {
-  if (!recordingFile) {
-    return [];
-  }
-
-  const chunkExtension = normalizeExtension(recordingFile.uri);
-  const chunkMimeType = getMimeTypeForExtension(chunkExtension);
-
-  if (durationSeconds <= LECTURE_UPLOAD_CHUNK_DURATION_SECONDS) {
-    const recordingInfo = recordingFile.info();
-
-    return [
-      {
-        chunkIndex: 0,
-        durationSeconds,
-        originalFilename: `chunk-0000${chunkExtension}`,
-        mimeType: chunkMimeType,
-        fileSizeBytes: recordingInfo.size ?? 0,
-        localUri: recordingFile.uri,
-      },
-    ];
-  }
-
-  const chunkDirectory = new Directory(recordingsDirectory, 'chunks');
-  chunkDirectory.create({
-    idempotent: true,
-    intermediates: true,
-  });
-
-  try {
-    const ffmpeg = await loadFFmpegModule();
-
-    await ffmpeg.execute([
-      '-i',
-      recordingFile.uri,
-      '-f',
-      'segment',
-      '-segment_time',
-      String(LECTURE_UPLOAD_CHUNK_DURATION_SECONDS),
-      '-c',
-      'copy',
-      '-reset_timestamps',
-      '1',
-      '-map',
-      '0:a:0',
-      '-y',
-      new File(chunkDirectory, `chunk-%04d${chunkExtension}`).uri,
-    ]);
-  } catch (error) {
-    if (isFFmpegError(error)) {
-      throw new Error(`Failed to split the lecture recording into upload chunks: ${error.output}`);
-    }
-
-    throw error;
-  }
-
-  const chunkFiles = chunkDirectory.list().filter((entry): entry is File => entry instanceof File);
-  const orderedChunkFiles = chunkFiles
-    .sort((left, right) => left.uri.localeCompare(right.uri))
-    .map((file, index, files) => {
-      const fileInfo = file.info();
-      const remainingSeconds =
-        durationSeconds - index * LECTURE_UPLOAD_CHUNK_DURATION_SECONDS;
-      const chunkDurationSeconds =
-        index === files.length - 1
-          ? Math.max(1, remainingSeconds)
-          : Math.min(LECTURE_UPLOAD_CHUNK_DURATION_SECONDS, Math.max(1, remainingSeconds));
-
-      return {
-        chunkIndex: index,
-        durationSeconds: chunkDurationSeconds,
-        originalFilename: file.uri.split('/').pop() ?? `chunk-${String(index).padStart(4, '0')}${chunkExtension}`,
-        mimeType: chunkMimeType,
-        fileSizeBytes: fileInfo.size ?? 0,
-        localUri: file.uri,
-      };
-    });
-
-  if (orderedChunkFiles.length === 0) {
-    throw new Error('FFmpeg did not produce any lecture upload chunks.');
-  }
-
-  return orderedChunkFiles;
-}
-
 function buildLectureTitle(courseName: string, recordedAt: string) {
   const stamp = new Date(recordedAt);
   const date = `${stamp.getFullYear()}-${String(stamp.getMonth() + 1).padStart(2, '0')}-${String(
@@ -956,31 +873,6 @@ function getMimeTypeForExtension(extension: string) {
   }
 
   return 'audio/mp4';
-}
-
-function isFFmpegError(error: unknown): error is { output: string } {
-  return Boolean(
-    error &&
-      typeof error === 'object' &&
-      'constructor' in error &&
-      (error as { constructor?: { name?: string } }).constructor?.name === 'FFmpegError' &&
-      'output' in error
-  );
-}
-
-async function loadFFmpegModule(): Promise<{
-  execute: (args: string[]) => Promise<unknown>;
-}> {
-  const module = await import('ffmpeg-expo');
-  const execute =
-    (module as { execute?: (args: string[]) => Promise<unknown> }).execute ??
-    (module as { default?: { execute?: (args: string[]) => Promise<unknown> } }).default?.execute;
-
-  if (typeof execute !== 'function') {
-    throw new Error('FFmpeg module is installed, but its execute() export is unavailable in this build.');
-  }
-
-  return { execute };
 }
 
 function sanitizeFilename(filename: string) {

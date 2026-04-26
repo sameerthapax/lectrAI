@@ -15,7 +15,6 @@
       }
     },
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sameerthapa.lectrai",
@@ -28,7 +27,6 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
       "package": "com.sameerthapa.lectrai"
     },
     "web": {
@@ -47,8 +45,7 @@
       ],
       "expo-router",
       "expo-image",
-      "expo-secure-store",
-      "ffmpeg-expo"
+      "expo-secure-store"
     ],
     "owner": "sameerthapa"
   }

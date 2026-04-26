@@ -1,4 +1,5 @@
 import { getDb, getSupabaseAdminClient } from '@lectrai/db';
+import ffmpegPath from 'ffmpeg-static';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -2372,6 +2373,10 @@ async function concatenateLectureChunks(input: Array<{ filename: string; bytesPr
     return input[0].bytesPromise;
   }
 
+  if (!ffmpegPath) {
+    throw new HttpError(500, 'FFmpeg is unavailable on the API server.');
+  }
+
   const tempDirectory = await mkdtemp(join(tmpdir(), 'lectrai-audio-merge-'));
 
   try {
@@ -2388,7 +2393,7 @@ async function concatenateLectureChunks(input: Array<{ filename: string; bytesPr
     await writeFile(concatListPath, `${concatEntries.join('\n')}\n`);
 
     try {
-      await execFileAsync('ffmpeg', [
+      await execFileAsync(ffmpegPath, [
         '-f',
         'concat',
         '-safe',
