@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { asyncHandler } from '../../lib/async-handler.js';
 import {
   getLectureAudio,
   getLectures,
@@ -9,10 +10,10 @@ import {
 
 const lecturesRouter = Router();
 
-lecturesRouter.get('/', getLectures);
-lecturesRouter.get('/:lectureId/audio', getLectureAudio);
-lecturesRouter.post('/:lectureId/chunks', postLectureChunk);
-lecturesRouter.post('/recordings', postLectureRecording);
-lecturesRouter.post('/:lectureId/transcription', postLectureTranscription);
+lecturesRouter.get('/', asyncHandler(getLectures));
+lecturesRouter.get('/:lectureId/audio', asyncHandler(getLectureAudio));
+lecturesRouter.post('/:lectureId/chunks', asyncHandler(postLectureChunk));
+lecturesRouter.post('/recordings', asyncHandler(postLectureRecording));
+lecturesRouter.post('/:lectureId/transcription', asyncHandler(postLectureTranscription));
 
 export { lecturesRouter };

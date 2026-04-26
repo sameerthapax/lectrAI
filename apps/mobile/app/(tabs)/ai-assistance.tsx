@@ -40,6 +40,7 @@ import {
   type RemoteLokiReplyJobEvent,
   transcribeLokiAudio,
 } from '../../services/ai-chat-api';
+import { logMobileError } from '../../services/error-monitor';
 
 const LokiNativeVoiceVisualizer = require('../../components/ai/loki-native-voice-visualizer').default;
 const HOLD_TO_RECORD_DELAY_MS = 150;
@@ -131,6 +132,10 @@ export default function AiAssistanceRoute() {
       interruptionMode: 'mixWithOthers',
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
+    }).catch((error) => {
+      logMobileError(error, {
+        source: 'ai-assistance.configure-audio-mode',
+      });
     });
   }, []);
 
@@ -300,6 +305,10 @@ export default function AiAssistanceRoute() {
 
           setActiveSessionId((current) => current ?? nextSessions[0]?.id ?? null);
         } catch (error) {
+          logMobileError(error, {
+            source: 'ai-assistance.load-bootstrap',
+            extra: { authStatus: auth.status },
+          });
           if (!cancelled) {
             setErrorMessage(error instanceof Error ? error.message : 'Could not load Loki.');
           }
@@ -355,6 +364,10 @@ export default function AiAssistanceRoute() {
           return mergedMessages;
         });
       } catch (error) {
+        logMobileError(error, {
+          source: 'ai-assistance.load-session',
+          extra: { sessionId: activeSessionId },
+        });
         if (!cancelled) {
           setErrorMessage(error instanceof Error ? error.message : 'Could not load conversation.');
         }
@@ -402,7 +415,10 @@ export default function AiAssistanceRoute() {
       try {
         await recorder.stop();
         recordingUri = recorder.uri ?? recorderState.url;
-      } catch {
+      } catch (error) {
+        logMobileError(error, {
+          source: 'ai-assistance.stop-recorder-during-reset',
+        });
         // Reset the UI even if the recorder has already transitioned.
       }
     }
@@ -416,6 +432,10 @@ export default function AiAssistanceRoute() {
       interruptionMode: 'mixWithOthers',
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
+    }).catch((error) => {
+      logMobileError(error, {
+        source: 'ai-assistance.reset-audio-mode',
+      });
     });
 
     return recordingUri;
@@ -657,6 +677,10 @@ export default function AiAssistanceRoute() {
         muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
       });
     } catch (error) {
+      logMobileError(error, {
+        source: 'ai-assistance.send-text',
+        extra: { sessionId: activeSessionId },
+      });
       setErrorMessage(error instanceof Error ? error.message : 'Unable to send your message right now.');
     } finally {
       setAssistantReplyInFlight(false);
@@ -726,6 +750,9 @@ export default function AiAssistanceRoute() {
       recorder.record();
       setVoiceRecordingActive(true);
     } catch (error) {
+      logMobileError(error, {
+        source: 'ai-assistance.start-voice-recording',
+      });
       Alert.alert(
         'Voice capture failed',
         error instanceof Error ? error.message : 'Unable to start voice capture right now.'
@@ -762,6 +789,10 @@ export default function AiAssistanceRoute() {
         try {
           await processVoiceInput(recordingUri);
         } catch (error) {
+          logMobileError(error, {
+            source: 'ai-assistance.process-voice-input',
+            extra: { sessionId: activeSessionId },
+          });
           setErrorMessage(
             error instanceof Error ? error.message : 'Unable to process voice input right now.'
           );

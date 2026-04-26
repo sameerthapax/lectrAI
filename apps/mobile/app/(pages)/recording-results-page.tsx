@@ -12,6 +12,7 @@ import {
   processLectureTranscriptionForCache,
   type LocalLectureRecordingRecord,
 } from '../../services/recordings-repository';
+import { logMobileError } from '../../services/error-monitor';
 
 export default function RecordingResultsRoute() {
   const theme = useAppTheme();
@@ -34,15 +35,27 @@ export default function RecordingResultsRoute() {
       let cancelled = false;
 
       const loadRecording = async () => {
-        setLoading(true);
+        try {
+          setLoading(true);
 
-        const nextRecording = params.lectureId
-          ? await getLectureRecording(params.lectureId)
-          : await getLatestLectureRecording();
+          const nextRecording = params.lectureId
+            ? await getLectureRecording(params.lectureId)
+            : await getLatestLectureRecording();
 
-        if (!cancelled) {
-          setRecording(nextRecording);
-          setLoading(false);
+          if (!cancelled) {
+            setRecording(nextRecording);
+            setLoading(false);
+          }
+        } catch (error) {
+          logMobileError(error, {
+            source: 'recording-results.load-recording',
+            extra: { lectureId: params.lectureId ?? null },
+          });
+
+          if (!cancelled) {
+            setRecording(null);
+            setLoading(false);
+          }
         }
       };
 
@@ -121,6 +134,11 @@ export default function RecordingResultsRoute() {
         if (!cancelled && updatedRecording) {
           setRecording(updatedRecording);
         }
+      } catch (error) {
+        logMobileError(error, {
+          source: 'recording-results.download-audio',
+          extra: { lectureId, userId: user.id },
+        });
       } finally {
         if (downloadingAudioLectureIdRef.current === lectureId) {
           downloadingAudioLectureIdRef.current = null;
@@ -186,6 +204,10 @@ export default function RecordingResultsRoute() {
           setRecording(updatedRecording);
         }
       } catch (error) {
+        logMobileError(error, {
+          source: 'recording-results.process-transcript',
+          extra: { lectureId },
+        });
         if (!cancelled) {
           setTranscriptError(
             error instanceof Error ? error.message : 'Unable to process the transcript.'

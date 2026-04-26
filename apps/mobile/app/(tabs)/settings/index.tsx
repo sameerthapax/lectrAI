@@ -15,6 +15,7 @@ import {
 } from '../../../components/settings/settings-ui';
 import { useAuth } from '../../../providers/auth-provider';
 import { useSettings } from '../../../providers/settings-provider';
+import { logMobileError } from '../../../services/error-monitor';
 
 export default function SettingsHomeRoute() {
   const auth = useAuth();
@@ -27,6 +28,9 @@ export default function SettingsHomeRoute() {
       await auth.signOut();
       router.replace('/login');
     } catch (error) {
+      logMobileError(error, {
+        source: 'settings.logout',
+      });
       Alert.alert(
         'Logout failed',
         error instanceof Error ? error.message : 'Unable to sign out right now.'

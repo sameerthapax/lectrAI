@@ -60,6 +60,7 @@ import {
   type LocalDailyQuickQuizRecord,
 } from '../../services/quick-quiz-repository';
 import { saveRecordedLecture } from '../../services/recordings-repository';
+import { logMobileError } from '../../services/error-monitor';
 
 const DIGIT_HEIGHT = 28;
 const DIGIT_WIDTH = 16;
@@ -155,29 +156,29 @@ export default function HomeRoute() {
       let cancelled = false;
 
       const loadHomeCourses = async () => {
-        if (!user) {
-          if (!cancelled) {
-            setCourses([]);
-            setSelectedCourseIdState(NO_CLASS_COURSE_ID);
-          }
-          return;
-        }
-
-        const [nextCourses, persistedCourseId] = await Promise.all([
-          listCoursesForUser(user),
-          getSelectedCourseId(),
-        ]);
-
-        if (!cancelled) {
-          setCourses(nextCourses);
-          setSelectedCourseIdState(
-            nextCourses.some((course) => course.id === persistedCourseId) || persistedCourseId === NO_CLASS_COURSE_ID
-              ? persistedCourseId
-              : NO_CLASS_COURSE_ID
-          );
-        }
-
         try {
+          if (!user) {
+            if (!cancelled) {
+              setCourses([]);
+              setSelectedCourseIdState(NO_CLASS_COURSE_ID);
+            }
+            return;
+          }
+
+          const [nextCourses, persistedCourseId] = await Promise.all([
+            listCoursesForUser(user),
+            getSelectedCourseId(),
+          ]);
+
+          if (!cancelled) {
+            setCourses(nextCourses);
+            setSelectedCourseIdState(
+              nextCourses.some((course) => course.id === persistedCourseId) || persistedCourseId === NO_CLASS_COURSE_ID
+                ? persistedCourseId
+                : NO_CLASS_COURSE_ID
+            );
+          }
+
           const accessToken = await auth.getValidAccessToken();
 
           if (!accessToken) {
@@ -197,7 +198,11 @@ export default function HomeRoute() {
             setCourses(refreshedCourses);
             setSelectedCourseIdState(nextSelectedCourseId);
           }
-        } catch {
+        } catch (error) {
+          logMobileError(error, {
+            source: 'home.load-courses',
+            extra: { userId: user?.id ?? null },
+          });
           // Keep cached courses visible when the refresh request fails.
         }
       };
@@ -216,32 +221,32 @@ export default function HomeRoute() {
       let cancelled = false;
 
       const loadQuickQuiz = async () => {
-        if (!user) {
-          if (!cancelled) {
-            setQuickQuiz(null);
-            setQuickQuizAttempt(null);
-            setQuickQuizLoading(false);
-          }
-          return;
-        }
-
-        const todayKey = getDateKeyForTimezone(user.timezone);
-        const cachedBundle = await getCachedDailyQuickQuiz(todayKey, user.id);
-
-        if (!cancelled) {
-          setQuickQuiz(cachedBundle?.quiz ?? null);
-          setQuickQuizAttempt(cachedBundle?.attempt ?? null);
-          setQuickQuizLoading(true);
-        }
-
-        if (!hasAnyCourses) {
-          if (!cancelled) {
-            setQuickQuizLoading(false);
-          }
-          return;
-        }
-
         try {
+          if (!user) {
+            if (!cancelled) {
+              setQuickQuiz(null);
+              setQuickQuizAttempt(null);
+              setQuickQuizLoading(false);
+            }
+            return;
+          }
+
+          const todayKey = getDateKeyForTimezone(user.timezone);
+          const cachedBundle = await getCachedDailyQuickQuiz(todayKey, user.id);
+
+          if (!cancelled) {
+            setQuickQuiz(cachedBundle?.quiz ?? null);
+            setQuickQuizAttempt(cachedBundle?.attempt ?? null);
+            setQuickQuizLoading(true);
+          }
+
+          if (!hasAnyCourses) {
+            if (!cancelled) {
+              setQuickQuizLoading(false);
+            }
+            return;
+          }
+
           const accessToken = await auth.getValidAccessToken();
 
           if (!accessToken) {
@@ -269,7 +274,10 @@ export default function HomeRoute() {
             setQuickQuizAttempt(refreshedBundle?.attempt ?? null);
           }
         } catch (error) {
-          console.warn('Failed to refresh daily quick quiz.', error);
+          logMobileError(error, {
+            source: 'home.load-quick-quiz',
+            extra: { userId: user?.id ?? null },
+          });
         } finally {
           if (!cancelled) {
             setQuickQuizLoading(false);
@@ -345,6 +353,10 @@ export default function HomeRoute() {
       setQuickQuiz(cachedBundle?.quiz ?? null);
       setQuickQuizAttempt(cachedBundle?.attempt ?? null);
     } catch (error) {
+      logMobileError(error, {
+        source: 'home.generate-quick-quiz',
+        extra: { userId: auth.user?.id ?? null },
+      });
       Alert.alert(
         'Could not generate quiz',
         error instanceof Error ? error.message : 'Please try again.'
@@ -392,6 +404,10 @@ export default function HomeRoute() {
         setQuickQuiz(nextBundle.quiz);
         setQuickQuizAttempt(nextBundle.attempt);
       } catch (error) {
+        logMobileError(error, {
+          source: 'home.answer-quick-quiz',
+          extra: { userId: auth.user?.id ?? null, quizId: quickQuiz.id, questionId: quickQuizQuestion.id },
+        });
         Alert.alert('Could not save answer', error instanceof Error ? error.message : 'Please try again.');
       } finally {
         setQuickQuizSubmittingQuestionId(null);
@@ -469,6 +485,10 @@ export default function HomeRoute() {
         streakValue.setValue(nextStats.streakDays);
       }
     } catch (error) {
+      logMobileError(error, {
+        source: 'home.complete-quick-quiz',
+        extra: { userId: auth.user?.id ?? null, quizId: quickQuiz.id },
+      });
       setQuickQuizFinishCelebrationVisible(false);
       Alert.alert('Could not finish quiz', error instanceof Error ? error.message : 'Please try again.');
     } finally {
@@ -491,29 +511,29 @@ export default function HomeRoute() {
       let cancelled = false;
 
       const loadStats = async () => {
-        if (!user) {
-          if (!cancelled) {
-            setStats(null);
-            hasAnimatedInitialStreak.current = false;
-            streakValue.setValue(0);
-          }
-          return;
-        }
-
-        const cachedStats = await getCachedStatsForUser(user);
-
-        if (!cancelled) {
-          setStats(cachedStats);
-
-          if (!hasAnimatedInitialStreak.current) {
-            hasAnimatedInitialStreak.current = true;
-            animateStreakValue(streakValue, 0, cachedStats.streakDays, 3000);
-          } else {
-            streakValue.setValue(cachedStats.streakDays);
-          }
-        }
-
         try {
+          if (!user) {
+            if (!cancelled) {
+              setStats(null);
+              hasAnimatedInitialStreak.current = false;
+              streakValue.setValue(0);
+            }
+            return;
+          }
+
+          const cachedStats = await getCachedStatsForUser(user);
+
+          if (!cancelled) {
+            setStats(cachedStats);
+
+            if (!hasAnimatedInitialStreak.current) {
+              hasAnimatedInitialStreak.current = true;
+              animateStreakValue(streakValue, 0, cachedStats.streakDays, 3000);
+            } else {
+              streakValue.setValue(cachedStats.streakDays);
+            }
+          }
+
           const accessToken = await auth.getValidAccessToken();
 
           if (!accessToken) {
@@ -534,7 +554,11 @@ export default function HomeRoute() {
               streakValue.setValue(nextStats.streakDays);
             }
           }
-        } catch {
+        } catch (error) {
+          logMobileError(error, {
+            source: 'home.load-stats',
+            extra: { userId: user?.id ?? null },
+          });
           // Keep cached stats visible when the sync request fails.
         }
       };
@@ -691,6 +715,10 @@ export default function HomeRoute() {
       recorder.record();
       setRecordingVisible(true);
     } catch (error) {
+      logMobileError(error, {
+        source: 'home.start-recording',
+        extra: { courseId: selectedCourse?.id ?? null },
+      });
       Alert.alert(
         'Recording failed',
         error instanceof Error ? error.message : 'Unable to start recording right now.'
@@ -777,6 +805,14 @@ export default function HomeRoute() {
         setRecordingVisible(false);
       });
     } catch (error) {
+      logMobileError(error, {
+        source: 'home.close-recording',
+        extra: {
+          navigateToResults,
+          courseId: selectedCourse?.id ?? null,
+          userId: auth.user?.id ?? null,
+        },
+      });
       Alert.alert(
         'Could not stop recording',
         error instanceof Error ? error.message : 'Something went wrong while stopping the recorder.'

@@ -19,6 +19,7 @@ import {
   type ProfileSettings,
   type UserSettings,
 } from '../services/settings-storage';
+import { logMobileError } from '../services/error-monitor';
 
 type SettingsContextValue = {
   settings: UserSettings | null;
@@ -104,7 +105,11 @@ export function SettingsProvider({ children }: PropsWithChildren) {
           : defaultSettings;
 
         setSettings(resolvedSettings);
-      } catch {
+      } catch (error) {
+        logMobileError(error, {
+          source: 'settings-provider.load-settings',
+          extra: { userId },
+        });
         if (!cancelled) {
           setSettings(defaultSettings);
         }
@@ -128,7 +133,12 @@ export function SettingsProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    void setStoredUserSettings(userId, settings);
+    void setStoredUserSettings(userId, settings).catch((error) => {
+      logMobileError(error, {
+        source: 'settings-provider.persist-settings',
+        extra: { userId },
+      });
+    });
   }, [hasHydrated, settings, userId]);
 
   const updateProfileField = (field: keyof ProfileSettings, value: string) => {

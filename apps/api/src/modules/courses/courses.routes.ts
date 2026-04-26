@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { asyncHandler } from '../../lib/async-handler.js';
 import {
   deleteCourse,
   getCourseFiles,
@@ -10,11 +11,11 @@ import {
 
 const coursesRouter = Router();
 
-coursesRouter.get('/', getCourses);
-coursesRouter.post('/', postCourse);
-coursesRouter.get('/:courseId/files', getCourseFiles);
-coursesRouter.post('/:courseId/files', postCourseFile);
-coursesRouter.put('/:courseId', patchCourse);
-coursesRouter.delete('/:courseId', deleteCourse);
+coursesRouter.get('/', asyncHandler(getCourses));
+coursesRouter.post('/', asyncHandler(postCourse));
+coursesRouter.get('/:courseId/files', asyncHandler(getCourseFiles));
+coursesRouter.post('/:courseId/files', asyncHandler(postCourseFile));
+coursesRouter.put('/:courseId', asyncHandler(patchCourse));
+coursesRouter.delete('/:courseId', asyncHandler(deleteCourse));
 
 export { coursesRouter };

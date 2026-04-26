@@ -12,11 +12,22 @@ async function bootstrap() {
     );
   } catch (error) {
     console.error('[ db ] Database connection failed.', error);
-    process.exit(1);
   }
 
-  app.listen(env.port, env.host, () => {
+  process.on('unhandledRejection', (error) => {
+    console.error('[ api ] Unhandled promise rejection.', error);
+  });
+
+  process.on('uncaughtException', (error) => {
+    console.error('[ api ] Uncaught exception.', error);
+  });
+
+  const server = app.listen(env.port, env.host, () => {
     console.log(`[ ready ] http://${env.host}:${env.port}`);
+  });
+
+  server.on('error', (error) => {
+    console.error('[ api ] Server error.', error);
   });
 }
 
