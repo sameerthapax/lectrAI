@@ -261,6 +261,7 @@ export default function CourseDetailRoute() {
 
       <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
         <ScrollView
+          automaticallyAdjustKeyboardInsets
           onTouchStart={() => {
             if (suppressNextOutsideTapRef.current) {
               suppressNextOutsideTapRef.current = false;
@@ -283,6 +284,8 @@ export default function CourseDetailRoute() {
           }}
           scrollEventThrottle={16}
           contentInsetAdjustmentBehavior="automatic"
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
           style={{ backgroundColor: theme.colors.screen }}
           contentContainerStyle={{
             flexGrow: 1,

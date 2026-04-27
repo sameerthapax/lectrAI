@@ -100,7 +100,9 @@ export function CourseFormModal({
           </View>
 
           <ScrollView
+            automaticallyAdjustKeyboardInsets
             contentInsetAdjustmentBehavior="automatic"
+            keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ gap: 14, paddingBottom: 6 }}
           >
@@ -429,6 +431,7 @@ export function CourseFormModal({
                                 display="spinner"
                                 minuteInterval={5}
                                 mode="time"
+                                themeVariant={theme.resolvedMode}
                                 value={createMeetingDate(
                                   activeEditor === 'start' ? meeting.startTime : meeting.endTime
                                 )}

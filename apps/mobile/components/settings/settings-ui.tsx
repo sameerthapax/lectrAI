@@ -35,7 +35,10 @@ export function SettingsScreen({
 
   return (
     <ScrollView
+      automaticallyAdjustKeyboardInsets
       contentInsetAdjustmentBehavior="automatic"
+      keyboardDismissMode="interactive"
+      keyboardShouldPersistTaps="handled"
       style={{ backgroundColor: theme.colors.screen }}
       contentContainerStyle={{
         flexGrow: 1,
