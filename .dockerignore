@@ -9,6 +9,8 @@ tmp
 out-tsc
 **/.DS_Store
 **/dist
+!apps/api/dist
+!apps/api/dist/**
 apps/mobile/.expo
 infra/terraform/**/.terraform
 infra/terraform/**/*.tfstate*
