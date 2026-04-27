@@ -77,6 +77,13 @@ jobs:
           NX_DAEMON=false npx nx run api:build:production
           NX_DAEMON=false npx nx run api:prune
 
+      - name: Recreate pruned lockfile
+        if: ${{ steps.affected.outputs.api == 'true' }}
+        working-directory: apps/api/dist
+        run: |
+          rm -f package-lock.json
+          npm install --package-lock-only --ignore-scripts
+
       # 🔹 Skip message
       - name: Skip deploy
         if: ${{ steps.affected.outputs.api != 'true' && steps.affected.outputs.infra != 'true' }}

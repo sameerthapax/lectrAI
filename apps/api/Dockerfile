@@ -8,7 +8,7 @@ ENV HOST=0.0.0.0
 # Copy the pruned Nx deploy artifact for the API app.
 COPY apps/api/dist ./
 
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 
 EXPOSE 8080
 
