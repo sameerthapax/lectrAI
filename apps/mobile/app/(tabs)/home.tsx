@@ -26,6 +26,7 @@ import {
   buildCourseSelectorCards,
 } from '../../components/home/current-course-carousel';
 import { AiNextActionCarousel } from '../../components/home/ai-next-action-carousel';
+import loadingAnimation from '../../assets/animations/loading.json';
 import micAnimation from '../../assets/animations/mic-animation.json';
 import notFoundAnimation from '../../assets/animations/not-found.json';
 import poppingAnimation from '../../assets/animations/popping-animation.json';
@@ -82,6 +83,7 @@ export default function HomeRoute() {
   const [selectedCourseId, setSelectedCourseIdState] = useState(NO_CLASS_COURSE_ID);
   const [recordingVisible, setRecordingVisible] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
+  const [recordingSaving, setRecordingSaving] = useState(false);
   const [quickQuiz, setQuickQuiz] = useState<LocalDailyQuickQuizRecord | null>(null);
   const [quickQuizAttempt, setQuickQuizAttempt] = useState<LocalDailyQuickQuizAttemptRecord | null>(null);
   const [quickQuizLoading, setQuickQuizLoading] = useState(false);
@@ -752,6 +754,7 @@ export default function HomeRoute() {
           throw new Error('The recorder did not return any audio.');
         }
 
+        setRecordingSaving(true);
         const accessToken = await auth.getValidAccessToken();
         const savedRecording = await saveRecordedLecture({
           user: auth.user,
@@ -777,6 +780,7 @@ export default function HomeRoute() {
           useNativeDriver: true,
         }).start(() => {
           setRecordingVisible(false);
+          setRecordingSaving(false);
           router.push({
             pathname: '/recording-results-page',
             params: {
@@ -803,8 +807,10 @@ export default function HomeRoute() {
         useNativeDriver: true,
       }).start(() => {
         setRecordingVisible(false);
+        setRecordingSaving(false);
       });
     } catch (error) {
+      setRecordingSaving(false);
       logMobileError(error, {
         source: 'home.close-recording',
         extra: {
@@ -1571,10 +1577,10 @@ export default function HomeRoute() {
             }}
           />
 
-          <Animated.View
-            style={{
-              width: Math.min(width - 40, 360),
-              borderRadius: 34,
+      <Animated.View
+        style={{
+          width: Math.min(width - 40, 360),
+          borderRadius: 34,
               borderCurve: 'continuous',
               padding: 24,
               backgroundColor: theme.colors.card,
@@ -1589,240 +1595,305 @@ export default function HomeRoute() {
               ],
             }}
           >
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 8,
-                paddingHorizontal: 12,
-                paddingVertical: 7,
-                borderRadius: 999,
-                backgroundColor: theme.colors.dangerSoft,
-              }}
-            >
-              <Animated.View
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: 999,
-                  backgroundColor: theme.colors.danger,
-                  opacity: recordingPulse.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0.45, 1],
-                  }),
-                }}
-              />
-              <Text
-                style={{
-                  fontSize: 11,
-                  letterSpacing: 1.4,
-                  color: theme.colors.danger,
-                  fontWeight: '900',
-                  textTransform: 'uppercase',
-                }}
-              >
-                Recording in progress
-              </Text>
-            </View>
-
-            <View
-              style={{
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 180,
-                height: 180,
-              }}
-            >
-              <Animated.View
-                style={{
-                  position: 'absolute',
-                  width: 170,
-                  height: 170,
-                  borderRadius: 999,
-                  backgroundColor: theme.colors.dangerBorder,
-                  opacity: pulseOpacity,
-                  transform: [{ scale: pulseScale }, { scale: outerRingScale }],
-                }}
-              />
-              <Animated.View
-                style={{
-                  position: 'absolute',
-                  width: 142,
-                  height: 142,
-                  borderRadius: 999,
-                  backgroundColor: 'rgba(254, 202, 202, 0.7)',
-                  opacity: micGlowOpacity,
-                  transform: [{ scale: pulseScale }, { scale: innerRingScale }],
-                }}
-              />
-              <Animated.View
-                style={{
-                  width: 120,
-                  height: 120,
-                  borderRadius: 999,
-                  overflow: 'hidden',
-                  backgroundColor: micCoreColor,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 16px 30px rgba(239, 68, 68, 0.28)',
-                  transform: [
-                    { translateY: micLiveTranslate },
-                    { translateY: micFloatTranslateY },
-                    { rotate: micFloatRotate },
-                    { rotate: micLiveRotate },
-                    { scale: micScale },
-                  ],
-                }}
-              >
-                <Animated.View
-                  style={{
-                    position: 'absolute',
-                    top: -20,
-                    width: 38,
-                    height: 150,
-                    backgroundColor: 'rgba(255,255,255,0.22)',
-                    transform: [
-                      { translateX: shimmerTranslateX },
-                      { rotate: '-18deg' },
-                    ],
-                  }}
-                />
+            {recordingSaving ? (
+              <>
                 <View
                   style={{
-                    width: 34,
-                    height: 52,
-                    borderRadius: 18,
-                    backgroundColor: '#ffffff',
+                    flexDirection: 'row',
                     alignItems: 'center',
-                    justifyContent: 'center',
+                    gap: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 7,
+                    borderRadius: 999,
+                    backgroundColor: theme.colors.accentSoft,
                   }}
                 >
                   <View
                     style={{
-                      width: 8,
-                      height: 30,
+                      width: 10,
+                      height: 10,
                       borderRadius: 999,
-                      backgroundColor: '#ef4444',
+                      backgroundColor: theme.colors.accent,
                     }}
                   />
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      letterSpacing: 1.4,
+                      color: theme.colors.accentMuted,
+                      fontWeight: '900',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    Processing lecture
+                  </Text>
                 </View>
-                <View
-                  style={{
-                    width: 5,
-                    height: 22,
-                    marginTop: 6,
-                    borderRadius: 999,
-                    backgroundColor: '#ffffff',
-                  }}
-                />
-                <View
-                  style={{
-                    width: 34,
-                    height: 5,
-                    marginTop: 5,
-                    borderRadius: 999,
-                    backgroundColor: '#ffffff',
-                  }}
-                />
-              </Animated.View>
-            </View>
 
-            <View style={{ alignItems: 'center', gap: 8 }}>
-              <Text
+                <LottieView autoPlay loop source={loadingAnimation} style={{ width: 200, height: 200 }} />
+
+                <View style={{ alignItems: 'center', gap: 8 }}>
+                  <Text
+                    style={{
+                      fontSize: 26,
+                      lineHeight: 32,
+                      color: theme.colors.text,
+                      fontWeight: '900',
+                      textAlign: 'center',
+                    }}
+                  >
+                    Saving your recording
+                  </Text>
+                  <Text
+                    style={{
+                      color: theme.colors.textMuted,
+                      fontSize: 15,
+                      lineHeight: 22,
+                      fontWeight: '600',
+                      textAlign: 'center',
+                    }}
+                  >
+                    Uploading audio and starting transcript processing.
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <View
                 style={{
-                  fontSize: 34,
-                  lineHeight: 40,
-                  color: theme.colors.text,
-                  fontWeight: '900',
-                  fontVariant: ['tabular-nums'],
-                }}
-              >
-                {formattedRecordingTime}
-              </Text>
-            </View>
-
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'flex-end',
-                gap: 6,
-                height: 50,
-              }}
-            >
-              {waveformHeights.map((height, index) => (
-                <View
-                  key={`wave-${index}`}
-                  style={{
-                    width: 8,
-                    height,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 7,
                     borderRadius: 999,
-                    backgroundColor:
-                      normalizedMeter > 0.55
-                        ? index % 3 === 1
-                          ? '#dc2626'
-                          : '#ea580c'
-                        : index % 3 === 1
-                          ? '#ef4444'
-                          : '#f97316',
-                    opacity: index === 4 ? 1 : 0.84,
+                    backgroundColor: theme.colors.dangerSoft,
                   }}
-                />
-              ))}
-            </View>
+                >
+                  <Animated.View
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 999,
+                      backgroundColor: theme.colors.danger,
+                      opacity: recordingPulse.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.45, 1],
+                      }),
+                    }}
+                  />
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      letterSpacing: 1.4,
+                      color: theme.colors.danger,
+                      fontWeight: '900',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    Recording in progress
+                  </Text>
+                </View>
 
-            <View style={{ width: '100%', flexDirection: 'row', gap: 12 }}>
-              <Pressable
-                onPress={() => {
-                  void closeRecording(false);
-                }}
-                disabled={recordingBusy}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  minHeight: 52,
-                  borderRadius: 18,
-                  borderCurve: 'continuous',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: theme.colors.neutralSoft,
-                  borderWidth: 1,
-                  borderColor: theme.colors.neutralBorder,
-                  opacity: pressed ? 0.92 : 1,
-                })}
-              >
-                <Text
+                <View
                   style={{
-                    color: theme.colors.textMuted,
-                    fontSize: 15,
-                    fontWeight: '800',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 180,
+                    height: 180,
                   }}
                 >
-                  Cancel
-                </Text>
-              </Pressable>
+                  <Animated.View
+                    style={{
+                      position: 'absolute',
+                      width: 170,
+                      height: 170,
+                      borderRadius: 999,
+                      backgroundColor: theme.colors.dangerBorder,
+                      opacity: pulseOpacity,
+                      transform: [{ scale: pulseScale }, { scale: outerRingScale }],
+                    }}
+                  />
+                  <Animated.View
+                    style={{
+                      position: 'absolute',
+                      width: 142,
+                      height: 142,
+                      borderRadius: 999,
+                      backgroundColor: 'rgba(254, 202, 202, 0.7)',
+                      opacity: micGlowOpacity,
+                      transform: [{ scale: pulseScale }, { scale: innerRingScale }],
+                    }}
+                  />
+                  <Animated.View
+                    style={{
+                      width: 120,
+                      height: 120,
+                      borderRadius: 999,
+                      overflow: 'hidden',
+                      backgroundColor: micCoreColor,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 16px 30px rgba(239, 68, 68, 0.28)',
+                      transform: [
+                        { translateY: micLiveTranslate },
+                        { translateY: micFloatTranslateY },
+                        { rotate: micFloatRotate },
+                        { rotate: micLiveRotate },
+                        { scale: micScale },
+                      ],
+                    }}
+                  >
+                    <Animated.View
+                      style={{
+                        position: 'absolute',
+                        top: -20,
+                        width: 38,
+                        height: 150,
+                        backgroundColor: 'rgba(255,255,255,0.22)',
+                        transform: [
+                          { translateX: shimmerTranslateX },
+                          { rotate: '-18deg' },
+                        ],
+                      }}
+                    />
+                    <View
+                      style={{
+                        width: 34,
+                        height: 52,
+                        borderRadius: 18,
+                        backgroundColor: '#ffffff',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <View
+                        style={{
+                          width: 8,
+                          height: 30,
+                          borderRadius: 999,
+                          backgroundColor: '#ef4444',
+                        }}
+                      />
+                    </View>
+                    <View
+                      style={{
+                        width: 5,
+                        height: 22,
+                        marginTop: 6,
+                        borderRadius: 999,
+                        backgroundColor: '#ffffff',
+                      }}
+                    />
+                    <View
+                      style={{
+                        width: 34,
+                        height: 5,
+                        marginTop: 5,
+                        borderRadius: 999,
+                        backgroundColor: '#ffffff',
+                      }}
+                    />
+                  </Animated.View>
+                </View>
 
-              <Pressable
-                onPress={() => {
-                  void closeRecording(true);
-                }}
-                disabled={recordingBusy}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  minHeight: 52,
-                  borderRadius: 18,
-                  borderCurve: 'continuous',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: theme.colors.danger,
-                  opacity: pressed ? 0.92 : 1,
-                })}
-              >
-                <Text
-                  style={{ color: '#ffffff', fontSize: 15, fontWeight: '800' }}
+                <View style={{ alignItems: 'center', gap: 8 }}>
+                  <Text
+                    style={{
+                      fontSize: 34,
+                      lineHeight: 40,
+                      color: theme.colors.text,
+                      fontWeight: '900',
+                      fontVariant: ['tabular-nums'],
+                    }}
+                  >
+                    {formattedRecordingTime}
+                  </Text>
+                </View>
+
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'flex-end',
+                    gap: 6,
+                    height: 50,
+                  }}
                 >
-                  Done
-                </Text>
-              </Pressable>
-            </View>
+                  {waveformHeights.map((height, index) => (
+                    <View
+                      key={`wave-${index}`}
+                      style={{
+                        width: 8,
+                        height,
+                        borderRadius: 999,
+                        backgroundColor:
+                          normalizedMeter > 0.55
+                            ? index % 3 === 1
+                              ? '#dc2626'
+                              : '#ea580c'
+                            : index % 3 === 1
+                              ? '#ef4444'
+                              : '#f97316',
+                        opacity: index === 4 ? 1 : 0.84,
+                      }}
+                    />
+                  ))}
+                </View>
+
+                <View style={{ width: '100%', flexDirection: 'row', gap: 12 }}>
+                  <Pressable
+                    onPress={() => {
+                      void closeRecording(false);
+                    }}
+                    disabled={recordingBusy}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      minHeight: 52,
+                      borderRadius: 18,
+                      borderCurve: 'continuous',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: theme.colors.neutralSoft,
+                      borderWidth: 1,
+                      borderColor: theme.colors.neutralBorder,
+                      opacity: pressed ? 0.92 : 1,
+                    })}
+                  >
+                    <Text
+                      style={{
+                        color: theme.colors.textMuted,
+                        fontSize: 15,
+                        fontWeight: '800',
+                      }}
+                    >
+                      Cancel
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => {
+                      void closeRecording(true);
+                    }}
+                    disabled={recordingBusy}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      minHeight: 52,
+                      borderRadius: 18,
+                      borderCurve: 'continuous',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: theme.colors.danger,
+                      opacity: pressed ? 0.92 : 1,
+                    })}
+                  >
+                    <Text
+                      style={{ color: '#ffffff', fontSize: 15, fontWeight: '800' }}
+                    >
+                      Done
+                    </Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
           </Animated.View>
         </Animated.View>
       ) : null}
