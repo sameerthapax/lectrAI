@@ -136,13 +136,14 @@ jobs:
         if: ${{ steps.affected.outputs.api == 'true' || steps.affected.outputs.infra == 'true' }}
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
+          TF_VAR_cloud_run_service_name: ${{ secrets.CLOUD_RUN_SERVICE_NAME }}
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_region: us-central1
           TF_VAR_environment: dev
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
         run: |
           set +e
-          terraform plan -detailed-exitcode -out=tfplan
+          terraform plan -input=false -detailed-exitcode -out=tfplan
           code=$?
           set -e
 
