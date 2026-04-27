@@ -143,7 +143,7 @@ jobs:
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
         run: |
           set +e
-          terraform plan -input=false -detailed-exitcode -out=tfplan
+          terraform plan -lock-timeout=60s -input=false -detailed-exitcode -out=tfplan
           code=$?
           set -e
 
