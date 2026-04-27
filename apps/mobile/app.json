@@ -2,11 +2,12 @@
   "expo": {
     "name": "LectrAI",
     "slug": "lectrai",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lectrai",
     "jsEngine": "hermes",
+    "newArchEnabled": false,
     "extra": {
       "router": {
         "origin": false
@@ -20,7 +21,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.sameerthapa.lectrai",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSMicrophoneUsageDescription": "LectrAI uses the microphone to record lectures and voice prompts for study sessions."
       }
     },
     "android": {
@@ -46,6 +48,7 @@
       ],
       "expo-router",
       "expo-image",
+      "expo-notifications",
       "expo-secure-store"
     ],
     "owner": "sameerthapa"
