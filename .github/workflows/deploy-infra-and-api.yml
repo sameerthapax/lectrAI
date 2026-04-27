@@ -138,9 +138,18 @@ jobs:
         env:
           TF_VAR_cloud_run_service_name: ${{ secrets.CLOUD_RUN_SERVICE_NAME }}
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_google_cloud_project: ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_region: us-central1
           TF_VAR_environment: dev
           TF_VAR_cloud_run_image: ${{ env.AR_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPOSITORY }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+          TF_VAR_pubsub_topic_name: lectrai-events-dev
+          TF_VAR_pubsub_subscription_name: lectrai-events-worker-dev
+          TF_VAR_supabase_url: ${{ secrets.SUPABASE_URL }}
+          TF_VAR_supabase_anon_key: ${{ secrets.SUPABASE_ANON_KEY }}
+          TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TF_VAR_database_url: ${{ secrets.SUPABASE_DB_URL }}
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_elevenlabs_api_key: ${{ secrets.ELEVENLABS_API_KEY }}
         run: |
           set +e
           terraform plan -lock-timeout=60s -input=false -detailed-exitcode -out=tfplan
