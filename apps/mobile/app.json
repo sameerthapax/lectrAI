@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lectrai",
+    "jsEngine": "hermes",
     "extra": {
       "router": {
         "origin": false
