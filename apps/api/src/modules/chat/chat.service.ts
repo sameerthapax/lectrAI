@@ -613,15 +613,16 @@ async function completeChatReplyWorkflowForUser(input: {
   const sessionScopeHint = input.input.sessionId
     ? await getRecentSessionScopeHintForUser(input.userId, input.input.sessionId)
     : null;
-
-  await input.progressReporter?.emit(
-    'retrieving_lecture',
-    buildSingleProgressMessage(input.input.message, resolvedScope)
-  );
-
   const retrievalDecision = await decideRetrievalForUser(input.userId, resolvedScope, input.input.message, sessionScopeHint);
   const sessionScope = retrievalDecision.scope;
   const retrieval = retrievalDecision.retrieval;
+
+  if (shouldEmitRetrievalProgress(retrieval)) {
+    await input.progressReporter?.emit(
+      'retrieving_lecture',
+      buildSingleProgressMessage(input.input.message, sessionScope)
+    );
+  }
 
   const history = await listRecentChatHistoryExcludingMessage(input.session.id, input.userMessage.id, MAX_HISTORY_MESSAGES);
   const memories = await searchLokiMemories({
@@ -2492,6 +2493,13 @@ function buildSingleProgressMessage(message: string, scope: ChatScope) {
         : 'the requested material';
 
   return `I am retrieving ${requestedSource} information and creating ${requestedAsset} for you.`;
+}
+
+function shouldEmitRetrievalProgress(retrieval: RetrievedContext) {
+  return (
+    retrieval.chunks.length > 0 ||
+    retrieval.decision?.functionName === TRANSCRIPT_SEARCH_TOOL_NAME
+  );
 }
 
 function readUsage(usage: unknown) {

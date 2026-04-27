@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { HttpError } from '../../lib/http-error.js';
 import {
   createCourseFileForUser,
   createCourseForUser,
@@ -14,7 +15,7 @@ function requireAuthUserId(request: Request) {
   const userId = request.authUser?.id;
 
   if (!userId) {
-    throw new Error('Authenticated user id missing from request context.');
+    throw new HttpError(401, 'Authentication required.');
   }
 
   return userId;

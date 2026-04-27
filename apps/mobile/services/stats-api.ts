@@ -2,7 +2,7 @@ import { authorizedRequest } from './auth-api';
 
 export type RemoteStatsRecord = {
   streakDays: number;
-  progressPercent: number;
+  daysRemainingInSemester: number;
   coursesThisSemester: number;
   currentSemesterLabel: string;
   lastIncrementedOn: string | null;

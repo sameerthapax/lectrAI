@@ -12,6 +12,7 @@ import {
   processLectureTranscriptionForCache,
   type LocalLectureRecordingRecord,
 } from '../../services/recordings-repository';
+import { logMobileError } from '../../services/error-monitor';
 
 export default function RecordingResultsRoute() {
   const theme = useAppTheme();
@@ -34,15 +35,27 @@ export default function RecordingResultsRoute() {
       let cancelled = false;
 
       const loadRecording = async () => {
-        setLoading(true);
+        try {
+          setLoading(true);
 
-        const nextRecording = params.lectureId
-          ? await getLectureRecording(params.lectureId)
-          : await getLatestLectureRecording();
+          const nextRecording = params.lectureId
+            ? await getLectureRecording(params.lectureId)
+            : await getLatestLectureRecording();
 
-        if (!cancelled) {
-          setRecording(nextRecording);
-          setLoading(false);
+          if (!cancelled) {
+            setRecording(nextRecording);
+            setLoading(false);
+          }
+        } catch (error) {
+          logMobileError(error, {
+            source: 'recording-results.load-recording',
+            extra: { lectureId: params.lectureId ?? null },
+          });
+
+          if (!cancelled) {
+            setRecording(null);
+            setLoading(false);
+          }
         }
       };
 
@@ -91,6 +104,7 @@ export default function RecordingResultsRoute() {
       !recording ||
       !user ||
       recording.localUri.length > 0 ||
+      !recording.objectPath ||
       recording.uploadStatus !== 'uploaded' ||
       recording.syncStatus !== 'synced' ||
       downloadingAudioLectureIdRef.current === lectureId
@@ -120,6 +134,11 @@ export default function RecordingResultsRoute() {
         if (!cancelled && updatedRecording) {
           setRecording(updatedRecording);
         }
+      } catch (error) {
+        logMobileError(error, {
+          source: 'recording-results.download-audio',
+          extra: { lectureId, userId: user.id },
+        });
       } finally {
         if (downloadingAudioLectureIdRef.current === lectureId) {
           downloadingAudioLectureIdRef.current = null;
@@ -185,6 +204,10 @@ export default function RecordingResultsRoute() {
           setRecording(updatedRecording);
         }
       } catch (error) {
+        logMobileError(error, {
+          source: 'recording-results.process-transcript',
+          extra: { lectureId },
+        });
         if (!cancelled) {
           setTranscriptError(
             error instanceof Error ? error.message : 'Unable to process the transcript.'
@@ -276,6 +299,17 @@ export default function RecordingResultsRoute() {
                   value={`${recording.bucketName}/${recording.objectPath}`}
                   theme={theme}
                 />
+              ) : null}
+              {!recording.localUri && !recording.objectPath ? (
+                <Text
+                  style={{
+                    color: theme.colors.textMuted,
+                    fontSize: 13,
+                    lineHeight: 18,
+                  }}
+                >
+                  Captured as upload chunks. Full-device playback is not available here yet, but transcript processing will continue.
+                </Text>
               ) : null}
               <Pressable
                 disabled={!hasLocalRecordingFile}

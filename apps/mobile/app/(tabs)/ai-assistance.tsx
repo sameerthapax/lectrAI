@@ -40,6 +40,7 @@ import {
   type RemoteLokiReplyJobEvent,
   transcribeLokiAudio,
 } from '../../services/ai-chat-api';
+import { logMobileError } from '../../services/error-monitor';
 
 const LokiNativeVoiceVisualizer = require('../../components/ai/loki-native-voice-visualizer').default;
 const HOLD_TO_RECORD_DELAY_MS = 150;
@@ -71,6 +72,7 @@ export default function AiAssistanceRoute() {
   const [talkHoldActive, setTalkHoldActive] = useState(false);
   const [voiceRecordingActive, setVoiceRecordingActive] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [assistantReplyInFlight, setAssistantReplyInFlight] = useState(false);
   const [assistantWaiting, setAssistantWaiting] = useState(false);
   const [assistantStageLabel, setAssistantStageLabel] = useState<string | null>(null);
   const [assistantSpeechLevel, setAssistantSpeechLevel] = useState(0);
@@ -82,6 +84,7 @@ export default function AiAssistanceRoute() {
   const holdToRecordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const talkExpandProgress = useRef(new Animated.Value(0)).current;
   const talkGlowOpacity = useRef(new Animated.Value(0)).current;
+  const talkLoadingOrbit = useRef(new Animated.Value(0)).current;
   const visualizerCardHeight = useRef(new Animated.Value(isCompact ? 232 : 256)).current;
   const conversationBodyHeight = useRef(new Animated.Value(isCompact ? 300 : 360)).current;
   const controlsOpacity = useRef(new Animated.Value(1)).current;
@@ -129,6 +132,10 @@ export default function AiAssistanceRoute() {
       interruptionMode: 'mixWithOthers',
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
+    }).catch((error) => {
+      logMobileError(error, {
+        source: 'ai-assistance.configure-audio-mode',
+      });
     });
   }, []);
 
@@ -149,7 +156,7 @@ export default function AiAssistanceRoute() {
     }
   }, [assistantWaiting]);
 
-  const shouldExpandTalkButton = talkHoldActive || assistantWaiting;
+  const shouldExpandTalkButton = talkHoldActive || assistantReplyInFlight || assistantWaiting;
 
   useEffect(() => {
     Animated.timing(talkGlowOpacity, {
@@ -159,6 +166,31 @@ export default function AiAssistanceRoute() {
       useNativeDriver: false,
     }).start();
   }, [talkGlowOpacity, talkHoldActive]);
+
+  useEffect(() => {
+    const shouldAnimateLoading = assistantReplyInFlight || assistantWaiting;
+
+    if (!shouldAnimateLoading) {
+      talkLoadingOrbit.stopAnimation();
+      talkLoadingOrbit.setValue(0);
+      return;
+    }
+
+    const orbitLoop = Animated.loop(
+      Animated.timing(talkLoadingOrbit, {
+        toValue: 1,
+        duration: 1600,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      })
+    );
+
+    orbitLoop.start();
+
+    return () => {
+      orbitLoop.stop();
+    };
+  }, [assistantReplyInFlight, assistantWaiting, talkLoadingOrbit]);
 
   useEffect(() => {
     Animated.timing(talkExpandProgress, {
@@ -184,10 +216,10 @@ export default function AiAssistanceRoute() {
       : visualizerCollapsed
         ? 88
         : isCompact
-          ? assistantWaiting
+          ? assistantReplyInFlight || assistantWaiting
             ? 288
             : 232
-          : assistantWaiting
+          : assistantReplyInFlight || assistantWaiting
             ? 332
             : 256;
     const nextConversationHeight = visualizerCollapsed
@@ -234,6 +266,7 @@ export default function AiAssistanceRoute() {
     typingMode,
     visualizerCardHeight,
     visualizerCollapsed,
+    assistantReplyInFlight,
   ]);
 
   useEffect(() => {
@@ -272,6 +305,10 @@ export default function AiAssistanceRoute() {
 
           setActiveSessionId((current) => current ?? nextSessions[0]?.id ?? null);
         } catch (error) {
+          logMobileError(error, {
+            source: 'ai-assistance.load-bootstrap',
+            extra: { authStatus: auth.status },
+          });
           if (!cancelled) {
             setErrorMessage(error instanceof Error ? error.message : 'Could not load Loki.');
           }
@@ -327,6 +364,10 @@ export default function AiAssistanceRoute() {
           return mergedMessages;
         });
       } catch (error) {
+        logMobileError(error, {
+          source: 'ai-assistance.load-session',
+          extra: { sessionId: activeSessionId },
+        });
         if (!cancelled) {
           setErrorMessage(error instanceof Error ? error.message : 'Could not load conversation.');
         }
@@ -374,7 +415,10 @@ export default function AiAssistanceRoute() {
       try {
         await recorder.stop();
         recordingUri = recorder.uri ?? recorderState.url;
-      } catch {
+      } catch (error) {
+        logMobileError(error, {
+          source: 'ai-assistance.stop-recorder-during-reset',
+        });
         // Reset the UI even if the recorder has already transitioned.
       }
     }
@@ -388,6 +432,10 @@ export default function AiAssistanceRoute() {
       interruptionMode: 'mixWithOthers',
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
+    }).catch((error) => {
+      logMobileError(error, {
+        source: 'ai-assistance.reset-audio-mode',
+      });
     });
 
     return recordingUri;
@@ -411,7 +459,6 @@ export default function AiAssistanceRoute() {
           message: input.messageText,
           muteAudioResponse: input.muteAudioResponse,
         });
-        setAssistantStageLabel('Acknowledged');
 
         setActiveSessionId(created.session.id);
         setMessages((current) => {
@@ -431,6 +478,7 @@ export default function AiAssistanceRoute() {
               if (event.eventType !== 'retrieving_lecture') {
                 return;
               }
+              setAssistantWaiting(true);
               setAssistantStageLabel('Retrieving');
               if (progressGatePromiseRef.current) {
                 return;
@@ -466,7 +514,6 @@ export default function AiAssistanceRoute() {
           completedMetadata,
           events: finalEvents.events,
         });
-        setAssistantStageLabel('Loading');
         const assistantMessage = mergeFinalAssistantMessage(
           finalResult.assistantMessage,
           completedMetadata,
@@ -530,6 +577,7 @@ export default function AiAssistanceRoute() {
           player.play();
         }
       } finally {
+        setAssistantWaiting(false);
         activeReplyJobAbortRef.current = null;
       }
     },
@@ -543,7 +591,7 @@ export default function AiAssistanceRoute() {
       }
 
       setVoiceBusy(true);
-      setAssistantWaiting(true);
+      setAssistantReplyInFlight(true);
       setErrorMessage(null);
 
       try {
@@ -586,7 +634,7 @@ export default function AiAssistanceRoute() {
           muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
         });
       } finally {
-        setAssistantWaiting(false);
+        setAssistantReplyInFlight(false);
         setVoiceBusy(false);
       }
     },
@@ -601,7 +649,7 @@ export default function AiAssistanceRoute() {
     }
 
     setComposerBusy(true);
-    setAssistantWaiting(true);
+    setAssistantReplyInFlight(true);
     setErrorMessage(null);
 
     try {
@@ -629,9 +677,13 @@ export default function AiAssistanceRoute() {
         muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
       });
     } catch (error) {
+      logMobileError(error, {
+        source: 'ai-assistance.send-text',
+        extra: { sessionId: activeSessionId },
+      });
       setErrorMessage(error instanceof Error ? error.message : 'Unable to send your message right now.');
     } finally {
-      setAssistantWaiting(false);
+      setAssistantReplyInFlight(false);
       setComposerBusy(false);
     }
   }, [
@@ -698,6 +750,9 @@ export default function AiAssistanceRoute() {
       recorder.record();
       setVoiceRecordingActive(true);
     } catch (error) {
+      logMobileError(error, {
+        source: 'ai-assistance.start-voice-recording',
+      });
       Alert.alert(
         'Voice capture failed',
         error instanceof Error ? error.message : 'Unable to start voice capture right now.'
@@ -709,7 +764,7 @@ export default function AiAssistanceRoute() {
   }, [player, playerStatus.playing, recorder, resetVoiceHoldState]);
 
   const handleTalkPressIn = useCallback(() => {
-    if (voiceBusy || talkHoldActive || assistantWaiting) {
+    if (voiceBusy || talkHoldActive || assistantReplyInFlight) {
       return;
     }
 
@@ -724,7 +779,7 @@ export default function AiAssistanceRoute() {
       holdToRecordTimeoutRef.current = null;
       void startVoiceRecording();
     }, HOLD_TO_RECORD_DELAY_MS);
-  }, [assistantWaiting, startVoiceRecording, talkHoldActive, voiceBusy]);
+  }, [assistantReplyInFlight, startVoiceRecording, talkHoldActive, voiceBusy]);
 
   const handleTalkPressOut = useCallback(() => {
     void (async () => {
@@ -734,6 +789,10 @@ export default function AiAssistanceRoute() {
         try {
           await processVoiceInput(recordingUri);
         } catch (error) {
+          logMobileError(error, {
+            source: 'ai-assistance.process-voice-input',
+            extra: { sessionId: activeSessionId },
+          });
           setErrorMessage(
             error instanceof Error ? error.message : 'Unable to process voice input right now.'
           );
@@ -772,6 +831,10 @@ export default function AiAssistanceRoute() {
     0.18 + liveVoiceLevel * 0.54
   );
   const talkGlowScale = 1.02 + liveVoiceLevel * 0.22;
+  const talkOrbitRotation = talkLoadingOrbit.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
   const visualizerBarHeights = [
     8 + liveVoiceLevel * 10,
     12 + liveVoiceLevel * 14,
@@ -779,16 +842,21 @@ export default function AiAssistanceRoute() {
     11 + liveVoiceLevel * 11,
   ];
   const visualizerBarOpacity = 0.48 + liveVoiceLevel * 0.52;
+  const assistantLoadingStage = assistantWaiting
+    ? assistantStageLabel ?? 'Thinking'
+    : assistantReplyInFlight
+      ? 'Thinking'
+      : null;
   const talkButtonLabel = voiceRecordingActive
     ? 'Listening'
-    : assistantWaiting
-      ? (assistantStageLabel ?? 'Thinking...')
-    : talkHoldActive
-      ? 'Keep Holding'
-      : 'Hold To Talk';
+    : assistantLoadingStage
+      ? assistantLoadingStage
+      : talkHoldActive
+        ? 'Keep Holding'
+        : 'Hold To Talk';
   const visualizerMode = playerStatus.playing
     ? 'speaking'
-    : assistantWaiting
+    : assistantReplyInFlight || assistantWaiting
       ? 'waiting'
       : 'idle';
   const visualizerPlaybackTimeSeconds = playerStatus.currentTime;
@@ -853,10 +921,24 @@ export default function AiAssistanceRoute() {
           }}
         >
           <View style={{ gap: 2 }}>
-            <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '700' }}>
+            <Text
+              selectable
+              style={{
+                color: theme.colors.textMuted,
+                fontSize: 13,
+                fontWeight: '700',
+              }}
+            >
               AI assistant
             </Text>
-            <Text selectable style={{ color: theme.colors.text, fontSize: 30, fontWeight: '800' }}>
+            <Text
+              selectable
+              style={{
+                color: theme.colors.text,
+                fontSize: 30,
+                fontWeight: '800',
+              }}
+            >
               Meet <Text style={{ color: theme.colors.accent }}>Loki</Text>
             </Text>
           </View>
@@ -868,13 +950,22 @@ export default function AiAssistanceRoute() {
               borderCurve: 'continuous',
               paddingHorizontal: 12,
               paddingVertical: 8,
-              backgroundColor: pressed ? theme.colors.cardMuted : theme.colors.overlay,
+              backgroundColor: pressed
+                ? theme.colors.cardMuted
+                : theme.colors.overlay,
               borderWidth: 1,
               borderColor: theme.colors.border,
               boxShadow: '0 10px 20px rgba(15, 23, 42, 0.06)',
             })}
           >
-            <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, fontWeight: '700' }}>
+            <Text
+              selectable
+              style={{
+                color: theme.colors.textMuted,
+                fontSize: 12,
+                fontWeight: '700',
+              }}
+            >
               History
             </Text>
           </Pressable>
@@ -896,10 +987,15 @@ export default function AiAssistanceRoute() {
             speechLevel={assistantSpeechLevel}
             playbackTimeSeconds={visualizerPlaybackTimeSeconds}
             collapsed={visualizerCollapsed}
+            statusLabel={assistantLoadingStage ?? undefined}
           />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={visualizerCollapsed ? 'Expand Loki visualizer' : 'Minimize Loki visualizer'}
+            accessibilityLabel={
+              visualizerCollapsed
+                ? 'Expand Loki visualizer'
+                : 'Minimize Loki visualizer'
+            }
             onPress={() => {
               setTypingMode(false);
               setVisualizerCollapsed((current) => !current);
@@ -914,7 +1010,9 @@ export default function AiAssistanceRoute() {
               justifyContent: 'center',
               paddingHorizontal: visualizerCollapsed ? 10 : 12,
               paddingVertical: visualizerCollapsed ? 7 : 8,
-              backgroundColor: pressed ? 'rgba(17, 12, 8, 0.92)' : 'rgba(17, 12, 8, 0.78)',
+              backgroundColor: pressed
+                ? 'rgba(17, 12, 8, 0.92)'
+                : 'rgba(17, 12, 8, 0.78)',
               borderWidth: 1,
               borderColor: 'rgba(255, 237, 213, 0.10)',
             })}
@@ -923,7 +1021,11 @@ export default function AiAssistanceRoute() {
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={visualizerCollapsed || audioMuted ? 'Unmute Loki audio' : 'Mute Loki audio'}
+            accessibilityLabel={
+              visualizerCollapsed || audioMuted
+                ? 'Unmute Loki audio'
+                : 'Mute Loki audio'
+            }
             onPress={() => setAudioMuted((current) => !current)}
             style={({ pressed }) => ({
               position: 'absolute',
@@ -934,7 +1036,9 @@ export default function AiAssistanceRoute() {
               borderRadius: 999,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: pressed ? 'rgba(17, 12, 8, 0.92)' : 'rgba(17, 12, 8, 0.78)',
+              backgroundColor: pressed
+                ? 'rgba(17, 12, 8, 0.92)'
+                : 'rgba(17, 12, 8, 0.78)',
               borderWidth: 1,
               borderColor:
                 visualizerCollapsed || audioMuted
@@ -971,7 +1075,9 @@ export default function AiAssistanceRoute() {
                 borderRadius: 12,
                 alignItems: 'center',
                 justifyContent: 'center',
-                backgroundColor: pressed ? theme.colors.cardMuted : theme.colors.neutralSoft,
+                backgroundColor: pressed
+                  ? theme.colors.cardMuted
+                  : theme.colors.neutralSoft,
                 borderWidth: 1,
                 borderColor: theme.colors.neutralBorder,
               })}
@@ -990,7 +1096,12 @@ export default function AiAssistanceRoute() {
             height: visualizerCollapsed || typingMode ? 0 : undefined,
           }}
         >
-          <Animated.View style={{ flex: talkButtonFlex, minHeight: 64 }}>
+          <Animated.View
+            style={{
+              flex: talkButtonFlex,
+              minHeight: 64,
+              }}
+          >
             <Animated.View
               pointerEvents="none"
               style={{
@@ -1005,63 +1116,125 @@ export default function AiAssistanceRoute() {
               }}
             />
             <Pressable
-            onPressIn={handleTalkPressIn}
-            onPressOut={handleTalkPressOut}
-            disabled={voiceBusy || assistantWaiting}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: 64,
-              borderRadius: 22,
-              borderCurve: 'continuous',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 4,
-              backgroundColor:
-                  talkHoldActive || voiceRecordingActive || assistantWaiting
+              onPressIn={handleTalkPressIn}
+              onPressOut={handleTalkPressOut}
+              disabled={voiceBusy || assistantReplyInFlight}
+              style={({ pressed }) => ({
+                flex: 1,
+                minHeight: 64,
+                borderRadius: 22,
+                borderCurve: 'continuous',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 4,
+                backgroundColor:
+                  talkHoldActive ||
+                  voiceRecordingActive ||
+                  assistantReplyInFlight
                     ? '#b91c1c'
                     : pressed
                       ? theme.colors.accentMuted
                       : theme.colors.accent,
                 boxShadow:
-                  talkHoldActive || voiceRecordingActive || assistantWaiting
+                  talkHoldActive ||
+                  voiceRecordingActive ||
+                  assistantReplyInFlight
                     ? '0 18px 34px rgba(220, 38, 38, 0.26)'
                     : '0 16px 28px rgba(234, 88, 12, 0.18)',
-                opacity: assistantWaiting ? 0.88 : 1,
+                opacity: assistantReplyInFlight ? 0.88 : 1,
               })}
             >
-              <View
+              {assistantReplyInFlight || assistantWaiting ? (
+                <View
+                  style={{
+                    minHeight: 32,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                />
+              ) : (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'flex-end',
+                    justifyContent: 'center',
+                    gap: 4,
+                    minHeight: 32,
+                  }}
+                >
+                  {visualizerBarHeights.map((height, index) => (
+                    <Animated.View
+                      key={`talk-bar-${index}`}
+                      style={{
+                        width: 6,
+                        height,
+                        borderRadius: 999,
+                        backgroundColor: 'rgba(255,255,255,0.92)',
+                        opacity: visualizerBarOpacity,
+                      }}
+                    />
+                  ))}
+                </View>
+              )}
+              <Text
                 style={{
-                  flexDirection: 'row',
-                  alignItems: 'flex-end',
-                  justifyContent: 'center',
-                  gap: 4,
-                  minHeight: 32,
+                  color: theme.colors.accentContrast,
+                  fontSize: 15,
+                  fontWeight: '700',
                 }}
               >
-                {visualizerBarHeights.map((height, index) => (
-                  <Animated.View
-                    key={`talk-bar-${index}`}
-                    style={{
-                      width: 6,
-                      height,
-                      borderRadius: 999,
-                      backgroundColor: 'rgba(255,255,255,0.92)',
-                      opacity: visualizerBarOpacity,
-                    }}
-                  />
-                ))}
-              </View>
-              <Text style={{ color: theme.colors.accentContrast, fontSize: 15, fontWeight: '700' }}>
                 {talkButtonLabel}
               </Text>
             </Pressable>
+            {assistantReplyInFlight || assistantWaiting ? (
+              <Animated.View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  top: 12,
+                  alignSelf: 'center',
+                  width: 28,
+                  height: 28,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transform: [{ rotate: talkOrbitRotation }],
+                }}
+              >
+                <View
+                  style={{
+                    position: 'absolute',
+                    width: 18,
+                    height: 18,
+                    borderRadius: 999,
+                    borderWidth: 5,
+                    borderColor: 'rgb(0 0 0)',
+                  }}
+                />
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: -1,
+                    width: 5,
+                    height: 5,
+                    borderRadius: 999,
+                    backgroundColor: '#000000',
+                  }}
+                />
+              </Animated.View>
+            ) : null}
           </Animated.View>
 
           <Animated.View
-            pointerEvents={talkHoldActive || assistantWaiting ? 'none' : 'auto'}
-            style={{ flex: typeButtonFlex, minHeight: 64, opacity: typeButtonOpacity }}
+            pointerEvents={
+              talkHoldActive || assistantReplyInFlight ? 'none' : 'auto'
+            }
+            style={{
+              flex: typeButtonFlex,
+              minHeight: 64,
+              opacity: typeButtonOpacity,
+            }}
           >
-            {talkHoldActive || assistantWaiting ? (
+            {talkHoldActive || assistantReplyInFlight ? (
               <View style={{ flex: 1 }} />
             ) : (
               <Pressable
@@ -1077,14 +1250,22 @@ export default function AiAssistanceRoute() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 4,
-                  backgroundColor: pressed ? theme.colors.neutralBorder : theme.colors.neutralSoft,
-                borderWidth: 1,
-                borderColor: theme.colors.neutralBorder,
-                boxShadow: '0 16px 28px rgba(15, 23, 42, 0.16)',
-              })}
-            >
+                  backgroundColor: pressed
+                    ? theme.colors.neutralBorder
+                    : theme.colors.neutralSoft,
+                  borderWidth: 1,
+                  borderColor: theme.colors.neutralBorder,
+                  boxShadow: '0 16px 28px rgba(15, 23, 42, 0.16)',
+                })}
+              >
                 <Text style={{ fontSize: 20 }}>⌨️</Text>
-                <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '700' }}>
+                <Text
+                  style={{
+                    color: theme.colors.text,
+                    fontSize: 15,
+                    fontWeight: '700',
+                  }}
+                >
                   Type
                 </Text>
               </Pressable>
@@ -1126,7 +1307,7 @@ export default function AiAssistanceRoute() {
               onChangeText={setComposerText}
               placeholder="Type to Loki..."
               placeholderTextColor={theme.colors.inputPlaceholder}
-              editable={!composerBusy && !assistantWaiting}
+              editable={!composerBusy && !assistantReplyInFlight}
               multiline
               style={{
                 flex: 1,
@@ -1145,7 +1326,9 @@ export default function AiAssistanceRoute() {
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={typingMode ? 'Close typing mode' : 'Restore full Loki view'}
+              accessibilityLabel={
+                typingMode ? 'Close typing mode' : 'Restore full Loki view'
+              }
               onPress={() => {
                 setTypingMode(false);
                 setVisualizerCollapsed(false);
@@ -1156,17 +1339,31 @@ export default function AiAssistanceRoute() {
                 borderRadius: 999,
                 alignItems: 'center',
                 justifyContent: 'center',
-                backgroundColor: pressed ? theme.colors.cardMuted : theme.colors.neutralSoft,
+                backgroundColor: pressed
+                  ? theme.colors.cardMuted
+                  : theme.colors.neutralSoft,
                 borderWidth: 1,
                 borderColor: theme.colors.neutralBorder,
               })}
             >
-              <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '700' }}>×</Text>
+              <Text
+                style={{
+                  color: theme.colors.text,
+                  fontSize: 20,
+                  fontWeight: '700',
+                }}
+              >
+                ×
+              </Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Send message to Loki"
-              disabled={composerBusy || assistantWaiting || composerText.trim().length === 0}
+              disabled={
+                composerBusy ||
+                assistantReplyInFlight ||
+                composerText.trim().length === 0
+              }
               onPress={() => {
                 void handleSendText();
               }}
@@ -1178,7 +1375,9 @@ export default function AiAssistanceRoute() {
                 justifyContent: 'center',
                 paddingHorizontal: 16,
                 backgroundColor:
-                  composerBusy || assistantWaiting || composerText.trim().length === 0
+                  composerBusy ||
+                  assistantReplyInFlight ||
+                  composerText.trim().length === 0
                     ? theme.colors.neutralBorder
                     : pressed
                       ? theme.colors.accentMuted
@@ -1188,7 +1387,9 @@ export default function AiAssistanceRoute() {
               <Text
                 style={{
                   color:
-                    composerBusy || assistantWaiting || composerText.trim().length === 0
+                    composerBusy ||
+                    assistantReplyInFlight ||
+                    composerText.trim().length === 0
                       ? theme.colors.textMuted
                       : theme.colors.accentContrast,
                   fontSize: 15,
@@ -1488,6 +1689,7 @@ function inferAudioMimeType(recordingUri: string) {
 
   return 'audio/mp4';
 }
+
 
 function BoxPlusIcon({ color }: { color: string }) {
   return (

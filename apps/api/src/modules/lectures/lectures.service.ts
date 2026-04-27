@@ -1,7 +1,18 @@
 import { getDb, getSupabaseAdminClient } from '@lectrai/db';
+import ffmpegPath from 'ffmpeg-static';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { HttpError } from '../../lib/http-error.js';
 import { transcribeLectureAudio, type TranscriptionSegment } from './audio-transcription.service.js';
-import { persistProcessedTranscriptWithChunks } from './transcript-embeddings.service.js';
+import { mergeChunkTranscriptions } from './transcript-merge.service.js';
+import {
+  persistProcessedTranscriptWithChunks,
+  persistTranscriptChunksForProcessedTranscript,
+  upsertProcessedTranscript,
+} from './transcript-embeddings.service.js';
 import {
   processTranscriptSpeakers,
   type ProcessedTranscriptPayload,
@@ -12,6 +23,7 @@ const AUDIO_BUCKET_NAME = 'lecture-audio';
 const TRANSCRIPTION_PROVIDER_NAME = 'openai';
 const TRANSCRIPTION_MODEL_NAME = process.env.OPENAI_TRANSCRIPTION_MODEL ?? 'gpt-4o-transcribe-diarize';
 const TRANSCRIPTION_LOG_PREFIX = '[ transcription ]';
+const execFileAsync = promisify(execFile);
 
 export type LectureRecordingInput = {
   lectureId: string;
@@ -24,6 +36,47 @@ export type LectureRecordingInput = {
   mimeType: string;
   fileSizeBytes: number;
   audioBase64: string;
+};
+
+export type LectureChunkUploadInput = {
+  lectureId: string;
+  audioFileId: string;
+  courseId: string;
+  title: string;
+  recordedAt: string;
+  durationSeconds: number;
+  expectedChunkCount: number;
+  chunkIndex: number;
+  chunkDurationSeconds: number | null;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  audioBase64: string;
+};
+
+export type LectureChunkUploadResult = {
+  lecture: {
+    id: string;
+    status: string;
+    expectedChunkCount: number | null;
+  };
+  audioFile: {
+    id: string;
+    bucketName: string;
+    uploadStatus: string;
+  };
+  chunk: {
+    id: string;
+    chunkIndex: number;
+    storagePath: string;
+    status: string;
+  };
+  processingJob: {
+    id: string;
+    jobType: string;
+    status: string;
+  };
+  transcript: LectureTranscript | null;
 };
 
 export type LectureRecordingListItem = {
@@ -107,6 +160,26 @@ export function parseLectureRecordingInput(payload: unknown): LectureRecordingIn
     title: readRequiredString(record.title, 'title'),
     recordedAt: readIsoDate(record.recordedAt, 'recordedAt'),
     durationSeconds: readPositiveInteger(record.durationSeconds, 'durationSeconds'),
+    originalFilename: readRequiredString(record.originalFilename, 'originalFilename'),
+    mimeType: readRequiredString(record.mimeType, 'mimeType'),
+    fileSizeBytes: readPositiveInteger(record.fileSizeBytes, 'fileSizeBytes'),
+    audioBase64: readRequiredString(record.audioBase64, 'audioBase64'),
+  };
+}
+
+export function parseLectureChunkUploadInput(lectureId: string, payload: unknown): LectureChunkUploadInput {
+  const record = readObject(payload);
+
+  return {
+    lectureId,
+    audioFileId: readUuid(record.audioFileId, 'audioFileId'),
+    courseId: readUuid(record.courseId, 'courseId'),
+    title: readRequiredString(record.title, 'title'),
+    recordedAt: readIsoDate(record.recordedAt, 'recordedAt'),
+    durationSeconds: readPositiveInteger(record.durationSeconds, 'durationSeconds'),
+    expectedChunkCount: readStrictPositiveInteger(record.expectedChunkCount, 'expectedChunkCount'),
+    chunkIndex: readNonNegativeInteger(record.chunkIndex, 'chunkIndex'),
+    chunkDurationSeconds: readOptionalNonNegativeNumber(record.chunkDurationSeconds, 'chunkDurationSeconds'),
     originalFilename: readRequiredString(record.originalFilename, 'originalFilename'),
     mimeType: readRequiredString(record.mimeType, 'mimeType'),
     fileSizeBytes: readPositiveInteger(record.fileSizeBytes, 'fileSizeBytes'),
@@ -283,7 +356,129 @@ export async function createLectureRecordingForUser(userId: string, input: Lectu
   };
 }
 
+export async function createLectureChunkForUser(
+  userId: string,
+  lectureId: string,
+  input: LectureChunkUploadInput
+): Promise<LectureChunkUploadResult> {
+  await assertUserCanManageCourse(userId, input.courseId);
+  await upsertChunkBackedLectureMetadata(userId, lectureId, input);
+
+  const storagePath = buildChunkObjectPath(
+    userId,
+    input.courseId,
+    lectureId,
+    input.chunkIndex,
+    input.originalFilename
+  );
+  const audioBytes = Buffer.from(input.audioBase64, 'base64');
+  const supabase = getSupabaseAdminClient();
+  const uploadResult = await supabase.storage.from(AUDIO_BUCKET_NAME).upload(storagePath, audioBytes, {
+    contentType: input.mimeType,
+    upsert: true,
+  });
+
+  if (uploadResult.error) {
+    throw new HttpError(502, 'Failed to store lecture audio chunk.', uploadResult.error.message);
+  }
+
+  const chunk = await upsertLectureAudioChunk({
+    lectureId,
+    chunkIndex: input.chunkIndex,
+    storagePath,
+    durationSeconds: input.chunkDurationSeconds,
+  });
+
+  await deleteChunkTranscriptionByChunkId(chunk.id);
+
+  const processingJob = await createLectureProcessingJob({
+    lectureId,
+    userId,
+    jobType: 'chunk_transcription',
+    inputPayload: {
+      chunkId: chunk.id,
+      chunkIndex: input.chunkIndex,
+      storagePath,
+      bucketName: AUDIO_BUCKET_NAME,
+    },
+  });
+
+  const transcript = await processLectureChunkTranscriptionJob({
+    lectureId,
+    userId,
+    audioFileId: input.audioFileId,
+    chunkId: chunk.id,
+    processingJobId: processingJob.id,
+  });
+  const lectureStatus = await getLectureStatus(lectureId);
+
+  return {
+    lecture: {
+      id: lectureId,
+      status: lectureStatus,
+      expectedChunkCount: input.expectedChunkCount,
+    },
+    audioFile: {
+      id: input.audioFileId,
+      bucketName: AUDIO_BUCKET_NAME,
+      uploadStatus: 'uploaded',
+    },
+    chunk: {
+      id: chunk.id,
+      chunkIndex: input.chunkIndex,
+      storagePath,
+      status: 'done',
+    },
+    processingJob: {
+      id: processingJob.id,
+      jobType: 'chunk_transcription',
+      status: 'completed',
+    },
+    transcript,
+  };
+}
+
 export async function processLectureTranscriptionForUser(userId: string, lectureId: string) {
+  const chunkStats = await getLectureChunkStatus(lectureId);
+
+  if (chunkStats.totalChunks > 0) {
+    const db = getDb();
+    const lectureRows = await db<{ course_id: string }[]>`
+      select course_id
+      from public.lectures
+      where id = ${lectureId}::uuid
+      limit 1
+    `;
+    const lecture = lectureRows[0];
+
+    if (!lecture) {
+      throw new HttpError(404, 'Lecture not found.');
+    }
+
+    await assertUserCanViewCourse(userId, lecture.course_id);
+
+    if (!chunkStats.expectedChunkCount || chunkStats.doneChunks < chunkStats.expectedChunkCount) {
+      throw new HttpError(409, 'Lecture chunks are still uploading or transcribing.');
+    }
+
+    const transcript = await runLectureMergeProcessingAndEmbeddingPipeline({
+      lectureId,
+      userId,
+    });
+
+    return {
+      lecture: {
+        id: lectureId,
+        status: transcript ? 'ready' : await getLectureStatus(lectureId),
+      },
+      transcript: transcript ?? (await getProcessedTranscriptForLecture(lectureId)),
+    };
+  }
+
+  return processSingleFileLectureTranscriptionForUser(userId, lectureId);
+}
+
+async function processSingleFileLectureTranscriptionForUser(userId: string, lectureId: string) {
   logTranscriptionStep('Starting transcription processing.', { lectureId, userId });
 
   const db = getDb();
@@ -579,6 +774,746 @@ export async function processLectureTranscriptionForUser(userId: string, lecture
   }
 }
 
+async function upsertChunkBackedLectureMetadata(
+  userId: string,
+  lectureId: string,
+  input: LectureChunkUploadInput
+) {
+  const db = getDb();
+
+  await db`
+    insert into public.lectures (
+      id,
+      course_id,
+      created_by_user_id,
+      title,
+      source_type,
+      status,
+      duration_seconds,
+      language_code,
+      recorded_at,
+      expected_chunk_count
+    ) values (
+      ${lectureId}::uuid,
+      ${input.courseId}::uuid,
+      ${userId}::uuid,
+      ${input.title},
+      'recorded',
+      'processing',
+      ${input.durationSeconds},
+      'en',
+      ${input.recordedAt}::timestamptz,
+      ${input.expectedChunkCount}
+    )
+    on conflict (id) do update
+    set
+      course_id = excluded.course_id,
+      created_by_user_id = excluded.created_by_user_id,
+      title = excluded.title,
+      source_type = excluded.source_type,
+      status = 'processing',
+      duration_seconds = excluded.duration_seconds,
+      language_code = excluded.language_code,
+      recorded_at = excluded.recorded_at,
+      expected_chunk_count = excluded.expected_chunk_count
+  `;
+
+  await db`
+    insert into public.audio_files (
+      id,
+      lecture_id,
+      uploaded_by_user_id,
+      storage_provider,
+      bucket_name,
+      original_filename,
+      mime_type,
+      duration_seconds,
+      is_primary,
+      upload_status,
+      uploaded_at
+    ) values (
+      ${input.audioFileId}::uuid,
+      ${lectureId}::uuid,
+      ${userId}::uuid,
+      'gcs',
+      ${AUDIO_BUCKET_NAME},
+      ${input.originalFilename},
+      ${input.mimeType},
+      ${input.durationSeconds},
+      true,
+      'uploaded',
+      timezone('utc', now())
+    )
+    on conflict (id) do update
+    set
+      lecture_id = excluded.lecture_id,
+      uploaded_by_user_id = excluded.uploaded_by_user_id,
+      storage_provider = excluded.storage_provider,
+      bucket_name = excluded.bucket_name,
+      original_filename = excluded.original_filename,
+      mime_type = excluded.mime_type,
+      duration_seconds = excluded.duration_seconds,
+      is_primary = excluded.is_primary,
+      upload_status = excluded.upload_status,
+      uploaded_at = excluded.uploaded_at
+  `;
+}
+
+async function upsertLectureAudioChunk(input: {
+  lectureId: string;
+  chunkIndex: number;
+  storagePath: string;
+  durationSeconds: number | null;
+}) {
+  const db = getDb();
+  const rows = await db<{ id: string; status: string }[]>`
+    insert into public.audio_chunks (
+      lecture_id,
+      chunk_index,
+      storage_path,
+      duration_seconds,
+      status
+    ) values (
+      ${input.lectureId}::uuid,
+      ${input.chunkIndex},
+      ${input.storagePath},
+      ${input.durationSeconds},
+      'uploaded'
+    )
+    on conflict (lecture_id, chunk_index) do update
+    set
+      storage_path = excluded.storage_path,
+      duration_seconds = excluded.duration_seconds,
+      status = 'uploaded'
+    returning id::text as id, status::text as status
+  `;
+
+  const chunk = rows[0];
+
+  if (!chunk) {
+    throw new HttpError(500, 'Failed to save lecture audio chunk metadata.');
+  }
+
+  return chunk;
+}
+
+async function deleteChunkTranscriptionByChunkId(chunkId: string) {
+  const db = getDb();
+
+  await db`
+    delete from public.chunk_transcriptions
+    where chunk_id = ${chunkId}::uuid
+  `;
+}
+
+async function createLectureProcessingJob(input: {
+  lectureId: string;
+  userId: string;
+  jobType: 'chunk_transcription' | 'merge' | 'processing' | 'embeddings';
+  inputPayload: Record<string, unknown>;
+}) {
+  const db = getDb();
+  const rows = await db<{ id: string; status: string }[]>`
+    insert into public.processing_jobs (
+      lecture_id,
+      triggered_by_user_id,
+      job_type,
+      provider_name,
+      model_name,
+      status,
+      input_payload
+    ) values (
+      ${input.lectureId}::uuid,
+      ${input.userId}::uuid,
+      ${input.jobType},
+      ${TRANSCRIPTION_PROVIDER_NAME},
+      ${TRANSCRIPTION_MODEL_NAME},
+      'queued',
+      ${JSON.stringify(input.inputPayload)}::jsonb
+    )
+    returning id::text as id, status::text as status
+  `;
+
+  const job = rows[0];
+
+  if (!job) {
+    throw new HttpError(500, `Failed to create ${input.jobType} job.`);
+  }
+
+  return job;
+}
+
+async function markLectureProcessingJobRunning(jobId: string) {
+  const db = getDb();
+
+  await db`
+    update public.processing_jobs
+    set
+      status = 'running',
+      started_at = coalesce(started_at, timezone('utc', now())),
+      error_message = null
+    where id = ${jobId}::uuid
+  `;
+}
+
+async function markLectureProcessingJobCompleted(
+  jobId: string,
+  outputPayload: Record<string, unknown>
+) {
+  const db = getDb();
+
+  await db`
+    update public.processing_jobs
+    set
+      status = 'completed',
+      output_payload = ${JSON.stringify(outputPayload)}::jsonb,
+      completed_at = timezone('utc', now()),
+      error_message = null
+    where id = ${jobId}::uuid
+  `;
+}
+
+async function markLectureProcessingJobFailed(jobId: string, errorMessage: string) {
+  const db = getDb();
+
+  await db`
+    update public.processing_jobs
+    set
+      status = 'failed',
+      error_message = ${errorMessage},
+      completed_at = timezone('utc', now())
+    where id = ${jobId}::uuid
+  `;
+}
+
+async function processLectureChunkTranscriptionJob(input: {
+  lectureId: string;
+  userId: string;
+  audioFileId: string | null;
+  chunkId: string;
+  processingJobId: string;
+}) {
+  const db = getDb();
+  const chunkRows = await db<
+    {
+      id: string;
+      chunk_index: number;
+      storage_path: string;
+      duration_seconds: number | null;
+    }[]
+  >`
+    select
+      id::text as id,
+      chunk_index,
+      storage_path,
+      duration_seconds
+    from public.audio_chunks
+    where id = ${input.chunkId}::uuid
+      and lecture_id = ${input.lectureId}::uuid
+    limit 1
+  `;
+
+  const chunk = chunkRows[0];
+
+  if (!chunk) {
+    throw new HttpError(404, 'Lecture chunk not found.');
+  }
+
+  await markLectureProcessingJobRunning(input.processingJobId);
+
+  await db`
+    update public.audio_chunks
+    set status = 'transcribing'
+    where id = ${input.chunkId}::uuid
+  `;
+
+  try {
+    const audio = await downloadLectureAudio(AUDIO_BUCKET_NAME, chunk.storage_path);
+    const transcription = await transcribeLectureAudio({
+      audioBytes: audio,
+      mimeType: inferChunkMimeType(chunk.storage_path),
+      filename: chunk.storage_path.split('/').pop() ?? `chunk-${chunk.chunk_index}.m4a`,
+    });
+
+    await db`
+      insert into public.chunk_transcriptions (
+        lecture_id,
+        chunk_id,
+        raw_diarized_json
+      ) values (
+        ${input.lectureId}::uuid,
+        ${input.chunkId}::uuid,
+        ${db.json(transcription.rawResponse as any)}
+      )
+      on conflict (chunk_id) do update
+      set
+        lecture_id = excluded.lecture_id,
+        raw_diarized_json = excluded.raw_diarized_json
+    `;
+
+    await db`
+      update public.audio_chunks
+      set status = 'done'
+      where id = ${input.chunkId}::uuid
+    `;
+
+    await markLectureProcessingJobCompleted(input.processingJobId, {
+      chunkId: input.chunkId,
+      chunkIndex: chunk.chunk_index,
+      totalSegments: transcription.totalSegments,
+      totalTokensEstimate: transcription.totalTokensEstimate,
+      durationSeconds: chunk.duration_seconds,
+    });
+
+    return maybeRunLectureMergeProcessingAndEmbeddingPipeline({
+      lectureId: input.lectureId,
+      userId: input.userId,
+      audioFileId: input.audioFileId,
+    });
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : 'Lecture audio chunk transcription failed.';
+
+    await db`
+      update public.audio_chunks
+      set status = 'failed'
+      where id = ${input.chunkId}::uuid
+    `;
+    await markLectureProcessingJobFailed(input.processingJobId, errorMessage);
+    await markLectureFailed(input.lectureId);
+    throw error;
+  }
+}
+
+async function maybeRunLectureMergeProcessingAndEmbeddingPipeline(input: {
+  lectureId: string;
+  userId: string;
+  audioFileId: string | null;
+}) {
+  const chunkStatus = await getLectureChunkStatus(input.lectureId);
+
+  if (
+    !chunkStatus.expectedChunkCount ||
+    chunkStatus.totalChunks < chunkStatus.expectedChunkCount ||
+    chunkStatus.doneChunks < chunkStatus.expectedChunkCount ||
+    chunkStatus.failedChunks > 0
+  ) {
+    return null;
+  }
+
+  return runLectureMergeProcessingAndEmbeddingPipeline(input);
+}
+
+async function runLectureMergeProcessingAndEmbeddingPipeline(input: {
+  lectureId: string;
+  userId: string;
+  audioFileId?: string | null;
+}) {
+  const existingProcessedTranscript = await getProcessedTranscriptForLecture(input.lectureId);
+
+  if (
+    existingProcessedTranscript?.status === 'ready' &&
+    hasCanonicalSpeakerLabels(existingProcessedTranscript.fullText) &&
+    (await getLectureStatus(input.lectureId)) === 'ready'
+  ) {
+    return existingProcessedTranscript;
+  }
+
+  const lectureContext = await loadLecturePipelineContext(input.lectureId);
+
+  if (!lectureContext) {
+    throw new HttpError(404, 'Lecture not found.');
+  }
+
+  const audioFileId = input.audioFileId ?? lectureContext.audioFileId;
+
+  const mergeStage = await runLectureMergeStage({
+    lectureId: input.lectureId,
+    userId: input.userId,
+    courseId: lectureContext.courseId,
+    audioFileId,
+  });
+  const processingStage = await runLectureProcessingStage({
+    lectureId: input.lectureId,
+    userId: input.userId,
+    audioFileId,
+    rawTranscriptId: mergeStage.rawTranscript.id,
+    lectureContext,
+    transcriptText: mergeStage.mergedTranscript.fullText,
+    transcriptSegments: mergeStage.mergedTranscript.segments,
+  });
+
+  await runLectureEmbeddingsStage({
+    lectureId: input.lectureId,
+    userId: input.userId,
+    processedTranscriptId: processingStage.processedTranscriptId,
+    processedTranscript: processingStage.processedTranscript,
+  });
+
+  await updateLectureStatus(input.lectureId, 'ready');
+
+  const transcript = await getProcessedTranscriptForLecture(input.lectureId);
+
+  if (!transcript) {
+    throw new HttpError(500, 'Failed to load the processed merged lecture transcript.');
+  }
+
+  return transcript;
+}
+
+async function runLectureMergeStage(input: {
+  lectureId: string;
+  userId: string;
+  courseId: string;
+  audioFileId: string | null;
+}) {
+  const mergeJob = await createLectureProcessingJob({
+    lectureId: input.lectureId,
+    userId: input.userId,
+    jobType: 'merge',
+    inputPayload: {
+      lectureId: input.lectureId,
+    },
+  });
+
+  try {
+    await markLectureProcessingJobRunning(mergeJob.id);
+
+    const chunkRows = await loadChunkTranscriptionsForMerge(input.lectureId);
+
+    if (chunkRows.length === 0) {
+      throw new HttpError(409, 'No completed chunk transcriptions are available for merge.');
+    }
+
+    const merged = mergeChunkTranscriptions(
+      chunkRows.map((chunk) => ({
+        chunkIndex: chunk.chunkIndex,
+        durationSeconds: chunk.durationSeconds,
+        rawDiarizedJson: chunk.rawDiarizedJson,
+      }))
+    );
+
+    const mergedAudio = await createMergedLectureAudioArtifact({
+      lectureId: input.lectureId,
+      courseId: input.courseId,
+      userId: input.userId,
+      preferredAudioFileId: input.audioFileId,
+      chunks: chunkRows.map((chunk) => ({
+        chunkIndex: chunk.chunkIndex,
+        storagePath: chunk.storagePath,
+        durationSeconds: chunk.durationSeconds,
+      })),
+    });
+
+    const rawTranscript = await saveLectureTranscription({
+      lectureId: input.lectureId,
+      audioFileId: mergedAudio.audioFileId,
+      processingJobId: mergeJob.id,
+      transcription: {
+        providerName: TRANSCRIPTION_PROVIDER_NAME,
+        modelName: TRANSCRIPTION_MODEL_NAME,
+        languageCode: resolveMergedTranscriptLanguageCode(chunkRows),
+        fullText: merged.fullText,
+        confidenceAvg: merged.confidenceAvg,
+        totalSegments: merged.totalSegments,
+        totalTokensEstimate: merged.totalTokensEstimate,
+        rawResponse: {
+          mergedFromChunkCount: chunkRows.length,
+        },
+        segments: merged.segments,
+      },
+    });
+
+    await markLectureProcessingJobCompleted(mergeJob.id, {
+      chunkCount: chunkRows.length,
+      audioFileId: mergedAudio.audioFileId,
+      mergedAudioObjectPath: mergedAudio.objectPath,
+      totalSegments: merged.totalSegments,
+      totalTokensEstimate: merged.totalTokensEstimate,
+      transcriptId: rawTranscript.id,
+    });
+
+    return {
+      jobId: mergeJob.id,
+      rawTranscript,
+      mergedTranscript: merged,
+    };
+  } catch (error) {
+    await markLectureStageFailure(input.lectureId, mergeJob.id, error, 'Lecture chunk merge failed.');
+    throw error;
+  }
+}
+
+async function runLectureProcessingStage(input: {
+  lectureId: string;
+  userId: string;
+  audioFileId: string | null;
+  rawTranscriptId: string;
+  lectureContext: Awaited<ReturnType<typeof loadLecturePipelineContext>>;
+  transcriptText: string;
+  transcriptSegments: TranscriptionSegment[];
+}) {
+  const lectureContext = input.lectureContext;
+
+  if (!lectureContext) {
+    throw new HttpError(404, 'Lecture not found.');
+  }
+
+  const processingJob = await createLectureProcessingJob({
+    lectureId: input.lectureId,
+    userId: input.userId,
+    jobType: 'processing',
+    inputPayload: {
+      transcriptId: input.rawTranscriptId,
+    },
+  });
+
+  try {
+    await markLectureProcessingJobRunning(processingJob.id);
+
+    const processedTranscript = await processTranscriptSpeakers({
+      courseTitle: lectureContext.courseName,
+      courseDescription: lectureContext.courseDescription,
+      lectureTitle: lectureContext.title,
+      transcriptText: input.transcriptText,
+      segments: input.transcriptSegments.map((segment) => ({
+        segmentIndex: segment.segmentIndex,
+        startTimeSeconds: segment.startTimeSeconds,
+        endTimeSeconds: segment.endTimeSeconds,
+        rawText: segment.rawText ?? '',
+        cleanedText: segment.cleanedText ?? '',
+        speakerLabel: segment.speakerLabel ?? 'Speaker 1',
+        confidenceScore: segment.confidenceScore,
+        tokenCountEstimate: segment.tokenCountEstimate ?? 0,
+      })),
+    });
+
+    const processedTranscriptId = await upsertProcessedTranscript({
+      lectureId: input.lectureId,
+      rawTranscriptId: input.rawTranscriptId,
+      audioFileId: input.audioFileId,
+      processingJobId: processingJob.id,
+      processing: processedTranscript,
+    });
+
+    await markLectureProcessingJobCompleted(processingJob.id, {
+      processedTranscriptId,
+      speakerCount: processedTranscript.speakerMap.length,
+      paragraphCount: processedTranscript.payload.paragraphs.length,
+    });
+
+    return {
+      jobId: processingJob.id,
+      processedTranscriptId,
+      processedTranscript,
+    };
+  } catch (error) {
+    await markLectureStageFailure(input.lectureId, processingJob.id, error, 'Lecture transcript processing failed.');
+    throw error;
+  }
+}
+
+async function runLectureEmbeddingsStage(input: {
+  lectureId: string;
+  userId: string;
+  processedTranscriptId: string;
+  processedTranscript: Awaited<ReturnType<typeof processTranscriptSpeakers>>;
+}) {
+  const embeddingsJob = await createLectureProcessingJob({
+    lectureId: input.lectureId,
+    userId: input.userId,
+    jobType: 'embeddings',
+    inputPayload: {
+      processedTranscriptId: input.processedTranscriptId,
+    },
+  });
+
+  try {
+    await markLectureProcessingJobRunning(embeddingsJob.id);
+
+    const persistedTranscript = await persistTranscriptChunksForProcessedTranscript({
+      lectureId: input.lectureId,
+      processedTranscriptId: input.processedTranscriptId,
+      payload: input.processedTranscript.payload,
+    });
+
+    await markLectureProcessingJobCompleted(embeddingsJob.id, {
+      chunkCount: persistedTranscript.chunkCount,
+      embeddingModel: persistedTranscript.embeddingModel,
+      embeddingDimensions: persistedTranscript.embeddingDimensions,
+    });
+
+    return persistedTranscript;
+  } catch (error) {
+    await markLectureStageFailure(input.lectureId, embeddingsJob.id, error, 'Lecture transcript embeddings failed.');
+    throw error;
+  }
+}
+
+async function loadChunkTranscriptionsForMerge(lectureId: string) {
+  const db = getDb();
+  const rows = await db<
+    {
+      chunkIndex: number;
+      storagePath: string;
+      durationSeconds: number | null;
+      rawDiarizedJson: unknown;
+    }[]
+  >`
+    select
+      ac.chunk_index as "chunkIndex",
+      ac.storage_path as "storagePath",
+      ac.duration_seconds as "durationSeconds",
+      ct.raw_diarized_json as "rawDiarizedJson"
+    from public.audio_chunks ac
+    inner join public.chunk_transcriptions ct
+      on ct.chunk_id = ac.id
+    where ac.lecture_id = ${lectureId}::uuid
+      and ac.status = 'done'
+    order by ac.chunk_index asc
+  `;
+
+  return rows.map((row) => ({
+    ...row,
+    rawDiarizedJson: normalizeStoredRawDiarizedJson(row.rawDiarizedJson),
+  }));
+}
+
+async function loadLecturePipelineContext(lectureId: string) {
+  const db = getDb();
+  const rows = await db<
+    {
+      lectureId: string;
+      courseId: string;
+      title: string;
+      courseName: string;
+      courseDescription: string | null;
+      audioFileId: string | null;
+    }[]
+  >`
+    select
+      l.id::text as "lectureId",
+      l.course_id::text as "courseId",
+      l.title,
+      c.course_name as "courseName",
+      c.description as "courseDescription",
+      af.id::text as "audioFileId"
+    from public.lectures l
+    inner join public.courses c
+      on c.id = l.course_id
+    left join lateral (
+      select id
+      from public.audio_files
+      where lecture_id = l.id
+      order by is_primary desc, uploaded_at desc nulls last, created_at desc nulls last
+      limit 1
+    ) af on true
+    where l.id = ${lectureId}::uuid
+    limit 1
+  `;
+
+  return rows[0] ?? null;
+}
+
+async function getLectureChunkStatus(lectureId: string) {
+  const db = getDb();
+  const rows = await db<
+    {
+      expected_chunk_count: number | null;
+      total_chunks: number;
+      done_chunks: number;
+      failed_chunks: number;
+    }[]
+  >`
+    select
+      l.expected_chunk_count,
+      count(ac.id)::int as total_chunks,
+      count(*) filter (where ac.status = 'done')::int as done_chunks,
+      count(*) filter (where ac.status = 'failed')::int as failed_chunks
+    from public.lectures l
+    left join public.audio_chunks ac
+      on ac.lecture_id = l.id
+    where l.id = ${lectureId}::uuid
+    group by l.id, l.expected_chunk_count
+  `;
+
+  const row = rows[0];
+
+  return {
+    expectedChunkCount: row?.expected_chunk_count ?? null,
+    totalChunks: row?.total_chunks ?? 0,
+    doneChunks: row?.done_chunks ?? 0,
+    failedChunks: row?.failed_chunks ?? 0,
+  };
+}
+
+async function getLectureStatus(lectureId: string) {
+  const db = getDb();
+  const rows = await db<{ status: string }[]>`
+    select status
+    from public.lectures
+    where id = ${lectureId}::uuid
+    limit 1
+  `;
+
+  return rows[0]?.status ?? 'processing';
+}
+
+async function updateLectureStatus(lectureId: string, status: string) {
+  const db = getDb();
+
+  await db`
+    update public.lectures
+    set status = ${status}
+    where id = ${lectureId}::uuid
+  `;
+}
+
+async function markLectureFailed(lectureId: string) {
+  await updateLectureStatus(lectureId, 'failed');
+}
+
+async function markLectureStageFailure(
+  lectureId: string,
+  processingJobId: string,
+  error: unknown,
+  fallbackMessage: string
+) {
+  const errorMessage = error instanceof Error ? error.message : fallbackMessage;
+  await markLectureProcessingJobFailed(processingJobId, errorMessage);
+  await markLectureFailed(lectureId);
+}
+
+function resolveMergedTranscriptLanguageCode(
+  chunks: Array<{
+    rawDiarizedJson: Record<string, unknown>;
+  }>
+) {
+  for (const chunk of chunks) {
+    const language = chunk.rawDiarizedJson.language;
+
+    if (typeof language === 'string' && language.trim().length > 0) {
+      return language.trim();
+    }
+  }
+
+  return null;
+}
+
+function inferChunkMimeType(storagePath: string) {
+  const normalized = storagePath.toLowerCase();
+
+  if (normalized.endsWith('.wav')) {
+    return 'audio/wav';
+  }
+
+  if (normalized.endsWith('.caf')) {
+    return 'audio/x-caf';
+  }
+
+  return 'audio/mp4';
+}
+
 export async function getLectureAudioForUser(
   userId: string,
   lectureId: string
@@ -808,7 +1743,7 @@ async function downloadLectureAudio(bucketName: string, objectPath: string) {
 
 async function saveLectureTranscription(input: {
   lectureId: string;
-  audioFileId: string;
+  audioFileId: string | null;
   processingJobId: string;
   transcription: Awaited<ReturnType<typeof transcribeLectureAudio>>;
 }) {
@@ -829,7 +1764,7 @@ async function saveLectureTranscription(input: {
       generated_at
     ) values (
       ${input.lectureId}::uuid,
-      ${input.audioFileId}::uuid,
+      ${input.audioFileId ? db`${input.audioFileId}::uuid` : db`null`},
       ${input.processingJobId}::uuid,
       ${input.transcription.providerName},
       ${input.transcription.modelName},
@@ -1357,6 +2292,213 @@ function buildLogPreview(value: unknown) {
   return `${serialized.slice(0, 2000)}... [truncated]`;
 }
 
+function normalizeStoredRawDiarizedJson(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+async function createMergedLectureAudioArtifact(input: {
+  lectureId: string;
+  courseId: string;
+  userId: string;
+  preferredAudioFileId: string | null;
+  chunks: Array<{
+    chunkIndex: number;
+    storagePath: string;
+    durationSeconds: number | null;
+  }>;
+}) {
+  const orderedChunks = input.chunks.slice().sort((left, right) => left.chunkIndex - right.chunkIndex);
+
+  if (orderedChunks.length === 0) {
+    throw new HttpError(409, 'No lecture audio chunks are available to merge.');
+  }
+
+  const mergedAudioBytes = await concatenateLectureChunks(
+    orderedChunks.map((chunk) => ({
+      filename: chunk.storagePath.split('/').pop() ?? `chunk-${chunk.chunkIndex}.m4a`,
+      bytesPromise: downloadLectureAudio(AUDIO_BUCKET_NAME, chunk.storagePath),
+    }))
+  );
+
+  const objectPath = buildMergedAudioObjectPath(input.userId, input.courseId, input.lectureId);
+  const supabase = getSupabaseAdminClient();
+  const uploadResult = await supabase.storage.from(AUDIO_BUCKET_NAME).upload(objectPath, mergedAudioBytes, {
+    contentType: 'audio/mp4',
+    upsert: true,
+  });
+
+  if (uploadResult.error) {
+    throw new HttpError(502, 'Failed to store merged lecture audio.', uploadResult.error.message);
+  }
+
+  const audioFileId = await upsertMergedLectureAudioFile({
+    lectureId: input.lectureId,
+    userId: input.userId,
+    preferredAudioFileId: input.preferredAudioFileId,
+    bucketName: AUDIO_BUCKET_NAME,
+    objectPath,
+    originalFilename: 'lecture-recording.m4a',
+    mimeType: 'audio/mp4',
+    fileSizeBytes: mergedAudioBytes.byteLength,
+    durationSeconds: orderedChunks.reduce(
+      (totalSeconds, chunk) => totalSeconds + Math.max(0, chunk.durationSeconds ?? 0),
+      0
+    ) || null,
+  });
+
+  return {
+    audioFileId,
+    objectPath,
+  };
+}
+
+async function concatenateLectureChunks(input: Array<{ filename: string; bytesPromise: Promise<Buffer> }>) {
+  if (input.length === 1) {
+    return input[0].bytesPromise;
+  }
+
+  if (!ffmpegPath) {
+    throw new HttpError(500, 'FFmpeg is unavailable on the API server.');
+  }
+
+  const tempDirectory = await mkdtemp(join(tmpdir(), 'lectrai-audio-merge-'));
+
+  try {
+    const concatEntries: string[] = [];
+
+    for (const [index, chunk] of input.entries()) {
+      const chunkPath = join(tempDirectory, `${String(index).padStart(4, '0')}-${sanitizeFilename(chunk.filename)}`);
+      await writeFile(chunkPath, await chunk.bytesPromise);
+      concatEntries.push(`file '${escapeFfmpegConcatPath(chunkPath)}'`);
+    }
+
+    const concatListPath = join(tempDirectory, 'chunks.txt');
+    const outputPath = join(tempDirectory, 'lecture-recording.m4a');
+    await writeFile(concatListPath, `${concatEntries.join('\n')}\n`);
+
+    try {
+      await execFileAsync(ffmpegPath, [
+        '-f',
+        'concat',
+        '-safe',
+        '0',
+        '-i',
+        concatListPath,
+        '-c',
+        'copy',
+        '-movflags',
+        '+faststart',
+        '-y',
+        outputPath,
+      ]);
+    } catch (error) {
+      const stderr = error && typeof error === 'object' && 'stderr' in error ? String((error as { stderr?: unknown }).stderr ?? '') : '';
+      throw new HttpError(502, 'Failed to concatenate lecture audio chunks.', stderr || 'ffmpeg concat command failed.');
+    }
+
+    return readFile(outputPath);
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+}
+
+async function upsertMergedLectureAudioFile(input: {
+  lectureId: string;
+  userId: string;
+  preferredAudioFileId: string | null;
+  bucketName: string;
+  objectPath: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  durationSeconds: number | null;
+}) {
+  const db = getDb();
+  const audioFileId = input.preferredAudioFileId ?? crypto.randomUUID();
+  const rows = await db<{ id: string }[]>`
+    insert into public.audio_files (
+      id,
+      lecture_id,
+      uploaded_by_user_id,
+      storage_provider,
+      bucket_name,
+      object_path,
+      original_filename,
+      mime_type,
+      file_size_bytes,
+      duration_seconds,
+      is_primary,
+      upload_status,
+      uploaded_at
+    ) values (
+      ${audioFileId}::uuid,
+      ${input.lectureId}::uuid,
+      ${input.userId}::uuid,
+      'gcs',
+      ${input.bucketName},
+      ${input.objectPath},
+      ${input.originalFilename},
+      ${input.mimeType},
+      ${input.fileSizeBytes},
+      ${input.durationSeconds},
+      true,
+      'uploaded',
+      timezone('utc', now())
+    )
+    on conflict (id) do update
+    set
+      lecture_id = excluded.lecture_id,
+      uploaded_by_user_id = excluded.uploaded_by_user_id,
+      storage_provider = excluded.storage_provider,
+      bucket_name = excluded.bucket_name,
+      object_path = excluded.object_path,
+      original_filename = excluded.original_filename,
+      mime_type = excluded.mime_type,
+      file_size_bytes = excluded.file_size_bytes,
+      duration_seconds = excluded.duration_seconds,
+      is_primary = excluded.is_primary,
+      upload_status = excluded.upload_status,
+      uploaded_at = excluded.uploaded_at
+    returning id::text as id
+  `;
+
+  const row = rows[0];
+
+  if (!row?.id) {
+    throw new HttpError(500, 'Failed to save merged lecture audio metadata.');
+  }
+
+  return row.id;
+}
+
+function buildMergedAudioObjectPath(userId: string, courseId: string, lectureId: string) {
+  return `${userId}/${courseId}/${lectureId}/merged/lecture-recording.m4a`;
+}
+
+function escapeFfmpegConcatPath(path: string) {
+  return path.replace(/'/g, `'\\''`);
+}
+
+function sanitizeFilename(filename: string) {
+  return filename.replace(/[^a-zA-Z0-9._-]+/g, '-');
+}
+
 function readNullableNumber(value: number | string | null) {
   if (value == null) {
     return null;
@@ -1370,8 +2512,14 @@ function buildObjectPath(userId: string, courseId: string, lectureId: string, fi
   return `${userId}/${courseId}/${lectureId}/${Date.now()}-${sanitizeFilename(filename)}`;
 }
 
-function sanitizeFilename(filename: string) {
-  return filename.replace(/[^a-zA-Z0-9._-]+/g, '-');
+function buildChunkObjectPath(
+  userId: string,
+  courseId: string,
+  lectureId: string,
+  chunkIndex: number,
+  filename: string
+) {
+  return `${userId}/${courseId}/${lectureId}/chunks/${String(chunkIndex).padStart(4, '0')}-${sanitizeFilename(filename)}`;
 }
 
 function readObject(payload: unknown): Record<string, unknown> {
@@ -1415,6 +2563,34 @@ function readPositiveInteger(value: unknown, fieldName: string) {
 
   if (!Number.isInteger(normalized) || normalized < 0) {
     throw new HttpError(400, `${fieldName} must be a non-negative integer.`);
+  }
+
+  return normalized;
+}
+
+function readStrictPositiveInteger(value: unknown, fieldName: string) {
+  const normalized = readPositiveInteger(value, fieldName);
+
+  if (normalized <= 0) {
+    throw new HttpError(400, `${fieldName} must be greater than zero.`);
+  }
+
+  return normalized;
+}
+
+function readNonNegativeInteger(value: unknown, fieldName: string) {
+  return readPositiveInteger(value, fieldName);
+}
+
+function readOptionalNonNegativeNumber(value: unknown, fieldName: string) {
+  if (value == null) {
+    return null;
+  }
+
+  const normalized = typeof value === 'number' ? value : Number(value);
+
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    throw new HttpError(400, `${fieldName} must be a non-negative number when provided.`);
   }
 
   return normalized;

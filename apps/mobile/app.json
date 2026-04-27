@@ -2,10 +2,11 @@
   "expo": {
     "name": "LectrAI",
     "slug": "lectrai",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lectrai",
+    "jsEngine": "hermes",
     "extra": {
       "router": {
         "origin": false
@@ -15,17 +16,18 @@
       }
     },
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.sameerthapa.lectrai"
+      "bundleIdentifier": "com.sameerthapa.lectrai",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
       "package": "com.sameerthapa.lectrai"
     },
     "web": {
