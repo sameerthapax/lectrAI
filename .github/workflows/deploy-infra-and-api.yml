@@ -125,6 +125,8 @@ jobs:
       - name: Setup Terraform
         if: ${{ steps.affected.outputs.api == 'true' || steps.affected.outputs.infra == 'true' }}
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
 
       - name: Terraform init
         if: ${{ steps.affected.outputs.api == 'true' || steps.affected.outputs.infra == 'true' }}
