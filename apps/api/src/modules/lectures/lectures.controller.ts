@@ -1,8 +1,11 @@
 import type { Request, Response } from 'express';
+import { HttpError } from '../../lib/http-error.js';
 import {
+  createLectureChunkForUser,
   createLectureRecordingForUser,
   getLectureAudioForUser,
   listLectureRecordingsForUser,
+  parseLectureChunkUploadInput,
   parseLectureRecordingInput,
   processLectureTranscriptionForUser,
 } from './lectures.service.js';
@@ -11,7 +14,7 @@ function requireAuthUserId(request: Request) {
   const userId = request.authUser?.id;
 
   if (!userId) {
-    throw new Error('Authenticated user id missing from request context.');
+    throw new HttpError(401, 'Authentication required.');
   }
 
   return userId;
@@ -29,6 +32,19 @@ export async function getLectures(request: Request, response: Response) {
 export async function postLectureRecording(request: Request, response: Response) {
   const input = parseLectureRecordingInput(request.body);
   const result = await createLectureRecordingForUser(requireAuthUserId(request), input);
+  response.status(201).json(result);
+}
+
+export async function postLectureChunk(request: Request, response: Response) {
+  const lectureId = request.params.lectureId;
+
+  if (!lectureId) {
+    response.status(400).json({ error: 'lectureId is required.' });
+    return;
+  }
+
+  const input = parseLectureChunkUploadInput(lectureId, request.body);
+  const result = await createLectureChunkForUser(requireAuthUserId(request), lectureId, input);
   response.status(201).json(result);
 }
 

@@ -36,7 +36,7 @@ type OpenAiDiarizedSegment = {
   confidence?: unknown;
 };
 
-type OpenAiDiarizedResponse = {
+export type RawDiarizedTranscription = {
   text?: unknown;
   language?: unknown;
   segments?: unknown;
@@ -103,14 +103,14 @@ export async function transcribeLectureAudio(input: {
     throw new HttpError(502, 'OpenAI transcription failed.', errorDetails);
   }
 
-  const rawResponse = (await response.json()) as OpenAiDiarizedResponse;
-  const segments = normalizeSegments(rawResponse);
-  const fullText = buildSpeakerSeparatedText(segments, rawResponse.text);
+  const rawResponse = (await response.json()) as RawDiarizedTranscription;
+  const segments = normalizeTranscriptionSegments(rawResponse);
+  const fullText = buildSpeakerSeparatedTranscriptText(segments, rawResponse.text);
 
   console.log(`${TRANSCRIPTION_LOG_PREFIX} OpenAI transcription response normalized.`, {
     languageCode: typeof rawResponse.language === 'string' ? rawResponse.language : null,
     totalSegments: segments.length,
-    confidenceAvg: averageConfidence(segments),
+    confidenceAvg: calculateAverageConfidence(segments),
     rawResponsePreview: buildLogPreview(rawResponse),
     fullTextPreview: buildLogPreview(fullText),
   });
@@ -120,9 +120,9 @@ export async function transcribeLectureAudio(input: {
     modelName,
     languageCode: typeof rawResponse.language === 'string' ? rawResponse.language : null,
     fullText,
-    confidenceAvg: averageConfidence(segments),
+    confidenceAvg: calculateAverageConfidence(segments),
     totalSegments: segments.length,
-    totalTokensEstimate: estimateTokenCount(fullText),
+    totalTokensEstimate: estimateTranscriptTokenCount(fullText),
     rawResponse,
     segments,
   };
@@ -136,7 +136,7 @@ async function readOpenAiErrorDetails(response: Response) {
   }
 }
 
-function normalizeSegments(response: OpenAiDiarizedResponse): TranscriptionSegment[] {
+export function normalizeTranscriptionSegments(response: RawDiarizedTranscription): TranscriptionSegment[] {
   const rawSegments = Array.isArray(response.segments) ? response.segments : [];
   const segments = rawSegments
     .map((segment, index) => normalizeSegment(segment as OpenAiDiarizedSegment, index))
@@ -161,7 +161,7 @@ function normalizeSegments(response: OpenAiDiarizedResponse): TranscriptionSegme
       cleanedText: fallbackText,
       speakerLabel: 'Speaker 1',
       confidenceScore: null,
-      tokenCountEstimate: estimateTokenCount(fallbackText),
+      tokenCountEstimate: estimateTranscriptTokenCount(fallbackText),
     },
   ];
 }
@@ -178,7 +178,7 @@ function normalizeSegment(segment: OpenAiDiarizedSegment, index: number): Transc
     cleanedText,
     speakerLabel: normalizeSpeakerLabel(segment.speaker),
     confidenceScore: readNumber(segment.confidence),
-    tokenCountEstimate: estimateTokenCount(cleanedText),
+    tokenCountEstimate: estimateTranscriptTokenCount(cleanedText),
   };
 }
 
@@ -201,7 +201,10 @@ function cleanTranscriptText(text: string) {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-function buildSpeakerSeparatedText(segments: TranscriptionSegment[], fallbackText: unknown) {
+export function buildSpeakerSeparatedTranscriptText(
+  segments: TranscriptionSegment[],
+  fallbackText: unknown
+) {
   if (segments.length > 0) {
     return segments
       .map((segment) => `${segment.speakerLabel}: ${segment.cleanedText}`)
@@ -216,7 +219,7 @@ function readNumber(value: unknown) {
   return Number.isFinite(normalized) ? normalized : null;
 }
 
-function averageConfidence(segments: TranscriptionSegment[]) {
+export function calculateAverageConfidence(segments: TranscriptionSegment[]) {
   const scores = segments
     .map((segment) => segment.confidenceScore)
     .filter((score): score is number => score != null);
@@ -228,7 +231,7 @@ function averageConfidence(segments: TranscriptionSegment[]) {
   return scores.reduce((sum, score) => sum + score, 0) / scores.length;
 }
 
-function estimateTokenCount(text: string) {
+export function estimateTranscriptTokenCount(text: string) {
   if (!text.trim()) {
     return 0;
   }

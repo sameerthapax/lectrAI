@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { HttpError } from '../../lib/http-error.js';
 import {
   loginWithEmail,
   logoutAuthSession,
@@ -35,7 +36,7 @@ export async function postRefresh(request: Request, response: Response) {
 
 export async function postLogout(request: Request, response: Response) {
   if (!request.accessToken) {
-    throw new Error('Authenticated access token missing from request context.');
+    throw new HttpError(401, 'Authentication required.');
   }
 
   const input = parseLogoutInput(request.body);

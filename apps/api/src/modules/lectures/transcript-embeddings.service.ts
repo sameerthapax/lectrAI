@@ -56,7 +56,7 @@ export type TranscriptChunkSearchResult = {
 type PersistProcessedTranscriptWithChunksInput = {
   lectureId: string;
   rawTranscriptId: string;
-  audioFileId: string;
+  audioFileId: string | null;
   processingJobId: string;
   processing: {
     providerName: 'openai';
@@ -66,6 +66,8 @@ type PersistProcessedTranscriptWithChunksInput = {
     formattedText: string;
   };
 };
+
+export type PersistProcessedTranscriptInput = PersistProcessedTranscriptWithChunksInput;
 
 type TranscriptEmbeddingConfig = {
   model: string;
@@ -117,7 +119,73 @@ export async function generateEmbeddings(inputTexts: string[]): Promise<number[]
 export async function persistProcessedTranscriptWithChunks(
   input: PersistProcessedTranscriptWithChunksInput
 ): Promise<PersistedTranscriptChunkSummary> {
-  const chunkDrafts = buildTranscriptChunks(input.processing.payload);
+  const processedTranscriptId = await upsertProcessedTranscript(input);
+
+  return persistTranscriptChunksForProcessedTranscript({
+    lectureId: input.lectureId,
+    processedTranscriptId,
+    payload: input.processing.payload,
+  });
+}
+
+export async function upsertProcessedTranscript(input: PersistProcessedTranscriptInput): Promise<string> {
+  const db = getDb();
+  const transcriptRows = await db<{ id: string }[]>`
+    insert into public.processed_transcripts (
+      lecture_id,
+      source_transcript_id,
+      source_audio_file_id,
+      processing_job_id,
+      provider_name,
+      model_name,
+      speaker_map,
+      processed_payload,
+      formatted_text,
+      status,
+      generated_at
+    ) values (
+      ${input.lectureId}::uuid,
+      ${input.rawTranscriptId}::uuid,
+      ${input.audioFileId ? db`${input.audioFileId}::uuid` : db`null`},
+      ${input.processingJobId}::uuid,
+      ${input.processing.providerName},
+      ${input.processing.modelName},
+      ${JSON.stringify(input.processing.speakerMap)}::jsonb,
+      ${JSON.stringify(input.processing.payload)}::jsonb,
+      ${input.processing.formattedText},
+      'ready',
+      timezone('utc', now())
+    )
+    on conflict (lecture_id) do update
+    set
+      source_transcript_id = excluded.source_transcript_id,
+      source_audio_file_id = excluded.source_audio_file_id,
+      processing_job_id = excluded.processing_job_id,
+      provider_name = excluded.provider_name,
+      model_name = excluded.model_name,
+      speaker_map = excluded.speaker_map,
+      processed_payload = excluded.processed_payload,
+      formatted_text = excluded.formatted_text,
+      status = excluded.status,
+      generated_at = excluded.generated_at
+    returning id::text as id
+  `;
+
+  const processedTranscriptId = transcriptRows[0]?.id;
+
+  if (!processedTranscriptId) {
+    throw new HttpError(500, 'Failed to save processed lecture transcription.');
+  }
+
+  return processedTranscriptId;
+}
+
+export async function persistTranscriptChunksForProcessedTranscript(input: {
+  lectureId: string;
+  processedTranscriptId: string;
+  payload: ProcessedTranscriptPayload;
+}): Promise<PersistedTranscriptChunkSummary> {
+  const chunkDrafts = buildTranscriptChunks(input.payload);
   const embeddingConfig = readTranscriptEmbeddingConfig();
   const embeddings = chunkDrafts.length > 0 ? await generateEmbeddings(chunkDrafts.map((chunk) => chunk.chunkText)) : [];
 
@@ -133,64 +201,17 @@ export async function persistProcessedTranscriptWithChunks(
 
   const db = getDb();
 
-  return db.begin(async (transaction) => {
+  await db.begin(async (transaction) => {
     const tx = transaction as unknown as DbClient;
-    const transcriptRows = await tx<{ id: string }[]>`
-      insert into public.processed_transcripts (
-        lecture_id,
-        source_transcript_id,
-        source_audio_file_id,
-        processing_job_id,
-        provider_name,
-        model_name,
-        speaker_map,
-        processed_payload,
-        formatted_text,
-        status,
-        generated_at
-      ) values (
-        ${input.lectureId}::uuid,
-        ${input.rawTranscriptId}::uuid,
-        ${input.audioFileId}::uuid,
-        ${input.processingJobId}::uuid,
-        ${input.processing.providerName},
-        ${input.processing.modelName},
-        ${JSON.stringify(input.processing.speakerMap)}::jsonb,
-        ${JSON.stringify(input.processing.payload)}::jsonb,
-        ${input.processing.formattedText},
-        'ready',
-        timezone('utc', now())
-      )
-      on conflict (lecture_id) do update
-      set
-        source_transcript_id = excluded.source_transcript_id,
-        source_audio_file_id = excluded.source_audio_file_id,
-        processing_job_id = excluded.processing_job_id,
-        provider_name = excluded.provider_name,
-        model_name = excluded.model_name,
-        speaker_map = excluded.speaker_map,
-        processed_payload = excluded.processed_payload,
-        formatted_text = excluded.formatted_text,
-        status = excluded.status,
-        generated_at = excluded.generated_at
-      returning id::text as id
-    `;
-
-    const processedTranscriptId = transcriptRows[0]?.id;
-
-    if (!processedTranscriptId) {
-      throw new HttpError(500, 'Failed to save processed lecture transcription.');
-    }
-
-    await replaceTranscriptChunks(tx, processedTranscriptId, chunkRows);
-
-    return {
-      processedTranscriptId,
-      chunkCount: chunkRows.length,
-      embeddingModel: embeddingConfig.model,
-      embeddingDimensions: embeddingConfig.dimensions,
-    };
+    await replaceTranscriptChunks(tx, input.lectureId, input.processedTranscriptId, chunkRows);
   });
+
+  return {
+    processedTranscriptId: input.processedTranscriptId,
+    chunkCount: chunkRows.length,
+    embeddingModel: embeddingConfig.model,
+    embeddingDimensions: embeddingConfig.dimensions,
+  };
 }
 
 export async function reprocessTranscriptChunks(processedTranscriptId: string): Promise<PersistedTranscriptChunkSummary> {
@@ -225,7 +246,20 @@ export async function reprocessTranscriptChunks(processedTranscriptId: string): 
 
   await db.begin(async (transaction) => {
     const tx = transaction as unknown as DbClient;
-    await replaceTranscriptChunks(tx, processedTranscriptId, chunkRows);
+    const lectureRows = await tx<{ lecture_id: string }[]>`
+      select lecture_id::text as lecture_id
+      from public.processed_transcripts
+      where id = ${processedTranscriptId}::uuid
+      limit 1
+    `;
+
+    const lectureId = lectureRows[0]?.lecture_id;
+
+    if (!lectureId) {
+      throw new HttpError(404, 'Processed transcript lecture context not found.');
+    }
+
+    await replaceTranscriptChunks(tx, lectureId, processedTranscriptId, chunkRows);
   });
 
   console.log(`${TRANSCRIPT_EMBEDDING_LOG_PREFIX} Reprocessed transcript chunks.`, {
@@ -249,6 +283,8 @@ export async function searchTranscriptChunks(input: {
   transcriptId?: string;
   courseId?: string;
   userId?: string;
+  recordedOnOrAfter?: string;
+  recordedOnOrBefore?: string;
 }): Promise<TranscriptChunkSearchResult[]> {
   const query = input.query.trim();
 
@@ -307,6 +343,8 @@ export async function searchTranscriptChunks(input: {
       ${input.lectureId ? db`and pt.lecture_id = ${input.lectureId}::uuid` : db``}
       ${input.courseId ? db`and l.course_id = ${input.courseId}::uuid` : db``}
       ${input.userId ? db`and c.owner_user_id = ${input.userId}::uuid` : db``}
+      ${input.recordedOnOrAfter ? db`and l.recorded_at::date >= ${input.recordedOnOrAfter}::date` : db``}
+      ${input.recordedOnOrBefore ? db`and l.recorded_at::date <= ${input.recordedOnOrBefore}::date` : db``}
     order by tc.embedding operator(extensions.<=>) ${vectorLiteral}::extensions.vector
     limit ${topK}
   `;
@@ -338,6 +376,7 @@ export async function searchTranscriptChunks(input: {
 
 async function replaceTranscriptChunks(
   tx: DbClient,
+  lectureId: string,
   processedTranscriptId: string,
   chunkRows: Array<
     TranscriptChunkDraft & {
@@ -355,6 +394,7 @@ async function replaceTranscriptChunks(
   for (const chunk of chunkRows) {
     await tx`
       insert into public.transcript_chunks (
+        lecture_id,
         transcript_id,
         chunk_index,
         speaker,
@@ -363,6 +403,7 @@ async function replaceTranscriptChunks(
         embedding,
         embedding_model
       ) values (
+        ${lectureId}::uuid,
         ${processedTranscriptId}::uuid,
         ${chunk.chunkIndex},
         ${chunk.speaker},

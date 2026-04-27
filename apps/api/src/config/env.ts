@@ -10,6 +10,8 @@ export const env = {
   openAiTranscriptEmbeddingBatchSize: process.env.OPENAI_TRANSCRIPT_EMBEDDING_BATCH_SIZE
     ? Number(process.env.OPENAI_TRANSCRIPT_EMBEDDING_BATCH_SIZE)
     : 64,
+  mem0OssVectorDbPath: process.env.MEM0_OSS_VECTOR_DB_PATH ?? '.data/mem0-loki.sqlite',
+  mem0OssHistoryDbPath: process.env.MEM0_OSS_HISTORY_DB_PATH ?? '.data/mem0-history.db',
   openAiChatModel: process.env.OPENAI_CHAT_MODEL ?? 'gpt-4.1-mini',
   elevenLabsTtsModel: process.env.ELEVENLABS_TTS_MODEL ?? 'eleven_flash_v2_5',
   elevenLabsTtsVoiceId: process.env.ELEVENLABS_TTS_VOICE_ID ?? 'JBFqnCBsd6RMkjVDRZzb',

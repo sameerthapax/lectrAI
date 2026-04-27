@@ -1,14 +1,17 @@
 import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { getDocumentAsync, type DocumentPickerAsset } from 'expo-document-picker';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Animated,
   Alert,
+  PanResponder,
   Pressable,
   ScrollView,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAuth } from '../../../providers/auth-provider';
 import { useAppTheme, useSettings } from '../../../providers/settings-provider';
 import {
@@ -33,10 +36,8 @@ type UploadRelation = 'Lecture file' | 'Module file' | 'Chapter file' | 'Notes' 
 type MockUpload = {
   id: string;
   title: string;
-  relation: UploadRelation;
   addedAtLabel: string;
-  description: string;
-  sourceLabel: string;
+  fileTypeLabel: string;
 };
 
 const FILE_RELATIONS: UploadRelation[] = [
@@ -65,6 +66,9 @@ export default function CourseDetailRoute() {
   const [storedLectures, setStoredLectures] = useState<LocalLectureRecordingRecord[]>([]);
   const [selectedUploadAsset, setSelectedUploadAsset] = useState<DocumentPickerAsset | null>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [openLectureActionId, setOpenLectureActionId] = useState<string | null>(null);
+  const [uploadDeleteMode, setUploadDeleteMode] = useState(false);
+  const suppressNextOutsideTapRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,6 +112,8 @@ export default function CourseDetailRoute() {
     setDescription('');
     setLinkValue('');
     setSelectedUploadAsset(null);
+    setOpenLectureActionId(null);
+    setUploadDeleteMode(false);
   }, [course]);
 
   useFocusEffect(
@@ -255,6 +261,27 @@ export default function CourseDetailRoute() {
 
       <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
         <ScrollView
+          onTouchStart={() => {
+            if (suppressNextOutsideTapRef.current) {
+              suppressNextOutsideTapRef.current = false;
+              return;
+            }
+            if (openLectureActionId) {
+              setOpenLectureActionId(null);
+            }
+            if (uploadDeleteMode) {
+              setUploadDeleteMode(false);
+            }
+          }}
+          onScrollBeginDrag={() => {
+            if (openLectureActionId) {
+              setOpenLectureActionId(null);
+            }
+            if (uploadDeleteMode) {
+              setUploadDeleteMode(false);
+            }
+          }}
+          scrollEventThrottle={16}
           contentInsetAdjustmentBehavior="automatic"
           style={{ backgroundColor: theme.colors.screen }}
           contentContainerStyle={{
@@ -274,22 +301,7 @@ export default function CourseDetailRoute() {
               paddingTop: 4,
             }}
           >
-            <Pressable
-              onPress={() => router.back()}
-              style={({ pressed }) => ({
-                width: 40,
-                height: 40,
-                borderRadius: 999,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: theme.colors.overlay,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                opacity: pressed ? 0.86 : 1,
-              })}
-            >
-              <Text style={{ color: theme.colors.text, fontSize: 18, fontWeight: '900' }}>←</Text>
-            </Pressable>
+            <NativeBackButton theme={theme} onPress={() => router.back()} />
 
             <Text
               numberOfLines={1}
@@ -301,7 +313,7 @@ export default function CourseDetailRoute() {
                 fontWeight: '900',
               }}
             >
-              {course?.courseName ?? 'Course'}
+              Course
             </Text>
           </View>
 
@@ -354,7 +366,7 @@ export default function CourseDetailRoute() {
                     {course.courseName}
                   </Text>
                   <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20 }}>
-                    {courseMeta || 'Mock course space for uploads and lecture review.'}
+                    {courseMeta || 'Course materials and stored lectures.'}
                   </Text>
                 </View>
 
@@ -370,21 +382,46 @@ export default function CourseDetailRoute() {
                 title="Upload Files"
                 subtitle="Recent course materials stay visible here until you add a new one"
                 headerAction={
-                  <Pressable
-                    onPress={() => setShowUploadForm(true)}
-                    style={({ pressed }) => ({
-                      minHeight: 36,
-                      borderRadius: 999,
-                      paddingHorizontal: 14,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
-                    })}
-                  >
-                    <Text style={{ color: theme.colors.accentContrast, fontSize: 13, fontWeight: '800' }}>
-                      Add
-                    </Text>
-                  </Pressable>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    {uploadDeleteMode ? (
+                      <CircleIconButton
+                        label="−"
+                        variant="neutral"
+                        onPress={() => {
+                          suppressNextOutsideTapRef.current = true;
+                          setUploadDeleteMode(false);
+                        }}
+                      />
+                    ) : (
+                      <>
+                        <CircleIconButton
+                          label="×"
+                          onPress={() => {
+                            suppressNextOutsideTapRef.current = true;
+                            setUploadDeleteMode(true);
+                          }}
+                        />
+                        <Pressable
+                          onPress={() => setShowUploadForm(true)}
+                          onPressIn={() => {
+                            suppressNextOutsideTapRef.current = true;
+                          }}
+                          style={({ pressed }) => ({
+                            minHeight: 36,
+                            borderRadius: 999,
+                            paddingHorizontal: 14,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
+                          })}
+                        >
+                          <Text style={{ color: theme.colors.accentContrast, fontSize: 13, fontWeight: '800' }}>
+                            Add
+                          </Text>
+                        </Pressable>
+                      </>
+                    )}
+                  </View>
                 }
               >
                 {!showUploadForm ? (
@@ -397,8 +434,6 @@ export default function CourseDetailRoute() {
                           padding: 16,
                           gap: 6,
                           backgroundColor: theme.colors.overlay,
-                          borderWidth: 1,
-                          borderColor: theme.colors.border,
                         }}
                       >
                         <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: '800' }}>
@@ -422,55 +457,72 @@ export default function CourseDetailRoute() {
                               },
                             })
                           }
+                          onPressIn={() => {
+                            suppressNextOutsideTapRef.current = true;
+                          }}
                           style={({ pressed }) => ({
                             width: '48%',
-                            minHeight: uploadPanelExpanded ? 156 : 122,
+                            height: uploadPanelExpanded ? 140 : 122,
                             borderRadius: 18,
                             borderCurve: 'continuous',
                             padding: 14,
-                            gap: 6,
-                            backgroundColor: pressed ? theme.colors.card : theme.colors.overlay,
-                            borderWidth: 1,
-                            borderColor: theme.colors.border,
+                            gap: 8,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: pressed ? theme.colors.card : '#242a33',
                           })}
                         >
-                          <View
+                          {uploadDeleteMode ? (
+                            <View
+                              pointerEvents="none"
+                              style={{
+                                position: 'absolute',
+                                top: 10,
+                                right: 10,
+                                width: 24,
+                                height: 24,
+                                borderRadius: 999,
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                backgroundColor: '#dc2626',
+                              }}
+                            >
+                              <Text style={{ color: '#ffffff', fontSize: 14, lineHeight: 14, fontWeight: '900' }}>
+                                ×
+                              </Text>
+                            </View>
+                          ) : null}
+
+                          <FileTypeBadge label={upload.fileTypeLabel} theme={theme} />
+
+                          <Text
+                            numberOfLines={2}
+                            ellipsizeMode="tail"
                             style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              gap: 12,
+                              color: theme.colors.text,
+                              fontSize: 13.5,
+                              lineHeight: 18,
+                              fontWeight: '800',
+                              textAlign: 'center',
                             }}
                           >
-                            <Text
-                              numberOfLines={1}
-                              style={{
-                                flex: 1,
-                                color: theme.colors.text,
-                                fontSize: 15,
-                                fontWeight: '800',
-                              }}
-                            >
-                              {upload.title}
-                            </Text>
-                            <Text
-                              style={{
-                                color: theme.colors.textSubtle,
-                                fontSize: 12,
-                                fontWeight: '700',
-                              }}
-                            >
-                              {upload.addedAtLabel}
-                            </Text>
-                          </View>
+                            {upload.title}
+                          </Text>
 
-                          <Text style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
-                            {upload.relation} • {upload.sourceLabel}
+                          <Text
+                            style={{
+                              color: theme.colors.textSubtle,
+                              fontSize: 11.5,
+                              fontWeight: '700',
+                              textAlign: 'center',
+                            }}
+                          >
+                            {upload.addedAtLabel}
                           </Text>
 
                           {uploadPanelExpanded ? (
-                            <Text style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
-                              {upload.description}
+                            <Text style={{ color: theme.colors.textMuted, fontSize: 12, lineHeight: 18 }}>
+                              Added {upload.addedAtLabel}
                             </Text>
                           ) : null}
                         </Pressable>
@@ -488,8 +540,6 @@ export default function CourseDetailRoute() {
                           alignItems: 'center',
                           justifyContent: 'center',
                           backgroundColor: pressed ? theme.colors.overlay : theme.colors.card,
-                          borderWidth: 1,
-                          borderColor: theme.colors.border,
                         })}
                       >
                         <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '800' }}>
@@ -538,7 +588,7 @@ export default function CourseDetailRoute() {
                             borderRadius: 18,
                             borderCurve: 'continuous',
                             borderWidth: 1,
-                            borderColor: theme.colors.border,
+                            borderColor: 'transparent',
                             borderStyle: 'dashed',
                             padding: 16,
                             gap: 8,
@@ -598,8 +648,6 @@ export default function CourseDetailRoute() {
                         padding: 14,
                         gap: 6,
                         backgroundColor: theme.colors.overlay,
-                        borderWidth: 1,
-                        borderColor: theme.colors.border,
                       }}
                     >
                       <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>
@@ -627,8 +675,6 @@ export default function CourseDetailRoute() {
                           alignItems: 'center',
                           justifyContent: 'center',
                           backgroundColor: pressed ? theme.colors.neutralBorder : theme.colors.overlay,
-                          borderWidth: 1,
-                          borderColor: theme.colors.border,
                         })}
                       >
                         <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>
@@ -672,8 +718,6 @@ export default function CourseDetailRoute() {
                         padding: 18,
                         gap: 6,
                         backgroundColor: theme.colors.overlay,
-                        borderWidth: 1,
-                        borderColor: theme.colors.border,
                       }}
                     >
                       <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: '800' }}>
@@ -686,55 +730,58 @@ export default function CourseDetailRoute() {
                   ) : null}
 
                   {visibleLectures.map((lecture) => (
-                    <Pressable
+                    <SwipeRevealCard
                       key={lecture.lectureId}
-                      onPress={() =>
-                        router.push({
-                          pathname: '/recording-results-page',
-                          params: {
-                            lectureId: lecture.lectureId,
-                          },
-                        })
-                      }
-                      style={({ pressed }) => ({
-                        borderRadius: 22,
-                        borderCurve: 'continuous',
-                        padding: 16,
-                        gap: 8,
-                        backgroundColor: pressed ? theme.colors.overlay : theme.colors.card,
-                        borderWidth: 1,
-                        borderColor: theme.colors.border,
-                        boxShadow: '0 12px 24px rgba(15, 23, 42, 0.08)',
-                      })}
+                      theme={theme}
+                      actionLabel="×"
+                      isOpen={openLectureActionId === lecture.lectureId}
+                      onOpenChange={(nextIsOpen) => {
+                        setOpenLectureActionId(nextIsOpen ? lecture.lectureId : null);
+                      }}
                     >
-                      <View
-                        style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: 12,
-                        }}
+                      <Pressable
+                        onPress={() =>
+                          router.push({
+                            pathname: '/recording-results-page',
+                            params: {
+                              lectureId: lecture.lectureId,
+                            },
+                          })
+                        }
+                        style={({ pressed }) => ({
+                          borderRadius: 22,
+                          borderCurve: 'continuous',
+                          padding: 15,
+                          gap: 6,
+                          backgroundColor: pressed ? theme.colors.card : '#242a33',
+                          boxShadow: '0 12px 24px rgba(15, 23, 42, 0.08)',
+                        })}
                       >
-                        <Text
+                        <View
                           style={{
-                            flex: 1,
-                            color: theme.colors.text,
-                            fontSize: 18,
-                            lineHeight: 22,
-                            fontWeight: '800',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 12,
                           }}
                         >
-                          {lecture.title}
-                        </Text>
-                        <Text style={{ color: theme.colors.textSubtle, fontSize: 12, fontWeight: '700' }}>
-                          {formatRelativeLectureTime(lecture.recordedAt)}
-                        </Text>
-                      </View>
-
-                      <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 21 }}>
-                        {buildLectureCardSubtitle(lecture)}
-                      </Text>
-                    </Pressable>
+                          <Text
+                            style={{
+                              flex: 1,
+                              color: theme.colors.text,
+                              fontSize: 15.5,
+                              lineHeight: 20,
+                              fontWeight: '800',
+                            }}
+                          >
+                            {lecture.title}
+                          </Text>
+                          <Text style={{ color: theme.colors.textSubtle, fontSize: 11.5, fontWeight: '700' }}>
+                            {formatRelativeLectureTime(lecture.recordedAt)}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    </SwipeRevealCard>
                   ))}
 
                   {storedLectures.length > 3 ? (
@@ -748,8 +795,6 @@ export default function CourseDetailRoute() {
                         alignItems: 'center',
                         justifyContent: 'center',
                         backgroundColor: pressed ? theme.colors.overlay : theme.colors.card,
-                        borderWidth: 1,
-                        borderColor: theme.colors.border,
                       })}
                     >
                       <Text style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '800' }}>
@@ -767,55 +812,13 @@ export default function CourseDetailRoute() {
   );
 }
 
-function buildLectureCardSubtitle(lecture: LocalLectureRecordingRecord) {
-  const duration = formatDurationLabel(lecture.durationSeconds);
-
-  if (lecture.uploadStatus === 'uploaded') {
-    return `Saved locally • uploaded to API • ${duration}`;
-  }
-
-  if (lecture.lastError) {
-    return `Saved locally • upload failed • ${duration}`;
-  }
-
-  return `Saved locally • upload pending • ${duration}`;
-}
-
 function mapCourseFileToCard(file: LocalCourseFileRecord): MockUpload {
-  const sourceLabel = `${formatCourseFileSourceLabel(file)} • ${formatCourseFileTypeLabel(file)}`;
-
   return {
     id: file.id,
     title: file.title,
-    relation: mapStoredRelationToUploadRelation(file.relationType),
     addedAtLabel: formatRelativeLectureTime(file.createdAt),
-    description: buildCourseFileCardDescription(file),
-    sourceLabel,
+    fileTypeLabel: formatCourseFileTypeLabel(file),
   };
-}
-
-function buildCourseFileCardDescription(file: LocalCourseFileRecord) {
-  if (file.uploadStatus === 'uploaded') {
-    return 'Saved locally and uploaded to API.';
-  }
-
-  if (file.lastError) {
-    return 'Saved locally, sync failed.';
-  }
-
-  return 'Saved locally, waiting to upload.';
-}
-
-function formatCourseFileSourceLabel(file: LocalCourseFileRecord) {
-  return file.sourceType === 'file' ? 'File' : 'Link';
-}
-
-function formatCourseFileTypeLabel(file: LocalCourseFileRecord) {
-  if (file.fileExtension && file.fileExtension.length > 0) {
-    return file.fileExtension.toUpperCase();
-  }
-
-  return 'FILE';
 }
 
 function mapUploadRelationToStoredRelation(value: UploadRelation): CourseFileRelationType {
@@ -830,21 +833,6 @@ function mapUploadRelationToStoredRelation(value: UploadRelation): CourseFileRel
       return 'notes';
     case 'Others':
       return 'other';
-  }
-}
-
-function mapStoredRelationToUploadRelation(value: CourseFileRelationType): UploadRelation {
-  switch (value) {
-    case 'lecture_file':
-      return 'Lecture file';
-    case 'module_file':
-      return 'Module file';
-    case 'chapter_file':
-      return 'Chapter file';
-    case 'notes':
-      return 'Notes';
-    case 'other':
-      return 'Others';
   }
 }
 
@@ -890,15 +878,13 @@ function formatRelativeLectureTime(recordedAt: string | null) {
   return `${diffWeeks}w ago`;
 }
 
-function formatDurationLabel(durationSeconds: number) {
-  const safeSeconds = Math.max(0, durationSeconds);
-  const minutes = Math.floor(safeSeconds / 60)
-    .toString()
-    .padStart(2, '0');
-  const seconds = (safeSeconds % 60).toString().padStart(2, '0');
-  return `${minutes}:${seconds}`;
-}
+function formatCourseFileTypeLabel(file: LocalCourseFileRecord) {
+  if (file.fileExtension && file.fileExtension.trim().length > 0) {
+    return `.${file.fileExtension.trim().toUpperCase()}`;
+  }
 
+  return '.FILE';
+}
 function SectionCard({
   theme,
   title,
@@ -920,8 +906,6 @@ function SectionCard({
         padding: 18,
         gap: 14,
         backgroundColor: theme.colors.card,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
         boxShadow: '0 14px 28px rgba(15, 23, 42, 0.08)',
       }}
     >
@@ -1000,8 +984,6 @@ function OptionRow({
                   : pressed
                     ? theme.colors.overlay
                     : theme.colors.card,
-                borderWidth: 1,
-                borderColor: selected ? theme.colors.accentBorder : theme.colors.border,
               })}
             >
               <Text
@@ -1038,8 +1020,6 @@ function StateCard({
         padding: 18,
         gap: 8,
         backgroundColor: theme.colors.card,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
       }}
     >
       <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800' }}>{title}</Text>
@@ -1052,12 +1032,212 @@ function inputStyle(theme: ReturnType<typeof useAppTheme>) {
   return {
     borderRadius: 18,
     borderCurve: 'continuous' as const,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     backgroundColor: theme.colors.overlay,
     paddingHorizontal: 14,
     paddingVertical: 12,
     color: theme.colors.text,
     fontSize: 15,
   };
+}
+
+function CircleIconButton({
+  label,
+  onPress,
+  variant = 'danger',
+}: {
+  label: string;
+  onPress: () => void;
+  variant?: 'danger' | 'neutral';
+}) {
+  const isDanger = variant === 'danger';
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => ({
+        width: 36,
+        height: 36,
+        borderRadius: 999,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: isDanger
+          ? pressed
+            ? '#b91c1c'
+            : '#dc2626'
+          : pressed
+            ? '#3a4250'
+            : '#2b3340',
+      })}
+    >
+      <Text style={{ color: '#ffffff', fontSize: 18, lineHeight: 18, fontWeight: '900' }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function FileTypeBadge({
+  label,
+  theme,
+}: {
+  label: string;
+  theme: ReturnType<typeof useAppTheme>;
+}) {
+  return (
+    <View
+      style={{
+        width: 38,
+        height: 46,
+        borderRadius: 10,
+        borderCurve: 'continuous',
+        paddingTop: 6,
+        paddingHorizontal: 4,
+        alignItems: 'center',
+        backgroundColor: '#f4f7fb',
+        position: 'relative',
+      }}
+    >
+      <View
+        style={{
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          width: 12,
+          height: 12,
+          backgroundColor: '#dbe4ef',
+          borderTopRightRadius: 10,
+          borderBottomLeftRadius: 6,
+        }}
+      />
+      <View
+        style={{
+          width: 20,
+          height: 2,
+          borderRadius: 999,
+          backgroundColor: '#d5dde8',
+          marginTop: 10,
+          marginBottom: 5,
+        }}
+      />
+      <View
+        style={{
+          width: 20,
+          height: 2,
+          borderRadius: 999,
+          backgroundColor: '#d5dde8',
+          marginBottom: 5,
+        }}
+      />
+      <Text
+        numberOfLines={1}
+        style={{
+          marginTop: 'auto',
+          color: theme.colors.accent,
+          fontSize: 9.5,
+          lineHeight: 11,
+          fontWeight: '900',
+        }}
+      >
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+function SwipeRevealCard({
+  theme,
+  actionLabel,
+  isOpen,
+  onOpenChange,
+  children,
+}: {
+  theme: ReturnType<typeof useAppTheme>;
+  actionLabel: string;
+  isOpen: boolean;
+  onOpenChange: (nextIsOpen: boolean) => void;
+  children: React.ReactNode;
+}) {
+  const ACTION_WIDTH = 68;
+  const translateX = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(translateX, {
+      toValue: isOpen ? -ACTION_WIDTH : 0,
+      useNativeDriver: true,
+      damping: 18,
+      stiffness: 220,
+      mass: 0.9,
+    }).start();
+  }, [ACTION_WIDTH, isOpen, translateX]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => isOpen,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 8 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+      onPanResponderMove: (_, gestureState) => {
+        const baseOffset = isOpen ? -ACTION_WIDTH : 0;
+        const nextOffset = Math.max(-ACTION_WIDTH, Math.min(0, gestureState.dx + baseOffset));
+        translateX.setValue(nextOffset);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const shouldOpen = isOpen ? gestureState.dx < 28 : gestureState.dx < -28;
+        onOpenChange(shouldOpen);
+      },
+      onPanResponderTerminate: () => {
+        onOpenChange(isOpen);
+      },
+    })
+  ).current;
+
+  return (
+    <View
+      style={{
+        position: 'relative',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        borderRadius: 22,
+        borderCurve: 'continuous',
+        backgroundColor: theme.colors.card,
+      }}
+    >
+      <View
+        pointerEvents={isOpen ? 'auto' : 'none'}
+        style={{
+          position: 'absolute',
+          right: 12,
+          top: 0,
+          bottom: 0,
+          justifyContent: 'center',
+          alignItems: 'center',
+          opacity: isOpen ? 1 : 0,
+        }}
+      >
+        <Pressable
+          onPress={() => onOpenChange(false)}
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 999,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: '#dc2626',
+          }}
+        >
+          <Text style={{ color: '#ffffff', fontSize: 18, lineHeight: 18, fontWeight: '900' }}>
+            {actionLabel}
+          </Text>
+        </Pressable>
+      </View>
+
+      <Animated.View
+        {...panResponder.panHandlers}
+        style={{
+          transform: [{ translateX }],
+        }}
+      >
+        {children}
+      </Animated.View>
+    </View>
+  );
 }

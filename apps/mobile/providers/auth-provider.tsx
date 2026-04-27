@@ -27,6 +27,7 @@ import {
   initializeLocalDatabase,
 } from '../services/local-db';
 import { bootstrapLocalCacheFromApi } from '../services/bootstrap-sync';
+import { logMobileError } from '../services/error-monitor';
 import { useDelayedLoadingOverlay } from './loading-overlay-provider';
 
 type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
@@ -93,9 +94,20 @@ export function AuthProvider({ children }: PropsWithChildren) {
         setUser(restored.user);
         setSession(restored.session);
         setStatus('authenticated');
-      } catch {
-        await clearStoredAuthSession();
-        await clearLocalCache();
+      } catch (error) {
+        logMobileError(error, {
+          source: 'auth-provider.restore-session',
+        });
+        await clearStoredAuthSession().catch((storageError) => {
+          logMobileError(storageError, {
+            source: 'auth-provider.clear-stored-session-after-restore-failure',
+          });
+        });
+        await clearLocalCache().catch((cacheError) => {
+          logMobileError(cacheError, {
+            source: 'auth-provider.clear-local-cache-after-restore-failure',
+          });
+        });
 
         if (mounted) {
           setUser(null);
@@ -128,7 +140,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
 
         await bootstrapLocalCacheFromApi(user, accessToken);
-      } catch {
+      } catch (error) {
+        logMobileError(error, {
+          source: 'auth-provider.bootstrap-cache',
+          extra: { userId: user.id },
+        });
         // Keep existing cached data visible when bootstrap sync fails.
       }
     };
@@ -159,7 +175,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (activeSession?.accessToken) {
         await logoutAuthSession(activeSession.accessToken, 'global');
       }
-    } catch {
+    } catch (error) {
+      logMobileError(error, {
+        source: 'auth-provider.sign-out',
+      });
       // Clear local state even if the server session is already invalid.
     } finally {
       refreshPromiseRef.current = null;
@@ -220,9 +239,20 @@ export function AuthProvider({ children }: PropsWithChildren) {
           await applyAuthResult(result);
           return result;
         })
-        .catch(async () => {
-          await clearStoredAuthSession();
-          await clearLocalCache();
+        .catch(async (error) => {
+          logMobileError(error, {
+            source: 'auth-provider.refresh-session',
+          });
+          await clearStoredAuthSession().catch((storageError) => {
+            logMobileError(storageError, {
+              source: 'auth-provider.clear-stored-session-after-refresh-failure',
+            });
+          });
+          await clearLocalCache().catch((cacheError) => {
+            logMobileError(cacheError, {
+              source: 'auth-provider.clear-local-cache-after-refresh-failure',
+            });
+          });
           setUser(null);
           setSession(null);
           setStatus('unauthenticated');
@@ -254,8 +284,8 @@ export function AuthGate({ children }: PropsWithChildren) {
     }
 
     const inAuthGroup = segments[0] === '(auth)';
-    const onWelcomeScreen =
-      segments[0] === 'welcome' || (segments[0] === '(pages)' && segments[1] === 'welcome');
+    const currentPath = segments.join('/');
+    const onWelcomeScreen = segments[0] === 'welcome' || currentPath === '(pages)/welcome';
 
     if (auth.status === 'authenticated' && (inAuthGroup || onWelcomeScreen)) {
       router.replace('/(tabs)/home');

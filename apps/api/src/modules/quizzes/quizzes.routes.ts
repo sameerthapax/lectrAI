@@ -1,6 +1,9 @@
 import { Router } from 'express';
+import { asyncHandler } from '../../lib/async-handler.js';
 import {
+  getQuizById,
   getDailyQuickQuiz,
+  postQuizAttempt,
   postDailyQuickQuizAnswer,
   postDailyQuickQuizAttempt,
   postGenerateDailyQuickQuiz,
@@ -8,9 +11,11 @@ import {
 
 const quizzesRouter = Router();
 
-quizzesRouter.get('/daily', getDailyQuickQuiz);
-quizzesRouter.post('/daily/generate', postGenerateDailyQuickQuiz);
-quizzesRouter.post('/daily/answers', postDailyQuickQuizAnswer);
-quizzesRouter.post('/daily/attempt', postDailyQuickQuizAttempt);
+quizzesRouter.get('/daily', asyncHandler(getDailyQuickQuiz));
+quizzesRouter.post('/daily/generate', asyncHandler(postGenerateDailyQuickQuiz));
+quizzesRouter.post('/daily/answers', asyncHandler(postDailyQuickQuizAnswer));
+quizzesRouter.post('/daily/attempt', asyncHandler(postDailyQuickQuizAttempt));
+quizzesRouter.post('/:quizId/attempt', asyncHandler(postQuizAttempt));
+quizzesRouter.get('/:quizId', asyncHandler(getQuizById));
 
 export { quizzesRouter };

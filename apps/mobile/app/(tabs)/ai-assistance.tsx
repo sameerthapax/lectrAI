@@ -1,4 +1,3 @@
-import { BlurView } from 'expo-blur';
 import {
   getRecordingPermissionsAsync,
   RecordingPresets,
@@ -11,7 +10,7 @@ import {
   useAudioRecorderState,
 } from 'expo-audio';
 import { File } from 'expo-file-system';
-import { Stack, useFocusEffect } from 'expo-router';
+import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -20,21 +19,28 @@ import {
   Pressable,
   ScrollView,
   Text,
+  TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';
+import { LokiConversationPanel } from '../../components/ai/loki-conversation-panel';
 import { useAppTheme } from '../../providers/settings-provider';
 import { useAuth } from '../../providers/auth-provider';
 import {
+  buildLokiAudioSource,
+  buildLokiSpeechSource,
+  createLokiReplyJob,
+  getLokiReplyJobEvents,
   getLokiSession,
+  getLokiReplyJobResult,
   listLokiSessions,
-  sendLokiReply,
+  streamLokiReplyJob,
   type RemoteLokiMessage,
-  type RemoteLokiRetrievedChunk,
-  type RemoteLokiSession,
+  type RemoteLokiReplyJobCompletedMetadata,
+  type RemoteLokiReplyJobEvent,
   transcribeLokiAudio,
-  writeLokiAudioToFile,
 } from '../../services/ai-chat-api';
+import { logMobileError } from '../../services/error-monitor';
 
 const LokiNativeVoiceVisualizer = require('../../components/ai/loki-native-voice-visualizer').default;
 const HOLD_TO_RECORD_DELAY_MS = 150;
@@ -45,37 +51,55 @@ const TYPE_BUTTON_FLEX = 1;
 const TALK_BUTTON_EXPANDED_FLEX = TALK_BUTTON_FLEX + TYPE_BUTTON_FLEX;
 const SPEECH_METER_FLOOR_DB = -55;
 const SPEECH_METER_CEILING_DB = -35;
+const PROGRESS_MESSAGE_DELAY_MS = 2000;
+const PROGRESS_MESSAGE_MIN_VISIBLE_MS = 2400;
+const PROGRESS_TRANSITION_MS = 380;
+const ENABLE_LOKI_ATTACHMENT_DEBUG = true;
 
 export default function AiAssistanceRoute() {
   const theme = useAppTheme();
   const auth = useAuth();
+  const router = useRouter();
   const { width } = useWindowDimensions();
   const isCompact = width < 390;
   const conversationScrollRef = useRef<ScrollView | null>(null);
-  const [historyVisible, setHistoryVisible] = useState(false);
-  const [sessions, setSessions] = useState<RemoteLokiSession[]>([]);
   const [messages, setMessages] = useState<RemoteLokiMessage[]>([]);
+  const [transientProgressMessage, setTransientProgressMessage] = useState<RemoteLokiMessage | null>(null);
+  const [transitioningFinalMessage, setTransitioningFinalMessage] = useState<RemoteLokiMessage | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [retrievedChunks, setRetrievedChunks] = useState<RemoteLokiRetrievedChunk[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [talkHoldActive, setTalkHoldActive] = useState(false);
   const [voiceRecordingActive, setVoiceRecordingActive] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [assistantReplyInFlight, setAssistantReplyInFlight] = useState(false);
   const [assistantWaiting, setAssistantWaiting] = useState(false);
-  const [audioResponseUri, setAudioResponseUri] = useState<string | null>(null);
+  const [assistantStageLabel, setAssistantStageLabel] = useState<string | null>(null);
   const [assistantSpeechLevel, setAssistantSpeechLevel] = useState(0);
+  const [audioMuted, setAudioMuted] = useState(false);
+  const [composerText, setComposerText] = useState('');
+  const [composerBusy, setComposerBusy] = useState(false);
+  const [visualizerCollapsed, setVisualizerCollapsed] = useState(false);
+  const [typingMode, setTypingMode] = useState(false);
   const holdToRecordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const talkExpandProgress = useRef(new Animated.Value(0)).current;
   const talkGlowOpacity = useRef(new Animated.Value(0)).current;
-  const visualizerHeightProgress = useRef(new Animated.Value(0)).current;
+  const talkLoadingOrbit = useRef(new Animated.Value(0)).current;
+  const visualizerCardHeight = useRef(new Animated.Value(isCompact ? 232 : 256)).current;
+  const conversationBodyHeight = useRef(new Animated.Value(isCompact ? 300 : 360)).current;
+  const controlsOpacity = useRef(new Animated.Value(1)).current;
+  const composerOpacity = useRef(new Animated.Value(0)).current;
   const assistantSpeechLevelRef = useRef(0);
+  const activeReplyJobAbortRef = useRef<AbortController | null>(null);
+  const transientProgressMessageRef = useRef<RemoteLokiMessage | null>(null);
+  const progressShownAtRef = useRef<number | null>(null);
+  const progressGatePromiseRef = useRef<Promise<void> | null>(null);
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
     isMeteringEnabled: true,
   });
   const recorderState = useAudioRecorderState(recorder, 120);
-  const player = useAudioPlayer(audioResponseUri, { updateInterval: 100, keepAudioSessionActive: true });
+  const player = useAudioPlayer(null, { updateInterval: 100, keepAudioSessionActive: true });
   const playerStatus = useAudioPlayerStatus(player);
 
   useAudioSampleListener(player, (sample) => {
@@ -108,8 +132,31 @@ export default function AiAssistanceRoute() {
       interruptionMode: 'mixWithOthers',
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
+    }).catch((error) => {
+      logMobileError(error, {
+        source: 'ai-assistance.configure-audio-mode',
+      });
     });
   }, []);
+
+  useEffect(() => {
+    return () => {
+      activeReplyJobAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!assistantWaiting) {
+      setTransientProgressMessage(null);
+      setTransitioningFinalMessage(null);
+      setAssistantStageLabel(null);
+      transientProgressMessageRef.current = null;
+      progressShownAtRef.current = null;
+      progressGatePromiseRef.current = null;
+    }
+  }, [assistantWaiting]);
+
+  const shouldExpandTalkButton = talkHoldActive || assistantReplyInFlight || assistantWaiting;
 
   useEffect(() => {
     Animated.timing(talkGlowOpacity, {
@@ -121,22 +168,38 @@ export default function AiAssistanceRoute() {
   }, [talkGlowOpacity, talkHoldActive]);
 
   useEffect(() => {
-    Animated.timing(talkExpandProgress, {
-      toValue: talkHoldActive ? 1 : 0,
-      duration: talkHoldActive ? TALK_EXPAND_DURATION_MS : TALK_RESET_DURATION_MS,
-      easing: Easing.inOut(Easing.cubic),
-      useNativeDriver: false,
-    }).start();
-  }, [talkExpandProgress, talkHoldActive]);
+    const shouldAnimateLoading = assistantReplyInFlight || assistantWaiting;
+
+    if (!shouldAnimateLoading) {
+      talkLoadingOrbit.stopAnimation();
+      talkLoadingOrbit.setValue(0);
+      return;
+    }
+
+    const orbitLoop = Animated.loop(
+      Animated.timing(talkLoadingOrbit, {
+        toValue: 1,
+        duration: 1600,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      })
+    );
+
+    orbitLoop.start();
+
+    return () => {
+      orbitLoop.stop();
+    };
+  }, [assistantReplyInFlight, assistantWaiting, talkLoadingOrbit]);
 
   useEffect(() => {
-    Animated.timing(visualizerHeightProgress, {
-      toValue: assistantWaiting ? 1 : 0,
-      duration: assistantWaiting ? 260 : 220,
+    Animated.timing(talkExpandProgress, {
+      toValue: shouldExpandTalkButton ? 1 : 0,
+      duration: shouldExpandTalkButton ? TALK_EXPAND_DURATION_MS : TALK_RESET_DURATION_MS,
       easing: Easing.inOut(Easing.cubic),
       useNativeDriver: false,
     }).start();
-  }, [assistantWaiting, visualizerHeightProgress]);
+  }, [shouldExpandTalkButton, talkExpandProgress]);
 
   useEffect(() => {
     if (playerStatus.playing) {
@@ -146,6 +209,69 @@ export default function AiAssistanceRoute() {
     assistantSpeechLevelRef.current = 0;
     setAssistantSpeechLevel(0);
   }, [playerStatus.playing]);
+
+  useEffect(() => {
+    const nextVisualizerHeight = typingMode
+      ? 0
+      : visualizerCollapsed
+        ? 88
+        : isCompact
+          ? assistantReplyInFlight || assistantWaiting
+            ? 288
+            : 232
+          : assistantReplyInFlight || assistantWaiting
+            ? 332
+            : 256;
+    const nextConversationHeight = visualizerCollapsed
+      || typingMode
+        ? isCompact
+          ? 470
+          : 560
+        : isCompact
+          ? 300
+          : 360;
+
+    Animated.parallel([
+      Animated.timing(visualizerCardHeight, {
+        toValue: nextVisualizerHeight,
+        duration: visualizerCollapsed ? 320 : 360,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: false,
+      }),
+      Animated.timing(conversationBodyHeight, {
+        toValue: nextConversationHeight,
+        duration: visualizerCollapsed ? 320 : 360,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: false,
+      }),
+      Animated.timing(controlsOpacity, {
+        toValue: visualizerCollapsed || typingMode ? 0 : 1,
+        duration: visualizerCollapsed || typingMode ? 180 : 240,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: false,
+      }),
+      Animated.timing(composerOpacity, {
+        toValue: visualizerCollapsed || typingMode ? 1 : 0,
+        duration: visualizerCollapsed || typingMode ? 260 : 180,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: false,
+      }),
+    ]).start();
+  }, [
+    assistantWaiting,
+    composerOpacity,
+    controlsOpacity,
+    conversationBodyHeight,
+    isCompact,
+    typingMode,
+    visualizerCardHeight,
+    visualizerCollapsed,
+    assistantReplyInFlight,
+  ]);
+
+  useEffect(() => {
+    player.muted = visualizerCollapsed || typingMode || audioMuted;
+  }, [audioMuted, player, typingMode, visualizerCollapsed]);
 
   useFocusEffect(
     useCallback(() => {
@@ -177,9 +303,12 @@ export default function AiAssistanceRoute() {
             return;
           }
 
-          setSessions(nextSessions);
           setActiveSessionId((current) => current ?? nextSessions[0]?.id ?? null);
         } catch (error) {
+          logMobileError(error, {
+            source: 'ai-assistance.load-bootstrap',
+            extra: { authStatus: auth.status },
+          });
           if (!cancelled) {
             setErrorMessage(error instanceof Error ? error.message : 'Could not load Loki.');
           }
@@ -205,7 +334,6 @@ export default function AiAssistanceRoute() {
     const loadSession = async () => {
       if (!activeSessionId || auth.status !== 'authenticated') {
         setMessages([]);
-        setRetrievedChunks([]);
         return;
       }
 
@@ -222,8 +350,24 @@ export default function AiAssistanceRoute() {
           return;
         }
 
-        setMessages(detail.messages);
+        setMessages((current) => {
+          logLokiAttachmentDebug('session-detail-before-merge', {
+            sessionId: activeSessionId,
+            remoteMessages: detail.messages,
+            currentMessages: current,
+          });
+          const mergedMessages = mergeSessionMessagesWithHydratedLocalMessages(detail.messages, current);
+          logLokiAttachmentDebug('session-detail-after-merge', {
+            sessionId: activeSessionId,
+            mergedMessages,
+          });
+          return mergedMessages;
+        });
       } catch (error) {
+        logMobileError(error, {
+          source: 'ai-assistance.load-session',
+          extra: { sessionId: activeSessionId },
+        });
         if (!cancelled) {
           setErrorMessage(error instanceof Error ? error.message : 'Could not load conversation.');
         }
@@ -236,12 +380,6 @@ export default function AiAssistanceRoute() {
       cancelled = true;
     };
   }, [activeSessionId, auth]);
-
-  const handleSelectSession = (session: RemoteLokiSession) => {
-    setActiveSessionId(session.id);
-    setRetrievedChunks([]);
-    setHistoryVisible(false);
-  };
 
   useEffect(() => {
     const scrollTimer = setTimeout(() => {
@@ -277,7 +415,10 @@ export default function AiAssistanceRoute() {
       try {
         await recorder.stop();
         recordingUri = recorder.uri ?? recorderState.url;
-      } catch {
+      } catch (error) {
+        logMobileError(error, {
+          source: 'ai-assistance.stop-recorder-during-reset',
+        });
         // Reset the UI even if the recorder has already transitioned.
       }
     }
@@ -291,10 +432,157 @@ export default function AiAssistanceRoute() {
       interruptionMode: 'mixWithOthers',
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
+    }).catch((error) => {
+      logMobileError(error, {
+        source: 'ai-assistance.reset-audio-mode',
+      });
     });
 
     return recordingUri;
   }, [recorder, recorderState.isRecording]);
+
+  const runReplyJob = useCallback(
+    async (input: {
+      accessToken: string;
+      sessionId: string | null;
+      messageText: string;
+      optimisticUserMessageId: string;
+      muteAudioResponse: boolean;
+    }) => {
+      activeReplyJobAbortRef.current?.abort();
+      const abortController = new AbortController();
+      activeReplyJobAbortRef.current = abortController;
+
+      try {
+        const created = await createLokiReplyJob(input.accessToken, {
+          sessionId: input.sessionId,
+          message: input.messageText,
+          muteAudioResponse: input.muteAudioResponse,
+        });
+
+        setActiveSessionId(created.session.id);
+        setMessages((current) => {
+          const withoutPendingUser = current.filter((message) => message.id !== input.optimisticUserMessageId);
+          return [...withoutPendingUser, created.userMessage];
+        });
+
+        const completedMetadata = await streamLokiReplyJob(
+          input.accessToken,
+          created.job.id,
+          {
+            onEvent: (event) => {
+              if (event.eventType === 'completed') {
+                return;
+              }
+
+              if (event.eventType !== 'retrieving_lecture') {
+                return;
+              }
+              setAssistantWaiting(true);
+              setAssistantStageLabel('Retrieving');
+              if (progressGatePromiseRef.current) {
+                return;
+              }
+
+              progressGatePromiseRef.current = (async () => {
+                await waitForDuration(PROGRESS_MESSAGE_DELAY_MS, abortController.signal);
+                const progressMessage = createProgressMessage(created.job.id, event);
+                progressShownAtRef.current = Date.now();
+                transientProgressMessageRef.current = progressMessage;
+                setTransientProgressMessage(progressMessage);
+
+                if (!input.muteAudioResponse) {
+                  player.replace(buildLokiSpeechSource(input.accessToken, event.message));
+                  player.play();
+                }
+
+                setAssistantStageLabel('Creating');
+                await waitForDuration(PROGRESS_MESSAGE_MIN_VISIBLE_MS, abortController.signal);
+              })().catch(() => undefined);
+            },
+          },
+          {
+            abortSignal: abortController.signal,
+          }
+        );
+
+        const finalResult = await getLokiReplyJobResult(input.accessToken, created.job.id);
+        const finalEvents = await getLokiReplyJobEvents(input.accessToken, created.job.id);
+        logLokiAttachmentDebug('reply-job-result', {
+          jobId: created.job.id,
+          assistantMessage: finalResult.assistantMessage,
+          completedMetadata,
+          events: finalEvents.events,
+        });
+        const assistantMessage = mergeFinalAssistantMessage(
+          finalResult.assistantMessage,
+          completedMetadata,
+          finalEvents.events
+        );
+        logLokiAttachmentDebug('reply-job-merged-assistant-message', {
+          jobId: created.job.id,
+          assistantMessage,
+        });
+        const finalAudioMessageId =
+          finalResult.audioMessageId ??
+          completedMetadata.audioMessageId ??
+          assistantMessage.id;
+
+        await progressGatePromiseRef.current;
+
+        if (transientProgressMessageRef.current) {
+          setTransitioningFinalMessage(assistantMessage);
+          await waitForDuration(PROGRESS_TRANSITION_MS);
+        }
+
+        setActiveSessionId(finalResult.session.id);
+        setMessages((current) => {
+          const existingIndex = current.findIndex((message) => message.id === assistantMessage.id);
+
+          if (existingIndex >= 0) {
+            const nextMessages = [...current];
+            nextMessages[existingIndex] = assistantMessage;
+            logLokiAttachmentDebug('reply-job-set-messages-replace', {
+              jobId: created.job.id,
+              assistantMessageId: assistantMessage.id,
+              messages: nextMessages,
+            });
+            return nextMessages;
+          }
+
+          const nextMessages = [...current, assistantMessage];
+          logLokiAttachmentDebug('reply-job-set-messages-append', {
+            jobId: created.job.id,
+            assistantMessageId: assistantMessage.id,
+            messages: nextMessages,
+          });
+          return nextMessages;
+        });
+        setTransientProgressMessage(null);
+        setTransitioningFinalMessage(null);
+        transientProgressMessageRef.current = null;
+        progressShownAtRef.current = null;
+        progressGatePromiseRef.current = null;
+
+        if ((finalResult.shouldAutoPlayAudio || completedMetadata.shouldAutoPlayAudio) && finalAudioMessageId) {
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            interruptionMode: 'doNotMix',
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          });
+
+          player.replace(buildLokiAudioSource(input.accessToken, finalAudioMessageId));
+          player.play();
+        }
+      } finally {
+        setAssistantWaiting(false);
+        activeReplyJobAbortRef.current = null;
+      }
+    },
+    [player]
+  );
 
   const processVoiceInput = useCallback(
     async (recordingUri: string) => {
@@ -303,9 +591,8 @@ export default function AiAssistanceRoute() {
       }
 
       setVoiceBusy(true);
-      setAssistantWaiting(true);
+      setAssistantReplyInFlight(true);
       setErrorMessage(null);
-      setRetrievedChunks([]);
 
       try {
         const accessToken = await auth.getValidAccessToken();
@@ -327,7 +614,9 @@ export default function AiAssistanceRoute() {
           throw new Error('Loki could not hear anything clearly enough to transcribe.');
         }
 
-        const optimisticUserMessage = createPendingMessage('user', transcriptText);
+        const optimisticUserMessage = createPendingMessage('user', transcriptText, {
+          source: 'voice',
+        });
 
         setMessages((current) => {
           if (activeSessionId) {
@@ -337,43 +626,93 @@ export default function AiAssistanceRoute() {
           return [optimisticUserMessage];
         });
 
-        const reply = await sendLokiReply(accessToken, {
+        await runReplyJob({
+          accessToken,
           sessionId: activeSessionId,
-          message: transcriptText,
+          messageText: transcriptText,
+          optimisticUserMessageId: optimisticUserMessage.id,
+          muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
         });
-
-        setActiveSessionId(reply.session.id);
-        setSessions((current) => {
-          const remaining = current.filter((session) => session.id !== reply.session.id);
-          return [reply.session, ...remaining];
-        });
-        setRetrievedChunks(reply.retrieval.chunks);
-        setMessages((current) => {
-          const withoutPendingUser = current.filter((message) => message.id !== optimisticUserMessage.id);
-          return [...withoutPendingUser, reply.userMessage, reply.assistantMessage];
-        });
-
-        if (reply.audio) {
-          await setAudioModeAsync({
-            allowsRecording: false,
-            playsInSilentMode: true,
-            interruptionMode: 'doNotMix',
-            shouldPlayInBackground: false,
-            shouldRouteThroughEarpiece: false,
-          });
-
-          const nextAudioUri = await writeLokiAudioToFile(reply.audio, reply.assistantMessage.id);
-          setAudioResponseUri(nextAudioUri);
-          player.replace(nextAudioUri);
-          player.play();
-        }
       } finally {
-        setAssistantWaiting(false);
+        setAssistantReplyInFlight(false);
         setVoiceBusy(false);
       }
     },
-    [activeSessionId, auth, player]
+    [activeSessionId, audioMuted, auth, runReplyJob, typingMode, visualizerCollapsed]
   );
+
+  const handleSendText = useCallback(async () => {
+    const messageText = composerText.trim();
+
+    if (!messageText || composerBusy || auth.status !== 'authenticated') {
+      return;
+    }
+
+    setComposerBusy(true);
+    setAssistantReplyInFlight(true);
+    setErrorMessage(null);
+
+    try {
+      if (playerStatus.playing) {
+        player.pause();
+      }
+
+      const accessToken = await auth.getValidAccessToken();
+
+      if (!accessToken) {
+        throw new Error('Your session expired. Please sign in again.');
+      }
+
+      const optimisticUserMessage = createPendingMessage('user', messageText, {
+        source: 'typed',
+      });
+      setComposerText('');
+      setMessages((current) => (activeSessionId ? [...current, optimisticUserMessage] : [optimisticUserMessage]));
+
+      await runReplyJob({
+        accessToken,
+        sessionId: activeSessionId,
+        messageText,
+        optimisticUserMessageId: optimisticUserMessage.id,
+        muteAudioResponse: visualizerCollapsed || typingMode || audioMuted,
+      });
+    } catch (error) {
+      logMobileError(error, {
+        source: 'ai-assistance.send-text',
+        extra: { sessionId: activeSessionId },
+      });
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to send your message right now.');
+    } finally {
+      setAssistantReplyInFlight(false);
+      setComposerBusy(false);
+    }
+  }, [
+    activeSessionId,
+    audioMuted,
+    auth,
+    composerBusy,
+    composerText,
+    player,
+    playerStatus.playing,
+    runReplyJob,
+    typingMode,
+    visualizerCollapsed,
+  ]);
+
+  const handleStartNewSession = useCallback(() => {
+    if (playerStatus.playing) {
+      player.pause();
+    }
+
+    setAssistantSpeechLevel(0);
+    assistantSpeechLevelRef.current = 0;
+    setActiveSessionId(null);
+    setMessages([]);
+    setErrorMessage(null);
+    setComposerText('');
+    setTypingMode(false);
+    setVisualizerCollapsed(false);
+  }, [player, playerStatus.playing]);
 
   const startVoiceRecording = useCallback(async () => {
     try {
@@ -411,6 +750,9 @@ export default function AiAssistanceRoute() {
       recorder.record();
       setVoiceRecordingActive(true);
     } catch (error) {
+      logMobileError(error, {
+        source: 'ai-assistance.start-voice-recording',
+      });
       Alert.alert(
         'Voice capture failed',
         error instanceof Error ? error.message : 'Unable to start voice capture right now.'
@@ -422,7 +764,7 @@ export default function AiAssistanceRoute() {
   }, [player, playerStatus.playing, recorder, resetVoiceHoldState]);
 
   const handleTalkPressIn = useCallback(() => {
-    if (voiceBusy || talkHoldActive || assistantWaiting) {
+    if (voiceBusy || talkHoldActive || assistantReplyInFlight) {
       return;
     }
 
@@ -437,7 +779,7 @@ export default function AiAssistanceRoute() {
       holdToRecordTimeoutRef.current = null;
       void startVoiceRecording();
     }, HOLD_TO_RECORD_DELAY_MS);
-  }, [assistantWaiting, startVoiceRecording, talkHoldActive, voiceBusy]);
+  }, [assistantReplyInFlight, startVoiceRecording, talkHoldActive, voiceBusy]);
 
   const handleTalkPressOut = useCallback(() => {
     void (async () => {
@@ -447,6 +789,10 @@ export default function AiAssistanceRoute() {
         try {
           await processVoiceInput(recordingUri);
         } catch (error) {
+          logMobileError(error, {
+            source: 'ai-assistance.process-voice-input',
+            extra: { sessionId: activeSessionId },
+          });
           setErrorMessage(
             error instanceof Error ? error.message : 'Unable to process voice input right now.'
           );
@@ -485,6 +831,10 @@ export default function AiAssistanceRoute() {
     0.18 + liveVoiceLevel * 0.54
   );
   const talkGlowScale = 1.02 + liveVoiceLevel * 0.22;
+  const talkOrbitRotation = talkLoadingOrbit.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
   const visualizerBarHeights = [
     8 + liveVoiceLevel * 10,
     12 + liveVoiceLevel * 14,
@@ -492,23 +842,24 @@ export default function AiAssistanceRoute() {
     11 + liveVoiceLevel * 11,
   ];
   const visualizerBarOpacity = 0.48 + liveVoiceLevel * 0.52;
+  const assistantLoadingStage = assistantWaiting
+    ? assistantStageLabel ?? 'Thinking'
+    : assistantReplyInFlight
+      ? 'Thinking'
+      : null;
   const talkButtonLabel = voiceRecordingActive
     ? 'Listening'
-    : assistantWaiting
-      ? 'Thinking...'
-    : talkHoldActive
-      ? 'Keep Holding'
-      : 'Hold To Talk';
-  const visualizerMode = assistantWaiting
-    ? 'waiting'
-    : playerStatus.playing
-      ? 'speaking'
+    : assistantLoadingStage
+      ? assistantLoadingStage
+      : talkHoldActive
+        ? 'Keep Holding'
+        : 'Hold To Talk';
+  const visualizerMode = playerStatus.playing
+    ? 'speaking'
+    : assistantReplyInFlight || assistantWaiting
+      ? 'waiting'
       : 'idle';
   const visualizerPlaybackTimeSeconds = playerStatus.currentTime;
-  const visualizerMinHeight = visualizerHeightProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [isCompact ? 232 : 256, isCompact ? 288 : 332],
-  });
 
   return (
     <>
@@ -570,28 +921,51 @@ export default function AiAssistanceRoute() {
           }}
         >
           <View style={{ gap: 2 }}>
-            <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, fontWeight: '700' }}>
+            <Text
+              selectable
+              style={{
+                color: theme.colors.textMuted,
+                fontSize: 13,
+                fontWeight: '700',
+              }}
+            >
               AI assistant
             </Text>
-            <Text selectable style={{ color: theme.colors.text, fontSize: 30, fontWeight: '800' }}>
+            <Text
+              selectable
+              style={{
+                color: theme.colors.text,
+                fontSize: 30,
+                fontWeight: '800',
+              }}
+            >
               Meet <Text style={{ color: theme.colors.accent }}>Loki</Text>
             </Text>
           </View>
 
           <Pressable
-            onPress={() => setHistoryVisible((current) => !current)}
+            onPress={() => router.push('/(pages)/loki-history')}
             style={({ pressed }) => ({
               borderRadius: 999,
               borderCurve: 'continuous',
               paddingHorizontal: 12,
               paddingVertical: 8,
-              backgroundColor: pressed ? theme.colors.cardMuted : theme.colors.overlay,
+              backgroundColor: pressed
+                ? theme.colors.cardMuted
+                : theme.colors.overlay,
               borderWidth: 1,
               borderColor: theme.colors.border,
               boxShadow: '0 10px 20px rgba(15, 23, 42, 0.06)',
             })}
           >
-            <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, fontWeight: '700' }}>
+            <Text
+              selectable
+              style={{
+                color: theme.colors.textMuted,
+                fontSize: 12,
+                fontWeight: '700',
+              }}
+            >
               History
             </Text>
           </Pressable>
@@ -599,7 +973,8 @@ export default function AiAssistanceRoute() {
 
         <Animated.View
           style={{
-            minHeight: visualizerMinHeight,
+            height: visualizerCardHeight,
+            marginBottom: typingMode ? 0 : undefined,
             borderRadius: 34,
             borderCurve: 'continuous',
             overflow: 'hidden',
@@ -611,206 +986,122 @@ export default function AiAssistanceRoute() {
             mode={visualizerMode}
             speechLevel={assistantSpeechLevel}
             playbackTimeSeconds={visualizerPlaybackTimeSeconds}
+            collapsed={visualizerCollapsed}
+            statusLabel={assistantLoadingStage ?? undefined}
           />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              visualizerCollapsed
+                ? 'Expand Loki visualizer'
+                : 'Minimize Loki visualizer'
+            }
+            onPress={() => {
+              setTypingMode(false);
+              setVisualizerCollapsed((current) => !current);
+            }}
+            style={({ pressed }) => ({
+              position: 'absolute',
+              top: 14,
+              left: 14,
+              minHeight: 34,
+              borderRadius: 999,
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingHorizontal: visualizerCollapsed ? 10 : 12,
+              paddingVertical: visualizerCollapsed ? 7 : 8,
+              backgroundColor: pressed
+                ? 'rgba(17, 12, 8, 0.92)'
+                : 'rgba(17, 12, 8, 0.78)',
+              borderWidth: 1,
+              borderColor: 'rgba(255, 237, 213, 0.10)',
+            })}
+          >
+            <VisualizerToggleBadge collapsed={visualizerCollapsed} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              visualizerCollapsed || audioMuted
+                ? 'Unmute Loki audio'
+                : 'Mute Loki audio'
+            }
+            onPress={() => setAudioMuted((current) => !current)}
+            style={({ pressed }) => ({
+              position: 'absolute',
+              top: 14,
+              right: 14,
+              width: 42,
+              height: 42,
+              borderRadius: 999,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: pressed
+                ? 'rgba(17, 12, 8, 0.92)'
+                : 'rgba(17, 12, 8, 0.78)',
+              borderWidth: 1,
+              borderColor:
+                visualizerCollapsed || audioMuted
+                  ? 'rgba(248, 113, 113, 0.55)'
+                  : 'rgba(255, 237, 213, 0.10)',
+            })}
+          >
+            <SpeakerToggleIcon muted={visualizerCollapsed || audioMuted} />
+          </Pressable>
         </Animated.View>
 
-        {historyVisible ? (
-          <BlurView
-            intensity={18}
-            tint={theme.resolvedMode === 'dark' ? 'dark' : 'light'}
-            style={{
-              borderRadius: 24,
-              overflow: 'hidden',
-              borderCurve: 'continuous',
-              backgroundColor: theme.colors.overlay,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-            }}
-          >
-            <View style={{ padding: 14, gap: 8 }}>
-              <Text selectable style={{ color: theme.colors.text, fontSize: 17, fontWeight: '700' }}>
-                Conversation history
-              </Text>
-
-              {sessions.length === 0 ? (
-                <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13 }}>
-                  No Loki conversations yet.
-                </Text>
-              ) : (
-                sessions.map((session) => {
-                  const active = session.id === activeSessionId;
-                  return (
-                    <Pressable
-                      key={session.id}
-                      onPress={() => handleSelectSession(session)}
-                      style={({ pressed }) => ({
-                        borderRadius: 16,
-                        padding: 12,
-                        backgroundColor: active ? theme.colors.accentSoft : theme.colors.neutralSoft,
-                        borderWidth: 1,
-                        borderColor: active ? theme.colors.accentBorder : theme.colors.neutralBorder,
-                        opacity: pressed ? 0.88 : 1,
-                      })}
-                    >
-                      <Text selectable style={{ color: theme.colors.text, fontSize: 13.5, fontWeight: '700' }}>
-                        {session.title ?? 'Untitled conversation'}
-                      </Text>
-                      <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, marginTop: 4 }}>
-                        {session.sessionType.replace('_', ' ')}
-                      </Text>
-                    </Pressable>
-                  );
-                })
-              )}
-            </View>
-          </BlurView>
-        ) : null}
-
-        <BlurView
-          intensity={24}
-          tint={theme.resolvedMode === 'dark' ? 'dark' : 'light'}
-          style={{
-            borderRadius: 24,
-            overflow: 'hidden',
-            borderCurve: 'continuous',
-            backgroundColor: theme.colors.overlay,
-            borderWidth: 1,
-            borderColor: theme.colors.border,
+        <LokiConversationPanel
+          theme={theme}
+          isCompact={isCompact}
+          messages={messages}
+          transientProgressMessage={transientProgressMessage}
+          transitioningFinalMessage={transitioningFinalMessage}
+          loading={loading}
+          errorMessage={errorMessage}
+          emptyMessage="Start a conversation and Loki will decide when to search your class material before answering."
+          bodyHeight={conversationBodyHeight}
+          scrollRef={conversationScrollRef}
+          onContentSizeChange={() => {
+            conversationScrollRef.current?.scrollToEnd({ animated: true });
           }}
-        >
-          <View style={{ padding: 14, gap: 12 }}>
-            <Text selectable style={{ color: theme.colors.text, fontSize: 17, fontWeight: '700' }}>
-              Conversation
-            </Text>
-            <View
-              style={{
-                height: isCompact ? 220 : 300,
-                borderRadius: 18,
-                backgroundColor: theme.colors.neutralSoft,
+          action={
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Start a new Loki session"
+              onPress={handleStartNewSession}
+              style={({ pressed }) => ({
+                width: 38,
+                height: 38,
+                borderRadius: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: pressed
+                  ? theme.colors.cardMuted
+                  : theme.colors.neutralSoft,
                 borderWidth: 1,
                 borderColor: theme.colors.neutralBorder,
-              }}
+              })}
             >
-              <ScrollView
-                ref={conversationScrollRef}
-                nestedScrollEnabled
-                showsVerticalScrollIndicator={false}
-                onContentSizeChange={() => {
-                  conversationScrollRef.current?.scrollToEnd({ animated: true });
-                }}
-                contentContainerStyle={{
-                  padding: 12,
-                  gap: 12,
-                  minHeight: '100%',
-                }}
-              >
-                {loading ? (
-                  <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13 }}>
-                    Loading Loki…
-                  </Text>
-                ) : messages.length === 0 ? (
-                  <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
-                    Start a conversation and Loki will decide when to search your class material before answering.
-                  </Text>
-                ) : (
-                  messages.map((message) => {
-                    const isAssistant = message.role === 'assistant';
-                    return (
-                      <View
-                        key={message.id}
-                        style={{
-                          alignSelf: isAssistant ? 'stretch' : 'flex-end',
-                          borderRadius: 18,
-                          padding: 12,
-                          gap: 8,
-                          backgroundColor: isAssistant ? theme.colors.overlay : theme.colors.accentSoft,
-                          borderWidth: 1,
-                          borderColor: isAssistant ? theme.colors.border : theme.colors.accentBorder,
-                        }}
-                      >
-                        <Text
-                          selectable
-                          style={{
-                            color: theme.colors.text,
-                            fontSize: 14,
-                            lineHeight: 20,
-                            fontWeight: isAssistant ? '500' : '600',
-                          }}
-                        >
-                          {message.messageText}
-                        </Text>
+              <BoxPlusIcon color={theme.colors.text} />
+            </Pressable>
+          }
+        />
 
-                        {message.modelName === 'transcribing' ? (
-                          <Text selectable style={{ color: theme.colors.textMuted, fontSize: 11.5, fontWeight: '700' }}>
-                            Voice transcript
-                          </Text>
-                        ) : null}
-
-                        {message.citations.length > 0 ? (
-                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                            {message.citations.map((citation) => (
-                              <View
-                                key={citation.id}
-                                style={{
-                                  borderRadius: 999,
-                                  paddingHorizontal: 10,
-                                  paddingVertical: 6,
-                                  backgroundColor: theme.colors.neutralSoft,
-                                  borderWidth: 1,
-                                  borderColor: theme.colors.border,
-                                }}
-                              >
-                                <Text selectable style={{ color: theme.colors.textMuted, fontSize: 11.5, fontWeight: '700' }}>
-                                  {citation.lectureTitle}
-                                </Text>
-                              </View>
-                            ))}
-                          </View>
-                        ) : null}
-                      </View>
-                    );
-                  })
-                )}
-
-                {retrievedChunks.length > 0 ? (
-                  <View style={{ gap: 8 }}>
-                    <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, fontWeight: '700' }}>
-                      Injected knowledge
-                    </Text>
-                    {retrievedChunks.slice(0, 3).map((chunk) => (
-                      <View
-                        key={chunk.chunkId}
-                        style={{
-                          borderRadius: 16,
-                          padding: 10,
-                          backgroundColor: theme.colors.overlay,
-                          borderWidth: 1,
-                          borderColor: theme.colors.border,
-                        }}
-                      >
-                        <Text selectable style={{ color: theme.colors.text, fontSize: 12.5, fontWeight: '700' }}>
-                          {chunk.lectureTitle}
-                        </Text>
-                        <Text selectable style={{ color: theme.colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 4 }}>
-                          {chunk.content}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-
-                {errorMessage ? (
-                  <Text selectable style={{ color: '#dc2626', fontSize: 12.5, lineHeight: 18 }}>
-                    {errorMessage}
-                  </Text>
-                ) : null}
-              </ScrollView>
-            </View>
-          </View>
-        </BlurView>
-
-        <View style={{ flexDirection: 'row', gap: 12 }}>
-          <Animated.View style={{ flex: talkButtonFlex, minHeight: 64 }}>
+        <Animated.View
+          pointerEvents={visualizerCollapsed || typingMode ? 'none' : 'auto'}
+          style={{
+            flexDirection: 'row',
+            gap: 12,
+            opacity: controlsOpacity,
+            height: visualizerCollapsed || typingMode ? 0 : undefined,
+          }}
+        >
+          <Animated.View
+            style={{
+              flex: talkButtonFlex,
+              minHeight: 64,
+              }}
+          >
             <Animated.View
               pointerEvents="none"
               style={{
@@ -825,66 +1116,132 @@ export default function AiAssistanceRoute() {
               }}
             />
             <Pressable
-            onPressIn={handleTalkPressIn}
-            onPressOut={handleTalkPressOut}
-            disabled={voiceBusy || assistantWaiting}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: 64,
-              borderRadius: 22,
-              borderCurve: 'continuous',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 4,
-              backgroundColor:
-                  talkHoldActive || voiceRecordingActive || assistantWaiting
+              onPressIn={handleTalkPressIn}
+              onPressOut={handleTalkPressOut}
+              disabled={voiceBusy || assistantReplyInFlight}
+              style={({ pressed }) => ({
+                flex: 1,
+                minHeight: 64,
+                borderRadius: 22,
+                borderCurve: 'continuous',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 4,
+                backgroundColor:
+                  talkHoldActive ||
+                  voiceRecordingActive ||
+                  assistantReplyInFlight
                     ? '#b91c1c'
                     : pressed
                       ? theme.colors.accentMuted
                       : theme.colors.accent,
                 boxShadow:
-                  talkHoldActive || voiceRecordingActive || assistantWaiting
+                  talkHoldActive ||
+                  voiceRecordingActive ||
+                  assistantReplyInFlight
                     ? '0 18px 34px rgba(220, 38, 38, 0.26)'
                     : '0 16px 28px rgba(234, 88, 12, 0.18)',
-                opacity: assistantWaiting ? 0.88 : 1,
+                opacity: assistantReplyInFlight ? 0.88 : 1,
               })}
             >
-              <View
+              {assistantReplyInFlight || assistantWaiting ? (
+                <View
+                  style={{
+                    minHeight: 32,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                />
+              ) : (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'flex-end',
+                    justifyContent: 'center',
+                    gap: 4,
+                    minHeight: 32,
+                  }}
+                >
+                  {visualizerBarHeights.map((height, index) => (
+                    <Animated.View
+                      key={`talk-bar-${index}`}
+                      style={{
+                        width: 6,
+                        height,
+                        borderRadius: 999,
+                        backgroundColor: 'rgba(255,255,255,0.92)',
+                        opacity: visualizerBarOpacity,
+                      }}
+                    />
+                  ))}
+                </View>
+              )}
+              <Text
                 style={{
-                  flexDirection: 'row',
-                  alignItems: 'flex-end',
-                  justifyContent: 'center',
-                  gap: 4,
-                  minHeight: 32,
+                  color: theme.colors.accentContrast,
+                  fontSize: 15,
+                  fontWeight: '700',
                 }}
               >
-                {visualizerBarHeights.map((height, index) => (
-                  <Animated.View
-                    key={`talk-bar-${index}`}
-                    style={{
-                      width: 6,
-                      height,
-                      borderRadius: 999,
-                      backgroundColor: 'rgba(255,255,255,0.92)',
-                      opacity: visualizerBarOpacity,
-                    }}
-                  />
-                ))}
-              </View>
-              <Text style={{ color: theme.colors.accentContrast, fontSize: 15, fontWeight: '700' }}>
                 {talkButtonLabel}
               </Text>
             </Pressable>
+            {assistantReplyInFlight || assistantWaiting ? (
+              <Animated.View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  top: 12,
+                  alignSelf: 'center',
+                  width: 28,
+                  height: 28,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transform: [{ rotate: talkOrbitRotation }],
+                }}
+              >
+                <View
+                  style={{
+                    position: 'absolute',
+                    width: 18,
+                    height: 18,
+                    borderRadius: 999,
+                    borderWidth: 5,
+                    borderColor: 'rgb(0 0 0)',
+                  }}
+                />
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: -1,
+                    width: 5,
+                    height: 5,
+                    borderRadius: 999,
+                    backgroundColor: '#000000',
+                  }}
+                />
+              </Animated.View>
+            ) : null}
           </Animated.View>
 
           <Animated.View
-            pointerEvents={talkHoldActive || assistantWaiting ? 'none' : 'auto'}
-            style={{ flex: typeButtonFlex, minHeight: 64, opacity: typeButtonOpacity }}
+            pointerEvents={
+              talkHoldActive || assistantReplyInFlight ? 'none' : 'auto'
+            }
+            style={{
+              flex: typeButtonFlex,
+              minHeight: 64,
+              opacity: typeButtonOpacity,
+            }}
           >
-            {talkHoldActive || assistantWaiting ? (
+            {talkHoldActive || assistantReplyInFlight ? (
               <View style={{ flex: 1 }} />
             ) : (
               <Pressable
+                onPress={() => {
+                  setVisualizerCollapsed(false);
+                  setTypingMode(true);
+                }}
                 style={({ pressed }) => ({
                   flex: 1,
                   minHeight: 64,
@@ -893,38 +1250,416 @@ export default function AiAssistanceRoute() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 4,
-                  backgroundColor: pressed ? theme.colors.neutralBorder : theme.colors.neutralSoft,
-                borderWidth: 1,
-                borderColor: theme.colors.neutralBorder,
-                boxShadow: '0 16px 28px rgba(15, 23, 42, 0.16)',
-              })}
-            >
+                  backgroundColor: pressed
+                    ? theme.colors.neutralBorder
+                    : theme.colors.neutralSoft,
+                  borderWidth: 1,
+                  borderColor: theme.colors.neutralBorder,
+                  boxShadow: '0 16px 28px rgba(15, 23, 42, 0.16)',
+                })}
+              >
                 <Text style={{ fontSize: 20 }}>⌨️</Text>
-                <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '700' }}>
+                <Text
+                  style={{
+                    color: theme.colors.text,
+                    fontSize: 15,
+                    fontWeight: '700',
+                  }}
+                >
                   Type
                 </Text>
               </Pressable>
             )}
           </Animated.View>
-        </View>
+        </Animated.View>
+
+        <Animated.View
+          pointerEvents={visualizerCollapsed || typingMode ? 'auto' : 'none'}
+          style={{
+            opacity: composerOpacity,
+            height: visualizerCollapsed || typingMode ? undefined : 0,
+            transform: [
+              {
+                translateY: composerOpacity.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [12, 0],
+                }),
+              },
+            ],
+          }}
+        >
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'flex-end',
+              gap: 10,
+              borderRadius: 24,
+              borderCurve: 'continuous',
+              padding: 10,
+              backgroundColor: theme.colors.overlay,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              boxShadow: '0 16px 28px rgba(15, 23, 42, 0.12)',
+            }}
+          >
+            <TextInput
+              value={composerText}
+              onChangeText={setComposerText}
+              placeholder="Type to Loki..."
+              placeholderTextColor={theme.colors.inputPlaceholder}
+              editable={!composerBusy && !assistantReplyInFlight}
+              multiline
+              style={{
+                flex: 1,
+                minHeight: 46,
+                maxHeight: 120,
+                borderRadius: 18,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                backgroundColor: theme.colors.inputBackground,
+                borderWidth: 1,
+                borderColor: theme.colors.inputBorder,
+                color: theme.colors.text,
+                fontSize: 15,
+                textAlignVertical: 'top',
+              }}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                typingMode ? 'Close typing mode' : 'Restore full Loki view'
+              }
+              onPress={() => {
+                setTypingMode(false);
+                setVisualizerCollapsed(false);
+              }}
+              style={({ pressed }) => ({
+                width: 46,
+                height: 46,
+                borderRadius: 999,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: pressed
+                  ? theme.colors.cardMuted
+                  : theme.colors.neutralSoft,
+                borderWidth: 1,
+                borderColor: theme.colors.neutralBorder,
+              })}
+            >
+              <Text
+                style={{
+                  color: theme.colors.text,
+                  fontSize: 20,
+                  fontWeight: '700',
+                }}
+              >
+                ×
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Send message to Loki"
+              disabled={
+                composerBusy ||
+                assistantReplyInFlight ||
+                composerText.trim().length === 0
+              }
+              onPress={() => {
+                void handleSendText();
+              }}
+              style={({ pressed }) => ({
+                minWidth: 72,
+                minHeight: 46,
+                borderRadius: 18,
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingHorizontal: 16,
+                backgroundColor:
+                  composerBusy ||
+                  assistantReplyInFlight ||
+                  composerText.trim().length === 0
+                    ? theme.colors.neutralBorder
+                    : pressed
+                      ? theme.colors.accentMuted
+                      : theme.colors.accent,
+              })}
+            >
+              <Text
+                style={{
+                  color:
+                    composerBusy ||
+                    assistantReplyInFlight ||
+                    composerText.trim().length === 0
+                      ? theme.colors.textMuted
+                      : theme.colors.accentContrast,
+                  fontSize: 15,
+                  fontWeight: '700',
+                }}
+              >
+                Send
+              </Text>
+            </Pressable>
+          </View>
+        </Animated.View>
       </ScrollView>
     </>
   );
 }
 
-function createPendingMessage(role: RemoteLokiMessage['role'], messageText: string): RemoteLokiMessage {
+function createPendingMessage(
+  role: RemoteLokiMessage['role'],
+  messageText: string,
+  options: { source?: 'typed' | 'voice' } = {}
+): RemoteLokiMessage {
   return {
     id: `pending-${role}-${Date.now()}`,
     role,
     messageText,
-    modelName: role === 'user' ? 'transcribing' : null,
+    modelName: role === 'user' && options.source === 'voice' ? 'transcribing' : null,
     promptTokens: null,
     completionTokens: null,
     totalTokens: null,
     retrievalMetadata: null,
+    hasQuiz: false,
+    quizId: null,
+    quizTitle: null,
+    hasFlashcards: false,
+    flashcardSetId: null,
+    flashcardTitle: null,
     createdAt: new Date().toISOString(),
     citations: [],
   };
+}
+
+function createProgressMessage(jobId: string, event: RemoteLokiReplyJobEvent): RemoteLokiMessage {
+  return {
+    id: `progress-${jobId}-${event.sequenceNumber}`,
+    role: 'assistant',
+    messageText: event.message,
+    modelName: 'progress',
+    promptTokens: null,
+    completionTokens: null,
+    totalTokens: null,
+    retrievalMetadata: {
+      kind: 'reply_job_progress',
+      jobId,
+      eventType: event.eventType,
+      sequenceNumber: event.sequenceNumber,
+    },
+    hasQuiz: false,
+    quizId: null,
+    quizTitle: null,
+    hasFlashcards: false,
+    flashcardSetId: null,
+    flashcardTitle: null,
+    createdAt: event.createdAt,
+    citations: [],
+  };
+}
+
+function mergeFinalAssistantMessage(
+  message: RemoteLokiMessage,
+  completedMetadata: RemoteLokiReplyJobCompletedMetadata,
+  events: RemoteLokiReplyJobEvent[]
+): RemoteLokiMessage {
+  const eventAttachments = readAttachmentMetadataFromEvents(events);
+  const hasQuiz = message.hasQuiz || completedMetadata.hasQuiz || eventAttachments.hasQuiz;
+  const quizId = message.quizId ?? completedMetadata.quizId ?? eventAttachments.quizId ?? null;
+  const quizTitle = message.quizTitle ?? completedMetadata.quizTitle ?? eventAttachments.quizTitle ?? null;
+  const hasFlashcards =
+    message.hasFlashcards || completedMetadata.hasFlashcards || eventAttachments.hasFlashcards;
+  const flashcardSetId =
+    message.flashcardSetId ?? completedMetadata.flashcardSetId ?? eventAttachments.flashcardSetId ?? null;
+  const flashcardTitle =
+    message.flashcardTitle ?? completedMetadata.flashcardTitle ?? eventAttachments.flashcardTitle ?? null;
+
+  return {
+    ...message,
+    retrievalMetadata: mergeAttachmentDataIntoRetrievalMetadata(message.retrievalMetadata, {
+      hasQuiz,
+      quizId,
+      quizTitle,
+      hasFlashcards,
+      flashcardSetId,
+      flashcardTitle,
+    }),
+    hasQuiz,
+    quizId,
+    quizTitle,
+    hasFlashcards,
+    flashcardSetId,
+    flashcardTitle,
+  };
+}
+
+function mergeSessionMessagesWithHydratedLocalMessages(
+  remoteMessages: RemoteLokiMessage[],
+  currentMessages: RemoteLokiMessage[]
+) {
+  const currentById = new Map(currentMessages.map((message) => [message.id, message]));
+  const remoteMessageIds = new Set(remoteMessages.map((message) => message.id));
+
+  const mergedRemoteMessages = remoteMessages.map((remoteMessage) => {
+    const currentMessage = currentById.get(remoteMessage.id);
+
+    if (!currentMessage) {
+      return remoteMessage;
+    }
+
+    return {
+      ...remoteMessage,
+      retrievalMetadata: mergeAttachmentDataIntoRetrievalMetadata(
+        remoteMessage.retrievalMetadata ?? currentMessage.retrievalMetadata,
+        {
+          hasQuiz: remoteMessage.hasQuiz || currentMessage.hasQuiz,
+          quizId: remoteMessage.quizId ?? currentMessage.quizId ?? null,
+          quizTitle: remoteMessage.quizTitle ?? currentMessage.quizTitle ?? null,
+          hasFlashcards: remoteMessage.hasFlashcards || currentMessage.hasFlashcards,
+          flashcardSetId: remoteMessage.flashcardSetId ?? currentMessage.flashcardSetId ?? null,
+          flashcardTitle: remoteMessage.flashcardTitle ?? currentMessage.flashcardTitle ?? null,
+        }
+      ),
+      hasQuiz: remoteMessage.hasQuiz || currentMessage.hasQuiz,
+      quizId: remoteMessage.quizId ?? currentMessage.quizId ?? null,
+      quizTitle: remoteMessage.quizTitle ?? currentMessage.quizTitle ?? null,
+      hasFlashcards: remoteMessage.hasFlashcards || currentMessage.hasFlashcards,
+      flashcardSetId: remoteMessage.flashcardSetId ?? currentMessage.flashcardSetId ?? null,
+      flashcardTitle: remoteMessage.flashcardTitle ?? currentMessage.flashcardTitle ?? null,
+    };
+  });
+
+  const localOnlyMessages = currentMessages.filter((message) => !remoteMessageIds.has(message.id));
+
+  if (localOnlyMessages.length === 0) {
+    return mergedRemoteMessages;
+  }
+
+  return [...mergedRemoteMessages, ...localOnlyMessages].sort(compareMessagesByCreatedAt);
+}
+
+function compareMessagesByCreatedAt(left: RemoteLokiMessage, right: RemoteLokiMessage) {
+  const leftTime = Date.parse(left.createdAt);
+  const rightTime = Date.parse(right.createdAt);
+
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+    return leftTime - rightTime;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function logLokiAttachmentDebug(label: string, payload: unknown) {
+  if (!ENABLE_LOKI_ATTACHMENT_DEBUG) {
+    return;
+  }
+
+  try {
+    console.log(`[loki-attachment-debug] ${label}`, JSON.stringify(payload, null, 2));
+  } catch (error) {
+    console.log(`[loki-attachment-debug] ${label}`, payload, error);
+  }
+}
+
+function mergeAttachmentDataIntoRetrievalMetadata(
+  retrievalMetadata: RemoteLokiMessage['retrievalMetadata'],
+  attachments: {
+    hasQuiz: boolean;
+    quizId: string | null;
+    quizTitle: string | null;
+    hasFlashcards: boolean;
+    flashcardSetId: string | null;
+    flashcardTitle: string | null;
+  }
+) {
+  const metadata =
+    retrievalMetadata && typeof retrievalMetadata === 'object' && !Array.isArray(retrievalMetadata)
+      ? { ...(retrievalMetadata as Record<string, unknown>) }
+      : {};
+
+  if (attachments.hasQuiz && attachments.quizId) {
+    metadata.quiz = {
+      hasQuiz: true,
+      quizId: attachments.quizId,
+      quizTitle: attachments.quizTitle,
+    };
+  }
+
+  if (attachments.hasFlashcards && attachments.flashcardSetId) {
+    metadata.flashcards = {
+      hasFlashcards: true,
+      flashcardSetId: attachments.flashcardSetId,
+      flashcardTitle: attachments.flashcardTitle,
+    };
+  }
+
+  return metadata;
+}
+
+function readAttachmentMetadataFromEvents(events: RemoteLokiReplyJobEvent[]) {
+  let quizId: string | null = null;
+  let quizTitle: string | null = null;
+  let flashcardSetId: string | null = null;
+  let flashcardTitle: string | null = null;
+
+  for (const event of events) {
+    if (!event.metadata || typeof event.metadata !== 'object' || Array.isArray(event.metadata)) {
+      continue;
+    }
+
+    const metadata = event.metadata as Record<string, unknown>;
+
+    if (event.eventType === 'quiz_generation_completed') {
+      if (typeof metadata.quizId === 'string' && metadata.quizId.length > 0) {
+        quizId = metadata.quizId;
+      }
+
+      if (typeof metadata.quizTitle === 'string' && metadata.quizTitle.trim().length > 0) {
+        quizTitle = metadata.quizTitle.trim();
+      }
+    }
+
+    if (event.eventType === 'flashcards_generation_completed') {
+      if (typeof metadata.flashcardSetId === 'string' && metadata.flashcardSetId.length > 0) {
+        flashcardSetId = metadata.flashcardSetId;
+      }
+
+      if (typeof metadata.flashcardTitle === 'string' && metadata.flashcardTitle.trim().length > 0) {
+        flashcardTitle = metadata.flashcardTitle.trim();
+      }
+    }
+  }
+
+  return {
+    hasQuiz: Boolean(quizId),
+    quizId,
+    quizTitle,
+    hasFlashcards: Boolean(flashcardSetId),
+    flashcardSetId,
+    flashcardTitle,
+  };
+}
+
+function waitForDuration(milliseconds: number, abortSignal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, milliseconds);
+
+    const handleAbort = () => {
+      cleanup();
+      reject(new Error('The request was cancelled.'));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      abortSignal?.removeEventListener('abort', handleAbort);
+    };
+
+    if (abortSignal) {
+      abortSignal.addEventListener('abort', handleAbort, { once: true });
+    }
+  });
 }
 
 function inferAudioFilename(recordingUri: string) {
@@ -953,4 +1688,278 @@ function inferAudioMimeType(recordingUri: string) {
   }
 
   return 'audio/mp4';
+}
+
+
+function BoxPlusIcon({ color }: { color: string }) {
+  return (
+    <View
+      style={{
+        width: 18,
+        height: 18,
+        borderRadius: 4,
+        borderWidth: 1.7,
+        borderColor: color,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <View
+        style={{
+          position: 'absolute',
+          width: 8,
+          height: 1.7,
+          borderRadius: 999,
+          backgroundColor: color,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          width: 1.7,
+          height: 8,
+          borderRadius: 999,
+          backgroundColor: color,
+        }}
+      />
+    </View>
+  );
+}
+
+function VisualizerToggleBadge({ collapsed }: { collapsed: boolean }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: 999,
+          backgroundColor: '#fb923c',
+        }}
+      />
+      <View>
+        <View
+          style={{
+            width: 40,
+            height: 6,
+            borderRadius: 999,
+            backgroundColor: 'rgba(255, 237, 213, 0.74)',
+          }}
+        />
+        <View
+          style={{
+            width: 24,
+            height: 4,
+            borderRadius: 999,
+            marginTop: 4,
+            backgroundColor: 'rgba(255, 237, 213, 0.24)',
+          }}
+        />
+      </View>
+      <ExpandCollapseIcon collapsed={collapsed} />
+    </View>
+  );
+}
+
+function ExpandCollapseIcon({ collapsed }: { collapsed: boolean }) {
+  const color = '#fdba74';
+
+  if (collapsed) {
+    return (
+      <View style={{ width: 16, height: 16, alignItems: 'center', justifyContent: 'center' }}>
+        <View
+          style={{
+            position: 'absolute',
+            top: 2,
+            left: 2,
+            width: 4,
+            height: 4,
+            borderTopWidth: 1.6,
+            borderLeftWidth: 1.6,
+            borderColor: color,
+          }}
+        />
+        <View
+          style={{
+            position: 'absolute',
+            top: 2,
+            right: 2,
+            width: 4,
+            height: 4,
+            borderTopWidth: 1.6,
+            borderRightWidth: 1.6,
+            borderColor: color,
+          }}
+        />
+        <View
+          style={{
+            position: 'absolute',
+            bottom: 2,
+            left: 2,
+            width: 4,
+            height: 4,
+            borderBottomWidth: 1.6,
+            borderLeftWidth: 1.6,
+            borderColor: color,
+          }}
+        />
+        <View
+          style={{
+            position: 'absolute',
+            bottom: 2,
+            right: 2,
+            width: 4,
+            height: 4,
+            borderBottomWidth: 1.6,
+            borderRightWidth: 1.6,
+            borderColor: color,
+          }}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ width: 16, height: 16 }}>
+      <View
+        style={{
+          position: 'absolute',
+          top: 4,
+          left: 4,
+          width: 5,
+          height: 5,
+          borderTopWidth: 1.6,
+          borderLeftWidth: 1.6,
+          borderColor: color,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          top: 4,
+          right: 4,
+          width: 5,
+          height: 5,
+          borderTopWidth: 1.6,
+          borderRightWidth: 1.6,
+          borderColor: color,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          bottom: 4,
+          left: 4,
+          width: 5,
+          height: 5,
+          borderBottomWidth: 1.6,
+          borderLeftWidth: 1.6,
+          borderColor: color,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          bottom: 4,
+          right: 4,
+          width: 5,
+          height: 5,
+          borderBottomWidth: 1.6,
+          borderRightWidth: 1.6,
+          borderColor: color,
+        }}
+      />
+    </View>
+  );
+}
+
+function SpeakerToggleIcon({ muted }: { muted: boolean }) {
+  return (
+    <View style={{ width: 18, height: 18, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          position: 'absolute',
+          left: 1,
+          width: 5,
+          height: 8,
+          borderTopLeftRadius: 2,
+          borderBottomLeftRadius: 2,
+          backgroundColor: muted ? '#fca5a5' : '#fb923c',
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          left: 5,
+          width: 0,
+          height: 0,
+          borderTopWidth: 5,
+          borderBottomWidth: 5,
+          borderLeftWidth: 8,
+          borderTopColor: 'transparent',
+          borderBottomColor: 'transparent',
+          borderLeftColor: muted ? '#fca5a5' : '#fb923c',
+        }}
+      />
+      {muted ? (
+        <>
+          <View
+            style={{
+              position: 'absolute',
+              right: 1,
+              width: 10,
+              height: 1.8,
+              borderRadius: 999,
+              backgroundColor: '#fca5a5',
+              transform: [{ rotate: '45deg' }],
+            }}
+          />
+          <View
+            style={{
+              position: 'absolute',
+              right: 1,
+              width: 10,
+              height: 1.8,
+              borderRadius: 999,
+              backgroundColor: '#fca5a5',
+              transform: [{ rotate: '-45deg' }],
+            }}
+          />
+        </>
+      ) : (
+        <>
+          <View
+            style={{
+              position: 'absolute',
+              right: 2,
+              width: 4,
+              height: 4,
+              borderTopWidth: 1.6,
+              borderRightWidth: 1.6,
+              borderColor: '#fdba74',
+              borderLeftWidth: 0,
+              borderBottomWidth: 0,
+              borderTopRightRadius: 6,
+              transform: [{ rotate: '45deg' }],
+            }}
+          />
+          <View
+            style={{
+              position: 'absolute',
+              right: -1,
+              width: 8,
+              height: 8,
+              borderTopWidth: 1.6,
+              borderRightWidth: 1.6,
+              borderColor: '#fdba74',
+              borderLeftWidth: 0,
+              borderBottomWidth: 0,
+              borderTopRightRadius: 8,
+              transform: [{ rotate: '45deg' }],
+            }}
+          />
+        </>
+      )}
+    </View>
+  );
 }
