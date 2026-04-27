@@ -1,22 +1,17 @@
 FROM node:20-bookworm-slim
 
-WORKDIR /workspace
-
-ENV HOST=0.0.0.0
-
-
-COPY package.json package-lock.json ./
-COPY nx.json tsconfig.base.json tsconfig.json ./
-COPY apps/api ./apps/api
-COPY packages ./packages
-COPY tools ./tools
-COPY .npmrc .nvmrc ./
-
-RUN npm ci
-RUN npx nx sync
-RUN npx nx run api:build:production
+WORKDIR /app
 
 ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+
+# Only copy built output + minimal deps
+COPY dist/apps/api ./dist
+COPY package.json package-lock.json ./
+
+# Install ONLY production deps
+RUN npm ci --omit=dev
 
 EXPOSE 8080
-CMD ["node", "apps/api/dist/main.js"]
+
+CMD ["node", "dist/main.js"]
