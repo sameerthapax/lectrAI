@@ -20,5 +20,5 @@ apiRouter.use('/lectures', lecturesRouter);
 apiRouter.use('/quizzes', quizzesRouter);
 apiRouter.use('/flashcards', flashcardsRouter);
 apiRouter.use('/chat', chatRouter);
-//exporter
+
 export { apiRouter };
