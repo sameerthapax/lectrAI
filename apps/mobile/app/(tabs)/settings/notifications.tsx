@@ -15,10 +15,7 @@ export default function SettingsNotificationsRoute() {
   }
 
   return (
-    <SettingsScreen
-      title="Notifications"
-      subtitle="Choose which updates LectrAI should surface while you study."
-    >
+    <SettingsScreen subtitle="Choose which updates LectrAI should surface while you study.">
       <SectionCard
         title="Notification Preferences"
       >

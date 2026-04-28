@@ -24,6 +24,19 @@ export type RemoteLokiCitation = {
   citedText: string | null;
 };
 
+export type RemoteLokiResearchPaper = {
+  title: string;
+  url: string;
+  source: string | null;
+  summary: string | null;
+};
+
+export type RemoteLokiResearchAttachment = {
+  hasResearch: boolean;
+  topic: string | null;
+  papers: RemoteLokiResearchPaper[];
+};
+
 export type RemoteLokiMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -138,6 +151,7 @@ export type RemoteLokiReplyJobEvent = {
   jobId: string;
   eventType:
     | 'retrieving_lecture'
+    | 'research_searching'
     | 'quiz_generation_completed'
     | 'flashcards_generation_completed'
     | 'completed'

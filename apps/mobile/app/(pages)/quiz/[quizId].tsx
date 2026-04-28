@@ -1,5 +1,5 @@
 import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import LottieView from 'lottie-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
@@ -8,7 +8,6 @@ import quickQuizAnimation from '../../../assets/animations/quick-quiz.json';
 import buttonPressSoundFx from '../../../assets/animations/soundfx/button-press-soundfx.mp3';
 import poppingAnimationSoundFx from '../../../assets/animations/soundfx/popping-animation-soundfx.mp3';
 import { getResponsiveStudyLayout } from '../../../components/study/responsive-study-layout';
-import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAuth } from '../../../providers/auth-provider';
 import { useSettings } from '../../../providers/settings-provider';
 import {
@@ -30,7 +29,6 @@ export default function QuizDetailRoute() {
   const theme = settingsState.theme;
   const { width: screenWidth } = useWindowDimensions();
   const auth = useAuth();
-  const router = useRouter();
   const { quizId } = useLocalSearchParams<{ quizId?: string }>();
   const [quiz, setQuiz] = useState<RemoteStoredQuizRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -264,10 +262,7 @@ export default function QuizDetailRoute() {
   };
 
   return (
-    <>
-      <Stack.Screen options={{ headerShown: false }} />
-
-      <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
           style={{ backgroundColor: theme.colors.screen }}
@@ -281,28 +276,18 @@ export default function QuizDetailRoute() {
         >
           <View
             style={{
-              flexDirection: 'row',
+              alignSelf: 'flex-end',
+              minWidth: 72,
+              borderRadius: 999,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
               alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 12,
+              backgroundColor: theme.colors.accentSoft,
             }}
           >
-            <NativeBackButton theme={theme} onPress={() => router.back()} />
-
-            <View
-              style={{
-                minWidth: 72,
-                borderRadius: 999,
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                alignItems: 'center',
-                backgroundColor: theme.colors.accentSoft,
-              }}
-            >
-              <Text style={{ color: theme.colors.accentMuted, fontSize: 12, fontWeight: '800' }}>
-                {quiz ? `${answeredCount}/${questionCount}` : 'Quiz'}
-              </Text>
-            </View>
+            <Text style={{ color: theme.colors.accentMuted, fontSize: 12, fontWeight: '800' }}>
+              {quiz ? `${answeredCount}/${questionCount}` : 'Quiz'}
+            </Text>
           </View>
 
           <View
@@ -646,7 +631,6 @@ export default function QuizDetailRoute() {
           </View>
         ) : null}
       </View>
-    </>
   );
 }
 

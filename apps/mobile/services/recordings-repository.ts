@@ -1,4 +1,6 @@
+import type { DocumentPickerAsset } from 'expo-document-picker';
 import { Directory, File, Paths } from 'expo-file-system';
+import { createAudioPlayer } from 'expo-audio';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { AuthUser } from './auth-api';
 import { NO_CLASS_COURSE_ID } from './courses-repository';
@@ -80,9 +82,13 @@ type SaveRecordedLectureInput = {
   courseName: string;
   durationMillis: number;
   recordingUri?: string;
+  lectureTitle?: string;
+  originalFilename?: string;
+  onStatusChange?: (message: string) => void;
   recordingChunks?: Array<{
     localUri: string;
     durationMillis: number;
+    chunkUploadMode?: 'transcribe' | 'assemble_only';
   }>;
 };
 
@@ -109,9 +115,12 @@ type PreparedRecordingChunk = {
   mimeType: string;
   fileSizeBytes: number;
   localUri: string;
+  chunkUploadMode: 'transcribe' | 'assemble_only';
 };
 
 const AUDIO_BUCKET_NAME_FALLBACK = 'lecture-audio';
+const DIRECT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+const IMPORTED_UPLOAD_PART_BYTES = 24 * 1024 * 1024;
 
 export async function saveRecordedLecture(input: SaveRecordedLectureInput) {
   if (input.courseId === NO_CLASS_COURSE_ID) {
@@ -119,9 +128,15 @@ export async function saveRecordedLecture(input: SaveRecordedLectureInput) {
   }
 
   const prepared = await prepareRecordingForStorage(input);
+  input.onStatusChange?.('Saving lecture locally...');
   await insertLocalRecording(input, prepared);
 
   try {
+    input.onStatusChange?.(
+      prepared.chunkFiles.length > 1
+        ? `Uploading ${prepared.chunkFiles.length} audio parts...`
+        : 'Uploading lecture audio...'
+    );
     const uploadResult = await syncRecordingToApi(input, prepared);
     await markRecordingSyncSucceeded(prepared);
 
@@ -140,6 +155,61 @@ export async function saveRecordedLecture(input: SaveRecordedLectureInput) {
   }
 
   return getLectureRecording(prepared.lectureId);
+}
+
+export async function saveImportedLectureAudio(input: {
+  user: AuthUser;
+  accessToken: string | null;
+  courseId: string;
+  courseName: string;
+  asset: DocumentPickerAsset;
+  lectureTitle?: string;
+  onStatusChange?: (message: string) => void;
+}) {
+  const sourceFile = new File(input.asset.uri);
+  const sourceInfo = sourceFile.info();
+  const originalFilename = sanitizeFilename(input.asset.name ?? 'lecture-audio.m4a');
+  const fileSizeBytes = sourceInfo.size ?? input.asset.size ?? 0;
+
+  if (!isSupportedImportedAudio(input.asset, originalFilename)) {
+    throw new Error('Choose an audio file to import as a stored lecture.');
+  }
+
+  input.onStatusChange?.('Reading audio metadata...');
+  const durationMillis = await resolveImportedAudioDurationMillis(input.asset.uri);
+
+  if (fileSizeBytes <= DIRECT_UPLOAD_MAX_BYTES) {
+    return saveRecordedLecture({
+      user: input.user,
+      accessToken: input.accessToken,
+      courseId: input.courseId,
+      courseName: input.courseName,
+      durationMillis,
+      recordingUri: input.asset.uri,
+      lectureTitle: input.lectureTitle,
+      originalFilename,
+      onStatusChange: input.onStatusChange,
+    });
+  }
+
+  input.onStatusChange?.('Large file detected. Splitting audio for upload...');
+  const chunkFiles = await createImportedLectureParts({
+    recordingUri: input.asset.uri,
+    originalFilename,
+    durationMillis,
+  });
+
+  return saveRecordedLecture({
+    user: input.user,
+    accessToken: input.accessToken,
+    courseId: input.courseId,
+    courseName: input.courseName,
+    durationMillis,
+    lectureTitle: input.lectureTitle,
+    originalFilename,
+    onStatusChange: input.onStatusChange,
+    recordingChunks: chunkFiles,
+  });
 }
 
 export async function getLectureRecording(lectureId: string) {
@@ -396,6 +466,8 @@ async function insertLocalRecording(input: SaveRecordedLectureInput, prepared: P
   await runSerializedLocalWrite(async (db) => {
     await db.withTransactionAsync(async () => {
       await ensureLocalUser(db, input.user);
+      const lectureNumber = await readNextLectureNumber(db, input.courseId);
+      const lectureDate = toLectureDate(prepared.recordedAt);
 
       await db.runAsync(
         `INSERT INTO cached_lectures (
@@ -403,6 +475,8 @@ async function insertLocalRecording(input: SaveRecordedLectureInput, prepared: P
            course_id,
            created_by_user_id,
            title,
+           lecture_number,
+           lecture_date,
            source_type,
            status,
            duration_seconds,
@@ -413,12 +487,14 @@ async function insertLocalRecording(input: SaveRecordedLectureInput, prepared: P
            sync_status,
            dirty_fields_json,
            last_synced_at
-         ) VALUES (?, ?, ?, ?, 'recorded', 'uploading', ?, 'en', ?, ?, ?, 'pending_push', ?, CURRENT_TIMESTAMP)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, 'recorded', 'uploading', ?, 'en', ?, ?, ?, 'pending_push', ?, CURRENT_TIMESTAMP)`,
         [
           prepared.lectureId,
           input.courseId,
           input.user.id,
           prepared.title,
+          lectureNumber,
+          lectureDate,
           prepared.durationSeconds,
           prepared.recordedAt,
           prepared.recordedAt,
@@ -508,6 +584,11 @@ async function syncRecordingToApi(input: SaveRecordedLectureInput, prepared: Pre
     let lastChunkResult: RemoteLectureChunkUploadResult | null = null;
 
     for (const chunk of prepared.chunkFiles) {
+      input.onStatusChange?.(
+        prepared.chunkFiles.length > 1
+          ? `Uploading part ${chunk.chunkIndex + 1} of ${prepared.chunkFiles.length}...`
+          : 'Uploading lecture audio...'
+      );
       const recordingFile = new File(chunk.localUri);
       lastChunkResult = await uploadLectureChunk(
         prepared.lectureId,
@@ -520,10 +601,14 @@ async function syncRecordingToApi(input: SaveRecordedLectureInput, prepared: Pre
           expectedChunkCount: prepared.chunkFiles.length,
           chunkIndex: chunk.chunkIndex,
           chunkDurationSeconds: chunk.durationSeconds,
-          originalFilename: chunk.originalFilename,
+          originalFilename:
+            chunk.chunkUploadMode === 'assemble_only'
+              ? prepared.originalFilename
+              : chunk.originalFilename,
           mimeType: chunk.mimeType,
           fileSizeBytes: chunk.fileSizeBytes,
           audioBase64: await recordingFile.base64(),
+          chunkUploadMode: chunk.chunkUploadMode,
         },
         input.accessToken
       );
@@ -531,10 +616,12 @@ async function syncRecordingToApi(input: SaveRecordedLectureInput, prepared: Pre
 
     prepared.bucketName = lastChunkResult?.audioFile.bucketName ?? AUDIO_BUCKET_NAME_FALLBACK;
     prepared.objectPath = '';
+    input.onStatusChange?.('Finishing lecture processing...');
     return lastChunkResult;
   }
 
   const recordingFile = new File(prepared.localUri);
+  input.onStatusChange?.('Uploading lecture audio...');
   const uploadResult = await uploadLectureRecording(
     {
       lectureId: prepared.lectureId,
@@ -553,6 +640,7 @@ async function syncRecordingToApi(input: SaveRecordedLectureInput, prepared: Pre
 
   prepared.bucketName = uploadResult.audioFile.bucketName;
   prepared.objectPath = uploadResult.audioFile.objectPath;
+  input.onStatusChange?.('Starting lecture processing...');
   return uploadResult;
 }
 
@@ -757,9 +845,9 @@ async function prepareRecordingForStorage(input: SaveRecordedLectureInput): Prom
       sourceChunks.reduce((totalDuration, chunk) => totalDuration + Math.max(0, chunk.durationMillis), 0) / 1000
     )
   );
-  const extension = normalizeExtension(sourceChunks[0]?.localUri ?? '.m4a');
-  const originalFilename = `lecture-recording${extension}`;
-  const title = buildLectureTitle(input.courseName, recordedAt);
+  const extension = normalizeExtension(input.originalFilename ?? sourceChunks[0]?.localUri ?? '.m4a');
+  const originalFilename = sanitizeFilename(input.originalFilename ?? `lecture-recording${extension}`);
+  const title = input.lectureTitle?.trim() || buildLectureTitle(input.courseName, recordedAt);
   const recordingsDirectory = new Directory(Paths.document, 'recordings', input.user.id, lectureId);
 
   recordingsDirectory.create({
@@ -774,25 +862,14 @@ async function prepareRecordingForStorage(input: SaveRecordedLectureInput): Prom
   const chunkFiles =
     input.recordingChunks && input.recordingChunks.length > 0
       ? copyPreparedChunks(sourceChunks, recordingsDirectory)
-      : primaryRecordingFile
-        ? [
-            {
-              chunkIndex: 0,
-              durationSeconds,
-              originalFilename: `chunk-0000${extension}`,
-              mimeType: getMimeTypeForExtension(extension),
-              fileSizeBytes: primaryRecordingFile.info().size ?? 0,
-              localUri: primaryRecordingFile.uri,
-            },
-          ]
-        : [];
+      : [];
 
   const primaryRecordingInfo = primaryRecordingFile?.info();
   const mimeType =
     primaryRecordingFile
       ? getMimeTypeForExtension(extension)
       : chunkFiles[0]?.mimeType ?? 'audio/mp4';
-  const localUri = primaryRecordingFile?.uri ?? chunkFiles[0]?.localUri ?? '';
+  const localUri = primaryRecordingFile?.uri ?? '';
   const fileSizeBytes =
     primaryRecordingInfo?.size ??
     chunkFiles.reduce((totalBytes, chunk) => totalBytes + chunk.fileSizeBytes, 0);
@@ -826,6 +903,7 @@ function copyPreparedChunks(
   sourceChunks: Array<{
     localUri: string;
     durationMillis: number;
+    chunkUploadMode?: 'transcribe' | 'assemble_only';
   }>,
   recordingsDirectory: Directory
 ) {
@@ -841,10 +919,10 @@ function copyPreparedChunks(
       chunkIndex,
       durationSeconds: Math.max(1, Math.round(chunk.durationMillis / 1000)),
       originalFilename: chunkFilename,
-      mimeType:
-        chunkExtension === '.wav' ? 'audio/wav' : chunkExtension === '.caf' ? 'audio/x-caf' : 'audio/mp4',
+      mimeType: getMimeTypeForExtension(chunkExtension),
       fileSizeBytes: fileInfo.size ?? 0,
       localUri: destinationFile.uri,
+      chunkUploadMode: chunk.chunkUploadMode ?? 'transcribe',
     };
   });
 }
@@ -872,7 +950,110 @@ function getMimeTypeForExtension(extension: string) {
     return 'audio/x-caf';
   }
 
+  if (extension === '.mp3') {
+    return 'audio/mpeg';
+  }
+
+  if (extension === '.aac') {
+    return 'audio/aac';
+  }
+
+  if (extension === '.webm') {
+    return 'audio/webm';
+  }
+
+  if (extension === '.ogg') {
+    return 'audio/ogg';
+  }
+
   return 'audio/mp4';
+}
+
+function isSupportedImportedAudio(asset: DocumentPickerAsset, originalFilename: string) {
+  if (asset.mimeType?.toLowerCase().startsWith('audio/')) {
+    return true;
+  }
+
+  const extension = normalizeExtension(originalFilename);
+  return ['.m4a', '.mp4', '.mp3', '.wav', '.aac', '.caf', '.webm', '.ogg'].includes(extension);
+}
+
+async function resolveImportedAudioDurationMillis(recordingUri: string) {
+  const player = createAudioPlayer({ uri: recordingUri }, { updateInterval: 100 });
+
+  try {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const status = player.currentStatus;
+
+      if (status.isLoaded && Number.isFinite(status.duration) && status.duration > 0) {
+        return Math.max(1000, Math.round(status.duration * 1000));
+      }
+
+      await wait(100);
+    }
+  } finally {
+    player.release();
+  }
+
+  return 1000;
+}
+
+async function createImportedLectureParts(input: {
+  recordingUri: string;
+  originalFilename: string;
+  durationMillis: number;
+}) {
+  const sourceFile = new File(input.recordingUri);
+  const fileInfo = sourceFile.info();
+  const totalBytes = fileInfo.size ?? 0;
+
+  if (totalBytes <= 0) {
+    throw new Error('The selected audio file could not be read.');
+  }
+
+  const extension = normalizeExtension(input.originalFilename);
+  const chunkCount = Math.max(1, Math.ceil(totalBytes / IMPORTED_UPLOAD_PART_BYTES));
+  const baseDurationMillis = Math.floor(input.durationMillis / chunkCount);
+  const remainderDurationMillis = Math.max(0, input.durationMillis - baseDurationMillis * chunkCount);
+  const cacheDirectory = new Directory(Paths.cache, 'lecture-import-parts');
+
+  cacheDirectory.create({
+    idempotent: true,
+    intermediates: true,
+  });
+
+  const parts: Array<{
+    localUri: string;
+    durationMillis: number;
+    chunkUploadMode: 'assemble_only';
+  }> = [];
+
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const start = chunkIndex * IMPORTED_UPLOAD_PART_BYTES;
+    const end = Math.min(totalBytes, start + IMPORTED_UPLOAD_PART_BYTES);
+    const chunkBytes = new Uint8Array(await sourceFile.slice(start, end).arrayBuffer());
+    const chunkFile = new File(
+      cacheDirectory,
+      `${createUuid()}-${String(chunkIndex).padStart(4, '0')}${extension}`
+    );
+
+    chunkFile.write(chunkBytes);
+
+    parts.push({
+      localUri: chunkFile.uri,
+      durationMillis:
+        baseDurationMillis + (chunkIndex === chunkCount - 1 ? remainderDurationMillis : 0),
+      chunkUploadMode: 'assemble_only',
+    });
+  }
+
+  return parts;
+}
+
+function wait(durationMs: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
 }
 
 function sanitizeFilename(filename: string) {
@@ -935,6 +1116,29 @@ async function ensureLocalUser(
       JSON.stringify([]),
     ]
   );
+}
+
+async function readNextLectureNumber(
+  db: Awaited<ReturnType<typeof initializeLocalDatabase>>,
+  courseId: string
+) {
+  const row = await db.getFirstAsync<{ lecture_number: number | null }>(
+    `SELECT MAX(lecture_number) AS lecture_number
+     FROM cached_lectures
+     WHERE course_id = ?`,
+    [courseId]
+  );
+
+  return Math.max(1, (row?.lecture_number ?? 0) + 1);
+}
+
+function toLectureDate(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
 }
 
 type RecordingRow = {

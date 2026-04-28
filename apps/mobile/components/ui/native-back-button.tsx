@@ -8,37 +8,26 @@ export function NativeBackButton({
   theme: AppTheme;
   onPress: () => void;
 }) {
-  const backgroundColor = theme.resolvedMode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.92)';
-  const shadowColor = theme.resolvedMode === 'dark' ? '#000000' : '#0f172a';
-
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Go back"
       onPress={onPress}
       style={({ pressed }) => ({
-        width: 40,
-        height: 40,
-        borderRadius: 999,
-        borderCurve: 'continuous',
+        minWidth: 28,
+        height: 32,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor,
-        opacity: pressed ? 0.86 : 1,
-        shadowColor,
-        shadowOpacity: theme.resolvedMode === 'dark' ? 0.26 : 0.12,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 3,
+        opacity: pressed ? 0.58 : 1,
+        paddingRight: 6,
       })}
     >
       <Text
         style={{
-          color: theme.resolvedMode === 'dark' ? theme.colors.text : '#111111',
-          fontSize: 27,
-          lineHeight: 27,
-          fontWeight: '800',
-          marginLeft: -2,
+          color: theme.colors.text,
+          fontSize: 34,
+          lineHeight: 34,
+          fontWeight: '500',
         }}
       >
         ‹

@@ -2,7 +2,7 @@ import { HttpError } from '../../lib/http-error.js';
 
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const DEFAULT_TRANSCRIPTION_MODEL = 'gpt-4o-transcribe-diarize';
-const OPENAI_AUDIO_FILE_LIMIT_BYTES = 25 * 1024 * 1024;
+export const OPENAI_AUDIO_FILE_LIMIT_BYTES = 25 * 1024 * 1024;
 const TRANSCRIPTION_LOG_PREFIX = '[ transcription ]';
 
 export type TranscriptionSegment = {

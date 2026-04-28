@@ -1,8 +1,7 @@
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { LokiSessionList } from '../../components/ai/loki-session-list';
-import { NativeBackButton } from '../../components/ui/native-back-button';
 import { useAuth } from '../../providers/auth-provider';
 import { useAppTheme } from '../../providers/settings-provider';
 import { listLokiSessions, type RemoteLokiSession } from '../../services/ai-chat-api';
@@ -61,37 +60,14 @@ export default function LokiHistoryRoute() {
   );
 
   return (
-    <>
-      <Stack.Screen
-        options={{
-          headerShown: true,
-          headerTitle: 'Conversation history',
-          headerStyle: {
-            backgroundColor: theme.colors.screen,
-          },
-          headerShadowVisible: false,
-          headerTitleStyle: {
-            color: theme.colors.text,
-            fontWeight: '700',
-          },
-          headerTintColor: theme.colors.accent,
-          headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
-        }}
-      />
-
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         style={{ flex: 1, backgroundColor: theme.colors.screen }}
         contentContainerStyle={{ padding: 16, gap: 12, backgroundColor: theme.colors.screen }}
       >
-        <View style={{ gap: 4 }}>
-          <Text selectable style={{ color: theme.colors.text, fontSize: 28, fontWeight: '800' }}>
-            Loki history
-          </Text>
-          <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
-            Open any previous session to review the chat in readonly mode.
-          </Text>
-        </View>
+        <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
+          Open any previous session to review the chat in readonly mode.
+        </Text>
 
         {loading ? (
           <Text selectable style={{ color: theme.colors.textMuted, fontSize: 13 }}>
@@ -118,6 +94,5 @@ export default function LokiHistoryRoute() {
           />
         ) : null}
       </ScrollView>
-    </>
   );
 }
