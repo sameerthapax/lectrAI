@@ -1,8 +1,7 @@
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { LokiConversationPanel } from '../../../components/ai/loki-conversation-panel';
-import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAuth } from '../../../providers/auth-provider';
 import { useAppTheme } from '../../../providers/settings-provider';
 import {
@@ -14,7 +13,6 @@ import {
 export default function LokiSessionDetailRoute() {
   const theme = useAppTheme();
   const auth = useAuth();
-  const router = useRouter();
   const params = useLocalSearchParams<{ sessionId?: string | string[] }>();
   const sessionId = Array.isArray(params.sessionId) ? params.sessionId[0] : params.sessionId;
   const [session, setSession] = useState<RemoteLokiSession | null>(null);
@@ -67,24 +65,6 @@ export default function LokiSessionDetailRoute() {
   }, [auth, sessionId]);
 
   return (
-    <>
-      <Stack.Screen
-        options={{
-          headerShown: true,
-          headerTitle: 'Chat session',
-          headerStyle: {
-            backgroundColor: theme.colors.screen,
-          },
-          headerShadowVisible: false,
-          headerTitleStyle: {
-            color: theme.colors.text,
-            fontWeight: '700',
-          },
-          headerTintColor: theme.colors.accent,
-          headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
-        }}
-      />
-
       <View
         style={{
           flex: 1,
@@ -124,6 +104,5 @@ export default function LokiSessionDetailRoute() {
           }}
         />
       </View>
-    </>
   );
 }

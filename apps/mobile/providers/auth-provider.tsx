@@ -61,7 +61,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const refreshPromiseRef = useRef<Promise<AuthResponse | null> | null>(null);
 
-  useDelayedLoadingOverlay(status === 'loading');
+  useDelayedLoadingOverlay(status === 'loading', 0);
 
   useEffect(() => {
     let mounted = true;

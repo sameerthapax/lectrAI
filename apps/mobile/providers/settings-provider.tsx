@@ -45,7 +45,7 @@ export function SettingsProvider({ children }: PropsWithChildren) {
   const [hasHydrated, setHasHydrated] = useState(false);
   const systemColorScheme = useColorScheme();
 
-  useDelayedLoadingOverlay(loading);
+  useDelayedLoadingOverlay(loading, 0);
 
   const userId = auth.user?.id ?? null;
 

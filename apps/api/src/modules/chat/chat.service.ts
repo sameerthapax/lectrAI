@@ -49,6 +49,7 @@ const LIST_COURSES_TOOL_NAME = 'list_courses_catalog';
 const LIST_RECENT_LECTURES_TOOL_NAME = 'list_recent_course_lectures';
 const LIST_RECENT_FILES_TOOL_NAME = 'list_recent_course_files';
 const TRANSCRIPT_SEARCH_TOOL_NAME = 'search_transcript_chunks';
+const GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME = 'get_full_lecture_transcript';
 const CREATE_QUIZ_TOOL_NAME = 'create_quiz';
 const CREATE_FLASHCARDS_TOOL_NAME = 'create_flashcards';
 const GET_CURRENT_DATE_AND_TIME_TOOL_NAME = 'get_current_date_and_time';
@@ -96,7 +97,10 @@ type OpenAiResponsesResponse = {
 
 type RetrievalDecisionMetadata = {
   requiresAdditionalScope: boolean;
-  functionName: typeof TRANSCRIPT_SEARCH_TOOL_NAME | null;
+  functionName:
+    | typeof TRANSCRIPT_SEARCH_TOOL_NAME
+    | typeof GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+    | null;
   functionArguments: TranscriptSearchToolArgs | null;
   selectedScope: ChatScope;
 };
@@ -119,6 +123,10 @@ type RecentCourseLecturesToolArgs = {
 type RecentCourseFilesToolArgs = {
   courseId: string;
   limit?: number;
+};
+
+type FullLectureTranscriptToolArgs = {
+  lectureId: string;
 };
 
 type PlannerScopeItem =
@@ -226,8 +234,21 @@ export type ChatTranscriptionRequest = {
 
 export type RetrievedContext = {
   chunks: TranscriptChunkSearchResult[];
+  fullLectureTranscript: FullLectureTranscriptContext | null;
   scopeItems?: PlannerScopeItem[];
   decision?: RetrievalDecisionMetadata;
+};
+
+type FullLectureTranscriptContext = {
+  lectureId: string;
+  courseId: string;
+  lectureTitle: string;
+  courseName: string;
+  recordedAt: string | null;
+  transcriptId: string;
+  transcriptStatus: string;
+  totalSegments: number | null;
+  fullText: string;
 };
 
 type LokiMemory = {
@@ -1131,6 +1152,22 @@ function buildOpenAiInput(input: {
           .map((item, index) => `Scope ${index + 1}: [${item.type}] ${item.title} - ${item.detail}`)
           .join('\n')
       : 'No extra course, lecture, or file scope metadata was collected for this turn.';
+  const fullLectureTranscriptContext = input.retrieval.fullLectureTranscript
+    ? [
+        `Lecture: ${input.retrieval.fullLectureTranscript.lectureTitle}`,
+        `Course: ${input.retrieval.fullLectureTranscript.courseName}`,
+        input.retrieval.fullLectureTranscript.recordedAt
+          ? `Recorded at: ${input.retrieval.fullLectureTranscript.recordedAt}`
+          : null,
+        input.retrieval.fullLectureTranscript.totalSegments != null
+          ? `Raw transcript segments: ${input.retrieval.fullLectureTranscript.totalSegments}`
+          : null,
+        'Raw lecture transcript:',
+        input.retrieval.fullLectureTranscript.fullText,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : 'No full lecture transcript was injected for this turn.';
   const personalMemoryContext =
     input.memories.length > 0
       ? input.memories
@@ -1156,6 +1193,7 @@ function buildOpenAiInput(input: {
             `Detected intent: ${messageIntent}.`,
             `Personal memory context:\n${personalMemoryContext}`,
             `Retrieved scope metadata:\n${scopeContext}`,
+            `Full lecture transcript context:\n${fullLectureTranscriptContext}`,
             `Retrieved lecture context:\n${retrievedContext}`,
             `Current student message: ${input.currentMessage}`,
           ].join('\n\n'),
@@ -1347,6 +1385,20 @@ function mapRetrievalChunkToFlashcardSourceContext(entry: TranscriptChunkSearchR
 
 function buildFlashcardGenerationContexts(retrieval: RetrievedContext): LokiFlashcardSourceContext[] {
   const transcriptContexts = retrieval.chunks.map(mapRetrievalChunkToFlashcardSourceContext);
+  const fullLectureTranscriptContexts = retrieval.fullLectureTranscript
+    ? [
+        {
+          sourceType: 'transcript' as const,
+          sourceId: retrieval.fullLectureTranscript.transcriptId,
+          lectureId: retrieval.fullLectureTranscript.lectureId,
+          lectureTitle: retrieval.fullLectureTranscript.lectureTitle,
+          courseId: retrieval.fullLectureTranscript.courseId,
+          courseName: retrieval.fullLectureTranscript.courseName,
+          similarity: 1,
+          content: retrieval.fullLectureTranscript.fullText,
+        },
+      ]
+    : [];
   const scopeContexts = (retrieval.scopeItems ?? []).map((item): LokiFlashcardSourceContext => {
     if (item.type === 'file') {
       return {
@@ -1388,7 +1440,7 @@ function buildFlashcardGenerationContexts(retrieval: RetrievedContext): LokiFlas
 
   const deduped = new Map<string, LokiFlashcardSourceContext>();
 
-  for (const context of [...transcriptContexts, ...scopeContexts]) {
+  for (const context of [...fullLectureTranscriptContexts, ...transcriptContexts, ...scopeContexts]) {
     const key = `${context.sourceType}:${context.sourceId}`;
 
     if (!deduped.has(key)) {
@@ -1513,6 +1565,64 @@ async function getLectureScopeForUser(userId: string, lectureId: string) {
   return {
     lectureId: lecture.lecture_id,
     courseId: lecture.course_id,
+  };
+}
+
+async function getFullLectureTranscriptForUser(userId: string, lectureId: string): Promise<FullLectureTranscriptContext> {
+  const db = getDb();
+  const rows = await db<
+    {
+      lecture_id: string;
+      course_id: string;
+      lecture_title: string;
+      course_name: string;
+      recorded_at: string | null;
+      transcript_id: string | null;
+      transcript_status: string | null;
+      transcript_total_segments: number | null;
+      transcript_full_text: string | null;
+    }[]
+  >`
+    select
+      l.id::text as lecture_id,
+      l.course_id::text as course_id,
+      l.title as lecture_title,
+      c.course_name,
+      l.recorded_at::text as recorded_at,
+      t.id::text as transcript_id,
+      t.status as transcript_status,
+      t.total_segments as transcript_total_segments,
+      t.full_text as transcript_full_text
+    from public.lectures l
+    inner join public.courses c
+      on c.id = l.course_id
+    left join public.transcripts t
+      on t.lecture_id = l.id
+    where l.id = ${lectureId}::uuid
+      and c.owner_user_id = ${userId}::uuid
+    limit 1
+  `;
+
+  const lecture = rows[0];
+
+  if (!lecture) {
+    throw new HttpError(404, 'Lecture not found.');
+  }
+
+  if (!lecture.transcript_id || !lecture.transcript_full_text || lecture.transcript_full_text.trim().length === 0) {
+    throw new HttpError(409, 'The raw lecture transcript is not available yet.');
+  }
+
+  return {
+    lectureId: lecture.lecture_id,
+    courseId: lecture.course_id,
+    lectureTitle: lecture.lecture_title,
+    courseName: lecture.course_name,
+    recordedAt: lecture.recorded_at,
+    transcriptId: lecture.transcript_id,
+    transcriptStatus: lecture.transcript_status ?? 'ready',
+    totalSegments: lecture.transcript_total_segments,
+    fullText: lecture.transcript_full_text,
   };
 }
 
@@ -2074,6 +2184,18 @@ function buildRetrievalMetadata(
   return {
     decision: retrieval.decision ?? null,
     scopeItems: retrieval.scopeItems ?? [],
+    fullLectureTranscript: retrieval.fullLectureTranscript
+      ? {
+          lectureId: retrieval.fullLectureTranscript.lectureId,
+          courseId: retrieval.fullLectureTranscript.courseId,
+          lectureTitle: retrieval.fullLectureTranscript.lectureTitle,
+          courseName: retrieval.fullLectureTranscript.courseName,
+          recordedAt: retrieval.fullLectureTranscript.recordedAt,
+          transcriptId: retrieval.fullLectureTranscript.transcriptId,
+          transcriptStatus: retrieval.fullLectureTranscript.transcriptStatus,
+          totalSegments: retrieval.fullLectureTranscript.totalSegments,
+        }
+      : null,
     memories: memories.map((memory) => ({
       id: memory.id,
       text: memory.text,
@@ -2126,6 +2248,7 @@ async function runDynamicRetrievalPlannerForUser(
   })) as unknown as OpenAiResponsesResponse;
   let collectedScopeItems: PlannerScopeItem[] = [];
   let latestChunks: TranscriptChunkSearchResult[] = [];
+  let fullLectureTranscript: FullLectureTranscriptContext | null = null;
   let lastToolName: string | null = null;
   let lastToolArgs: Record<string, unknown> | null = null;
 
@@ -2139,10 +2262,17 @@ async function runDynamicRetrievalPlannerForUser(
         scope: selectedScope,
         retrieval: {
           chunks: latestChunks,
+          fullLectureTranscript,
           scopeItems: collectedScopeItems,
           decision: {
-            requiresAdditionalScope: latestChunks.length > 0 || collectedScopeItems.length > 0,
-            functionName: lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME ? TRANSCRIPT_SEARCH_TOOL_NAME : null,
+            requiresAdditionalScope:
+              latestChunks.length > 0 || collectedScopeItems.length > 0 || fullLectureTranscript != null,
+            functionName:
+              lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME
+                ? TRANSCRIPT_SEARCH_TOOL_NAME
+                : lastToolName === GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+                  ? GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+                  : null,
             functionArguments: lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME
               ? readTranscriptSearchToolArgs(JSON.stringify(lastToolArgs ?? {}))
               : null,
@@ -2161,6 +2291,10 @@ async function runDynamicRetrievalPlannerForUser(
 
       if (result.retrievedChunks.length > 0) {
         latestChunks = result.retrievedChunks;
+      }
+
+      if (result.fullLectureTranscript) {
+        fullLectureTranscript = result.fullLectureTranscript;
       }
 
       if (result.scopeItems.length > 0) {
@@ -2193,10 +2327,17 @@ async function runDynamicRetrievalPlannerForUser(
     scope: selectedScope,
     retrieval: {
       chunks: latestChunks,
+      fullLectureTranscript,
       scopeItems: collectedScopeItems,
       decision: {
-        requiresAdditionalScope: latestChunks.length > 0 || collectedScopeItems.length > 0,
-        functionName: lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME ? TRANSCRIPT_SEARCH_TOOL_NAME : null,
+        requiresAdditionalScope:
+          latestChunks.length > 0 || collectedScopeItems.length > 0 || fullLectureTranscript != null,
+        functionName:
+          lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME
+            ? TRANSCRIPT_SEARCH_TOOL_NAME
+            : lastToolName === GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+              ? GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+              : null,
         functionArguments:
           lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME ? readTranscriptSearchToolArgs(JSON.stringify(lastToolArgs ?? {})) : null,
         selectedScope,
@@ -2240,6 +2381,8 @@ function buildPlannerIntro(message: string, courses: CourseRecord[]) {
             `If the user asks to list their courses, count their courses, or identify which courses they have, call ${LIST_COURSES_TOOL_NAME}.`,
             `If the user asks what course is next, what courses are scheduled today, or any question that depends on the current day or time, call ${GET_CURRENT_DATE_AND_TIME_TOOL_NAME} and ${LIST_COURSES_TOOL_NAME} before deciding whether transcript search is needed.`,
             'Only call transcript search when the answer should rely on lecture transcript content.',
+            `When the user asks for a summary of one lecture, a recap of one lecture, or a list of what was covered in one specific lecture, call ${GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME} instead of only chunk search.`,
+            `Use ${GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME} only for one specific lecture when the whole raw lecture transcript is needed as scope.`,
             'When transcript search is useful, choose topK dynamically using these defaults: around 20 for summaries or recaps, around 10 for quiz or practice-question generation, and around 5 for targeted factual questions.',
             'If the user asks about recent materials or uploaded materials, you may use lecture or file listing tools even before transcript search.',
             'If the user asks for the latest lecture, recent lectures, today\'s lecture, this week\'s lectures, or a summary across recent lectures, call list_recent_course_lectures first for the relevant course before transcript search.',
@@ -2345,6 +2488,21 @@ function buildRetrievalPlannerTools() {
         required: ['query', 'scopeType', 'topK', 'courseId', 'lectureId', 'recordedOnOrAfter', 'recordedOnOrBefore'],
       },
     },
+    {
+      type: 'function',
+      name: GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME,
+      description:
+        'Return the full raw transcript for one specific lecture when Loki needs the entire lecture rather than only top matching chunks.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          lectureId: { type: 'string' },
+        },
+        required: ['lectureId'],
+      },
+    },
   ];
 }
 
@@ -2360,6 +2518,7 @@ async function executePlannerToolCall(
       output: { count: courses.length, courses: courses.map(mapCourseForPlanner) },
       scopeItems: courses.map(mapCourseToScopeItem),
       retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: null,
       serializedArguments: {},
     };
   }
@@ -2371,6 +2530,7 @@ async function executePlannerToolCall(
       output: currentDateTime,
       scopeItems: [] as PlannerScopeItem[],
       retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: null,
       serializedArguments: {},
     };
   }
@@ -2383,6 +2543,7 @@ async function executePlannerToolCall(
       output: { lectures: limited.map(mapLectureForPlanner) },
       scopeItems: limited.map(mapLectureToScopeItem),
       retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: null,
       serializedArguments: args as Record<string, unknown>,
     };
   }
@@ -2395,6 +2556,7 @@ async function executePlannerToolCall(
       output: { files: limited.map(mapCourseFileForPlanner) },
       scopeItems: limited.map(mapCourseFileToScopeItem),
       retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: null,
       serializedArguments: args as Record<string, unknown>,
     };
   }
@@ -2418,6 +2580,42 @@ async function executePlannerToolCall(
       },
       scopeItems: [] as PlannerScopeItem[],
       retrievedChunks: retrieval.chunks,
+      fullLectureTranscript: null,
+      serializedArguments: args as Record<string, unknown>,
+    };
+  }
+
+  if (toolCall.name === GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME) {
+    const args = readFullLectureTranscriptToolArgs(toolCall.arguments, sessionScopeHint);
+    const transcript = await getFullLectureTranscriptForUser(userId, args.lectureId);
+    return {
+      output: {
+        lectureId: transcript.lectureId,
+        courseId: transcript.courseId,
+        lectureTitle: transcript.lectureTitle,
+        courseName: transcript.courseName,
+        recordedAt: transcript.recordedAt,
+        transcriptId: transcript.transcriptId,
+        transcriptStatus: transcript.transcriptStatus,
+        totalSegments: transcript.totalSegments,
+      },
+      scopeItems: [
+        {
+          type: 'lecture' as const,
+          id: transcript.lectureId,
+          courseId: transcript.courseId,
+          title: transcript.lectureTitle,
+          detail: [
+            transcript.recordedAt ? `Recorded: ${toIsoDateOnly(transcript.recordedAt)}` : null,
+            transcript.totalSegments != null ? `Raw transcript segments: ${transcript.totalSegments}` : null,
+            'Full raw transcript injected',
+          ]
+            .filter(Boolean)
+            .join(' | '),
+        },
+      ],
+      retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: transcript,
       serializedArguments: args as Record<string, unknown>,
     };
   }
@@ -2442,12 +2640,18 @@ async function executeTranscriptSearchTool(
     recordedOnOrBefore: toolArgs.recordedOnOrBefore,
   });
 
-  return { chunks };
+  return {
+    chunks,
+    fullLectureTranscript: null,
+  };
 }
 
 function deriveDynamicScopeFromResults(chunks: TranscriptChunkSearchResult[], scopeItems: PlannerScopeItem[]): ChatScope {
   if (chunks.length > 0) {
-    return deriveScopeFromRetrieval({ chunks }, { courseId: null, lectureId: null, sessionType: 'exam_review' });
+    return deriveScopeFromRetrieval(
+      { chunks, fullLectureTranscript: null },
+      { courseId: null, lectureId: null, sessionType: 'exam_review' }
+    );
   }
 
   const lectureScopeItem = scopeItems.find((item) => item.type === 'lecture');
@@ -2497,8 +2701,10 @@ function buildSingleProgressMessage(message: string, scope: ChatScope) {
 
 function shouldEmitRetrievalProgress(retrieval: RetrievedContext) {
   return (
+    retrieval.fullLectureTranscript != null ||
     retrieval.chunks.length > 0 ||
-    retrieval.decision?.functionName === TRANSCRIPT_SEARCH_TOOL_NAME
+    retrieval.decision?.functionName === TRANSCRIPT_SEARCH_TOOL_NAME ||
+    retrieval.decision?.functionName === GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
   );
 }
 
@@ -2638,6 +2844,19 @@ function readRecentCourseFilesToolArgs(rawArguments: string): RecentCourseFilesT
   return {
     courseId: readRequiredString(record.courseId, 'courseId'),
     limit: readOptionalBoundedInteger(record.limit, 'limit', 1, 10) ?? DEFAULT_SCOPE_ITEM_LIMIT,
+  };
+}
+
+function readFullLectureTranscriptToolArgs(rawArguments: string, fallbackScope?: ChatScope | null): FullLectureTranscriptToolArgs {
+  const record = readJsonObject(rawArguments, 'OpenAI retrieval planner returned invalid full transcript tool arguments.');
+  const lectureId = readOptionalUuid(record.lectureId, 'lectureId') ?? fallbackScope?.lectureId ?? null;
+
+  if (!lectureId) {
+    throw new HttpError(502, 'OpenAI retrieval planner omitted lectureId for a full lecture transcript request.');
+  }
+
+  return {
+    lectureId,
   };
 }
 
@@ -2914,11 +3133,22 @@ function readOptionalIsoDate(value: unknown, fieldName: string) {
     return null;
   }
 
-  if (typeof value !== 'string' || !ISO_DATE_REGEX.test(value)) {
+  if (typeof value !== 'string') {
     throw new HttpError(400, `${fieldName} must be an ISO date in YYYY-MM-DD format.`);
   }
 
-  return value;
+  const trimmed = value.trim();
+  const directMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})(?:$|T|\s)/);
+
+  if (directMatch?.[1] && ISO_DATE_REGEX.test(directMatch[1])) {
+    return directMatch[1];
+  }
+
+  if (!ISO_DATE_REGEX.test(trimmed)) {
+    throw new HttpError(400, `${fieldName} must be an ISO date in YYYY-MM-DD format.`);
+  }
+
+  return trimmed;
 }
 
 function toIsoDateOnly(value: unknown) {

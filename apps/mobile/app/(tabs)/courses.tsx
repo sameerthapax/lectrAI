@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Easing, Pressable, ScrollView, Text, View } from 'react-native';
 import { CourseFormModal } from '../../components/courses/course-form-modal';
+import { GlassButton } from '../../components/ui/glass-button';
 import { useAuth } from '../../providers/auth-provider';
 import { useLoadingOverlayControl } from '../../providers/loading-overlay-provider';
 import {
@@ -401,53 +402,11 @@ export default function CoursesRoute() {
 
             {isEditing ? (
               <View style={{ flexDirection: 'row', gap: 8 }}>
-                <Pressable
-                  onPress={handleOpenCreate}
-                  style={({ pressed }) => ({
-                    minHeight: 36,
-                    borderRadius: 999,
-                    paddingHorizontal: 14,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
-                  })}
-                >
-                  <Text style={{ color: theme.colors.accentContrast, fontSize: 14, fontWeight: '800' }}>Add</Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setIsEditing(false)}
-                  style={({ pressed }) => ({
-                    minHeight: 36,
-                    borderRadius: 999,
-                    paddingHorizontal: 14,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: pressed ? theme.colors.neutralBorder : theme.colors.neutralSoft,
-                    borderWidth: 1,
-                    borderColor: theme.colors.neutralBorder,
-                  })}
-                >
-                  <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>Done</Text>
-                </Pressable>
+                <GlassButton label="Add" onPress={handleOpenCreate} variant="accent" />
+                <GlassButton label="Done" onPress={() => setIsEditing(false)} variant="neutral" />
               </View>
             ) : (
-              <Pressable
-                onPress={() => setIsEditing(true)}
-                style={({ pressed }) => ({
-                  minHeight: 36,
-                  borderRadius: 999,
-                  paddingHorizontal: 14,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: pressed ? theme.colors.cardMuted : theme.colors.overlay,
-                  borderWidth: 1,
-                  borderColor: theme.colors.border,
-                  boxShadow: '0 10px 20px rgba(15, 23, 42, 0.06)',
-                })}
-              >
-                <Text style={{ color: theme.colors.textMuted, fontSize: 14, fontWeight: '800' }}>Edit</Text>
-              </Pressable>
+              <GlassButton label="Edit" onPress={() => setIsEditing(true)} variant="subtle" />
             )}
           </View>
 
@@ -581,20 +540,7 @@ export default function CoursesRoute() {
             <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20 }}>
               Add your first course. It will save to the main database and then stay cached on this phone.
             </Text>
-            <Pressable
-              onPress={handleOpenCreate}
-              style={({ pressed }) => ({
-                alignSelf: 'flex-start',
-                minHeight: 40,
-                borderRadius: 999,
-                paddingHorizontal: 16,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
-              })}
-            >
-              <Text style={{ color: theme.colors.accentContrast, fontSize: 14, fontWeight: '800' }}>Add course</Text>
-            </Pressable>
+            <GlassButton label="Add course" onPress={handleOpenCreate} variant="accent" />
           </View>
         ) : null}
 
@@ -673,35 +619,21 @@ export default function CoursesRoute() {
                     zIndex: 2,
                   }}
                 >
-                  <Pressable
+                  <GlassButton
+                    label="✎"
                     onPress={() => handleOpenEdit(course)}
-                    style={({ pressed }) => ({
-                      width: 34,
-                      height: 34,
-                      borderRadius: 999,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: pressed ? '#3b82f6' : '#2563eb',
-                      boxShadow: '0 10px 18px rgba(37, 99, 235, 0.22)',
-                    })}
-                  >
-                    <Text style={{ color: '#ffffff', fontSize: 15, fontWeight: '800' }}>✎</Text>
-                  </Pressable>
+                    variant="info"
+                    size="circle-sm"
+                    accessibilityLabel={`Edit ${course.courseName}`}
+                  />
 
-                  <Pressable
+                  <GlassButton
+                    label="−"
                     onPress={() => handleRemoveCourse(course)}
-                    style={({ pressed }) => ({
-                      width: 34,
-                      height: 34,
-                      borderRadius: 999,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: pressed ? '#dc2626' : theme.colors.danger,
-                      boxShadow: '0 10px 18px rgba(239, 68, 68, 0.22)',
-                    })}
-                  >
-                    <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '900' }}>−</Text>
-                  </Pressable>
+                    variant="danger"
+                    size="circle-sm"
+                    accessibilityLabel={`Delete ${course.courseName}`}
+                  />
                 </View>
               ) : null}
 

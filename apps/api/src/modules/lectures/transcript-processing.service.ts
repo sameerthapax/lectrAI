@@ -1,9 +1,11 @@
 import { HttpError } from '../../lib/http-error.js';
-import type { TranscriptionSegment } from './audio-transcription.service.js';
+import { estimateTranscriptTokenCount, type TranscriptionSegment } from './audio-transcription.service.js';
 
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const DEFAULT_TRANSCRIPT_PROCESSING_MODEL = 'gpt-4o-2024-08-06';
 const TRANSCRIPTION_LOG_PREFIX = '[ transcription ]';
+const LOCAL_FALLBACK_TRANSCRIPT_TOKEN_LIMIT = 9000;
+const LOCAL_FALLBACK_SEGMENT_LIMIT = 250;
 
 export type ProcessedTranscriptSpeaker = {
   originalLabel: string;
@@ -59,6 +61,39 @@ export async function processTranscriptSpeakers(input: {
   segments: TranscriptionSegment[];
 }): Promise<TranscriptProcessingResult> {
   const apiKey = process.env.OPENAI_API_KEY;
+  const transcriptTokenEstimate = estimateTranscriptTokenCount(input.transcriptText);
+  const shouldUseLocalFallback =
+    transcriptTokenEstimate >= LOCAL_FALLBACK_TRANSCRIPT_TOKEN_LIMIT ||
+    input.segments.length >= LOCAL_FALLBACK_SEGMENT_LIMIT;
+
+  if ((input.segments.length === 0 || shouldUseLocalFallback) && input.transcriptText.trim().length > 0) {
+    console.warn(
+      `${TRANSCRIPTION_LOG_PREFIX} Falling back to local transcript formatting.`,
+      {
+        courseTitle: input.courseTitle,
+        lectureTitle: input.lectureTitle,
+        reason:
+          input.segments.length === 0
+            ? 'missing_segments'
+            : 'request_would_exceed_transcript_processing_budget',
+        segmentCount: input.segments.length,
+        transcriptTokenEstimate,
+      }
+    );
+
+    const payload = buildFallbackProcessedTranscriptPayload(input);
+
+    return {
+      providerName: 'openai',
+      modelName: process.env.OPENAI_TRANSCRIPT_PROCESSING_MODEL ?? DEFAULT_TRANSCRIPT_PROCESSING_MODEL,
+      speakerMap: payload.speakers,
+      formattedText: payload.formattedText,
+      payload,
+      rawResponse: {
+        fallback: 'local_without_segments',
+      },
+    };
+  }
 
   if (!apiKey) {
     throw new HttpError(500, 'Missing OpenAI API key. Set OPENAI_API_KEY for transcript processing.');
@@ -151,11 +186,50 @@ export async function processTranscriptSpeakers(input: {
       errorDetails,
     });
 
+    if (isTokenRateLimitError(errorDetails) && input.transcriptText.trim().length > 0) {
+      console.warn(
+        `${TRANSCRIPTION_LOG_PREFIX} Transcript processing hit token limits. Falling back to local formatting.`,
+        {
+          courseTitle: input.courseTitle,
+          lectureTitle: input.lectureTitle,
+          segmentCount: input.segments.length,
+          transcriptTokenEstimate,
+        }
+      );
+
+      const payload = buildFallbackProcessedTranscriptPayload(input);
+
+      return {
+        providerName: 'openai',
+        modelName,
+        speakerMap: payload.speakers,
+        formattedText: payload.formattedText,
+        payload,
+        rawResponse: {
+          fallback: 'local_after_openai_token_limit',
+          errorDetails,
+        },
+      };
+    }
+
     throw new HttpError(502, 'OpenAI transcript processing failed.', errorDetails);
   }
 
   const rawResponse = (await response.json()) as OpenAiResponsesResponse;
-  const payload = normalizeProcessedTranscriptPayload(parseProcessedTranscriptPayload(rawResponse));
+  let payload = normalizeProcessedTranscriptPayload(parseProcessedTranscriptPayload(rawResponse));
+
+  if (payload.paragraphs.length === 0 && input.transcriptText.trim().length > 0) {
+    console.warn(
+      `${TRANSCRIPTION_LOG_PREFIX} Transcript processing returned an empty payload. Falling back to local canonical formatting.`,
+      {
+        courseTitle: input.courseTitle,
+        lectureTitle: input.lectureTitle,
+        segmentCount: input.segments.length,
+      }
+    );
+
+    payload = buildFallbackProcessedTranscriptPayload(input);
+  }
 
   console.log(`${TRANSCRIPTION_LOG_PREFIX} OpenAI transcript processing response parsed.`, {
     speakerCount: payload.speakers.length,
@@ -322,4 +396,123 @@ function buildLogPreview(value: unknown) {
   }
 
   return `${serialized.slice(0, 2000)}... [truncated]`;
+}
+
+function isTokenRateLimitError(errorDetails: unknown) {
+  if (!errorDetails || typeof errorDetails !== 'object' || !('error' in errorDetails)) {
+    return false;
+  }
+
+  const errorRecord = (errorDetails as { error?: unknown }).error;
+
+  if (!errorRecord || typeof errorRecord !== 'object') {
+    return false;
+  }
+
+  const code = 'code' in errorRecord ? (errorRecord as { code?: unknown }).code : null;
+  const type = 'type' in errorRecord ? (errorRecord as { type?: unknown }).type : null;
+  const message = 'message' in errorRecord ? (errorRecord as { message?: unknown }).message : null;
+
+  return (
+    code === 'rate_limit_exceeded' &&
+    (type === 'tokens' ||
+      (typeof message === 'string' &&
+        (message.includes('tokens per min') || message.includes('Request too large'))))
+  );
+}
+
+function buildFallbackProcessedTranscriptPayload(input: {
+  transcriptText: string;
+  segments: TranscriptionSegment[];
+}): ProcessedTranscriptPayload {
+  const turns = buildFallbackTurns(input);
+  const labels = Array.from(new Set(turns.map((turn) => turn.speakerLabel)));
+  const labelMap = new Map(
+    labels.map((label, index) => [
+      label,
+      {
+        originalLabel: label,
+        role: 'unknown' as const,
+        displayName: `Unknown Speaker ${String.fromCharCode(65 + index)}`,
+        confidence: 0,
+        rationale: 'Fallback speaker mapping generated locally.',
+      },
+    ])
+  );
+  const paragraphs = turns.map((turn, paragraphIndex) => {
+    const speaker = labelMap.get(turn.speakerLabel);
+
+    return {
+      paragraphIndex,
+      speakerRole: 'unknown' as const,
+      speakerLabel: turn.speakerLabel,
+      speakerDisplayName: speaker?.displayName ?? 'Unknown Speaker A',
+      text: turn.text,
+    };
+  });
+
+  return normalizeProcessedTranscriptPayload({
+    speakers: Array.from(labelMap.values()),
+    paragraphs,
+    formattedText: '',
+  });
+}
+
+function buildFallbackTurns(input: {
+  transcriptText: string;
+  segments: TranscriptionSegment[];
+}) {
+  const segmentTurns = input.segments
+    .map((segment) => ({
+      speakerLabel: (segment.speakerLabel ?? 'Speaker 1').trim() || 'Speaker 1',
+      text: (segment.cleanedText ?? segment.rawText ?? '').trim(),
+    }))
+    .filter((segment) => segment.text.length > 0);
+
+  if (segmentTurns.length > 0) {
+    return mergeAdjacentTurns(segmentTurns);
+  }
+
+  const transcriptTurns = input.transcriptText
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const match = line.match(/^([^:]{1,80}):\s*(.+)$/);
+
+      if (!match) {
+        return {
+          speakerLabel: 'Speaker 1',
+          text: line,
+        };
+      }
+
+      return {
+        speakerLabel: match[1].trim() || 'Speaker 1',
+        text: match[2].trim(),
+      };
+    })
+    .filter((turn) => turn.text.length > 0);
+
+  return mergeAdjacentTurns(transcriptTurns);
+}
+
+function mergeAdjacentTurns(turns: Array<{ speakerLabel: string; text: string }>) {
+  const merged: Array<{ speakerLabel: string; text: string }> = [];
+
+  for (const turn of turns) {
+    const previous = merged[merged.length - 1];
+
+    if (previous && previous.speakerLabel === turn.speakerLabel) {
+      previous.text = `${previous.text} ${turn.text}`.trim();
+      continue;
+    }
+
+    merged.push({
+      speakerLabel: turn.speakerLabel,
+      text: turn.text,
+    });
+  }
+
+  return merged;
 }

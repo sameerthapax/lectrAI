@@ -1,4 +1,3 @@
-import { router } from 'expo-router';
 import type { ReactNode } from 'react';
 import {
   Pressable,
@@ -9,7 +8,6 @@ import {
   View,
 } from 'react-native';
 import { useAppTheme } from '../../providers/settings-provider';
-import { NativeBackButton } from '../ui/native-back-button';
 
 export const ORANGE = '#ff6a00';
 export const INK = '#0b0b0b';
@@ -23,11 +21,9 @@ export function SettingsLoadingState() {
 }
 
 export function SettingsScreen({
-  title,
   subtitle,
   children,
 }: {
-  title: string;
   subtitle?: string;
   children: ReactNode;
 }) {
@@ -43,38 +39,18 @@ export function SettingsScreen({
       contentContainerStyle={{
         flexGrow: 1,
         paddingHorizontal: 16,
-        paddingTop: 18,
+        paddingTop: 10,
         paddingBottom: 32,
         gap: 14,
         backgroundColor: theme.colors.screen,
       }}
     >
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          paddingTop: 8,
-          paddingBottom: 4,
-        }}
-      >
-        <View style={{ position: 'absolute', left: 0 }}>
-          <NativeBackButton theme={theme} onPress={() => router.back()} />
-        </View>
-        <Text style={{ color: theme.colors.text, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
-          {title}
-        </Text>
-      </View>
-
       {subtitle ? (
         <Text
           style={{
-            marginTop: -4,
-            textAlign: 'center',
             color: theme.colors.textMuted,
             fontSize: 14,
             lineHeight: 21,
-            paddingHorizontal: 20,
           }}
         >
           {subtitle}

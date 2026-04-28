@@ -12,6 +12,7 @@ import { NO_CLASS_COURSE_ID, type LocalCourseRecord } from '../../services/cours
 
 type CurrentCourseCarouselProps = {
   cards: LocalCourseSelectorCard[];
+  onPressCard: (courseId: string) => void;
   onSelect: (courseId: string) => void;
   selectedCourseId: string;
   width: number;
@@ -26,6 +27,7 @@ export type LocalCourseSelectorCard = {
 
 export function CurrentCourseCarousel({
   cards,
+  onPressCard,
   onSelect,
   selectedCourseId,
   width,
@@ -123,7 +125,7 @@ export function CurrentCourseCarousel({
             }}
           >
             <Pressable
-              onPress={() => onSelect(item.id)}
+              onPress={() => onPressCard(item.id)}
               style={({ pressed }) => ({
                 minHeight: 112,
                 borderRadius: 22,

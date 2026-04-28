@@ -131,6 +131,7 @@ export default function HomeRoute() {
   const quickQuizAnsweredCount = quickQuizAttempt?.answers.length ?? 0;
   const quickQuizQuestionTotal = quickQuiz?.questions.length ?? 0;
   const quickQuizBadgeLabel = quickQuiz ? `${quickQuizAnsweredCount}/${quickQuizQuestionTotal}` : null;
+  const hasIncompleteQuickQuiz = quickQuiz !== null && quickQuizAttempt?.isCompleted !== true;
 
   useEffect(() => {
     if (!quickQuiz) {
@@ -574,10 +575,26 @@ export default function HomeRoute() {
     }, [auth.user?.id, streakValue])
   );
 
-  const handleSelectCourse = async (courseId: string) => {
+  const handleSelectCourse = useCallback(async (courseId: string) => {
     setSelectedCourseIdState(courseId);
     await setSelectedCourseId(courseId);
-  };
+  }, []);
+
+  const handlePressCourseCard = useCallback(
+    async (courseId: string) => {
+      await handleSelectCourse(courseId);
+
+      if (courseId === NO_CLASS_COURSE_ID) {
+        return;
+      }
+
+      router.push({
+        pathname: '/course/[courseId]',
+        params: { courseId },
+      });
+    },
+    [handleSelectCourse]
+  );
 
   useEffect(() => {
     if (!recordingVisible) {
@@ -1050,12 +1067,16 @@ export default function HomeRoute() {
             <View style={{ gap: 12 }}>
               <CurrentCourseCarousel
                 cards={courseCards}
+                onPressCard={handlePressCourseCard}
                 onSelect={handleSelectCourse}
                 selectedCourseId={selectedCourseId}
                 width={Math.max(152, width * 0.36)}
               />
 
-              <AiNextActionCarousel width={Math.max(152, width * 0.36)} />
+              <AiNextActionCarousel
+                hasIncompleteQuickQuiz={hasIncompleteQuickQuiz}
+                width={Math.max(152, width * 0.36)}
+              />
             </View>
           </View>
 
