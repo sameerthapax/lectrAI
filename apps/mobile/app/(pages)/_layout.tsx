@@ -31,7 +31,13 @@ export default function PagesLayout() {
           headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
         }}
       />
-      <Stack.Screen name="course-file/[courseFileId]" options={{ title: 'File Review' }} />
+      <Stack.Screen
+        name="course-file/[courseFileId]"
+        options={{
+          title: 'File Review',
+          headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
+        }}
+      />
       <Stack.Screen
         name="loki-history"
         options={{
@@ -46,9 +52,27 @@ export default function PagesLayout() {
           headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
         }}
       />
-      <Stack.Screen name="flashcards/[flashcardSetId]" options={{ title: 'Flashcards' }} />
-      <Stack.Screen name="quiz/[quizId]" options={{ title: 'Quiz' }} />
-      <Stack.Screen name="recording-results-page" options={{ title: 'Lecture Review' }} />
+      <Stack.Screen
+        name="flashcards/[flashcardSetId]"
+        options={{
+          title: 'Flashcards',
+          headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
+        }}
+      />
+      <Stack.Screen
+        name="quiz/[quizId]"
+        options={{
+          title: 'Quiz',
+          headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
+        }}
+      />
+      <Stack.Screen
+        name="recording-results-page"
+        options={{
+          title: 'Lecture Review',
+          headerLeft: () => <NativeBackButton theme={theme} onPress={() => router.back()} />,
+        }}
+      />
     </Stack>
   );
 }
