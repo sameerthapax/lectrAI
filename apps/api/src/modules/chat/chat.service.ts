@@ -1198,7 +1198,7 @@ function buildOpenAiInput(input: {
     'After a quiz tool succeeds, briefly tell the user the quiz is ready and invite them to open it.',
     'After a flashcard tool succeeds, briefly tell the user the flashcards are ready and invite them to open them.',
     'After a research tool succeeds, keep the reply short and direct.',
-    'Use this pattern for research replies: "The links for the TOPIC topic are generated below. I got TITLE by SOURCE, TITLE by SOURCE. Tap on the link to navigate to the link."',
+    'For research replies, mention only the paper titles in natural prose. Do not paste URLs, numbered link lists, or phrases like "tap on the link".',
     'You may execute multiple tool calls in the same response loop when needed.',
     'When relevant, use the personal memory context to personalize continuity and study help, but never let it override lecture facts.',
     'If personal memory conflicts with retrieved lecture context, trust the lecture context for subject matter and treat memory as preference context only.',
@@ -1587,6 +1587,52 @@ function buildResearchAttachmentReply(research: AssistantResearchAttachment) {
     .join(', ');
 
   return `The paper titles for ${topic} are listed below: ${titles}.`;
+}
+
+function sanitizeResearchReplyText(messageText: string, research: AssistantResearchAttachment | null) {
+  const trimmed = messageText.trim();
+
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  if (!research?.hasResearch || research.papers.length === 0) {
+    return trimmed;
+  }
+
+  const paperTitles = new Set(
+    research.papers
+      .map((paper) => paper.title.trim().toLowerCase())
+      .filter((title) => title.length > 0)
+  );
+
+  const filteredLines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) {
+        return false;
+      }
+
+      if (/https?:\/\/\S+/i.test(line)) {
+        return false;
+      }
+
+      if (/tap on the link|navigate to the link/i.test(line)) {
+        return false;
+      }
+
+      const normalized = line.replace(/^\d+[\)\.\-:]\s*/, '').trim().toLowerCase();
+
+      if (paperTitles.has(normalized)) {
+        return false;
+      }
+
+      return true;
+    });
+
+  const sanitized = filteredLines.join(' ').replace(/\s+/g, ' ').trim();
+  return sanitized || buildResearchAttachmentReply(research);
 }
 
 function isResearchAllowedUrl(value: string) {
@@ -2231,6 +2277,7 @@ async function createAssistantMessageWithCitations(input: {
   research: AssistantResearchAttachment | null;
 }) {
   const db = getDb();
+  const sanitizedMessageText = sanitizeResearchReplyText(input.messageText, input.research);
   const retrievalMetadata = buildRetrievalMetadata(
     input.retrieval,
     input.memories,
@@ -2263,7 +2310,7 @@ async function createAssistantMessageWithCitations(input: {
         ${input.chatSessionId}::uuid,
         ${input.userId}::uuid,
         'assistant',
-        ${input.messageText},
+        ${sanitizedMessageText},
         ${input.modelName},
         ${input.usage.promptTokens},
         ${input.usage.completionTokens},
