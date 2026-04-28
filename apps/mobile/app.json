@@ -2,7 +2,7 @@
   "expo": {
     "name": "LectrAI",
     "slug": "lectrai",
-    "version": "1.0.3",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lectrai",
@@ -40,12 +40,12 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/record_logo.png",
+          "image": "./assets/images/icon.png",
           "imageWidth": 160,
           "resizeMode": "contain",
           "backgroundColor": "#f7f1e8",
           "dark": {
-            "image": "./assets/images/record_logo.png",
+            "image": "./assets/images/icon.png",
             "backgroundColor": "#111315"
           }
         }

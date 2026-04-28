@@ -22,6 +22,7 @@ SplashScreen.setOptions({
   duration: 220,
   fade: true,
 });
+const MAX_SPLASH_WAIT_MS = 2500;
 
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   const report = logMobileError(error, {
@@ -81,6 +82,23 @@ function ThemedAppShell() {
       });
     });
   }, [theme.colors.screen]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (splashHiddenRef.current) {
+        return;
+      }
+
+      splashHiddenRef.current = true;
+      void SplashScreen.hideAsync().catch((error) => {
+        logMobileError(error, {
+          source: 'splash-screen.hide-timeout',
+        });
+      });
+    }, MAX_SPLASH_WAIT_MS);
+
+    return () => clearTimeout(timer);
+  }, []);
 
   const handleRootLayout = useCallback(() => {
     if (!appIsReady || splashHiddenRef.current) {

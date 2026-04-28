@@ -26,7 +26,7 @@ import {
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const DEFAULT_CHAT_MODEL = env.openAiChatModel ?? 'gpt-4.1-mini';
-const DEFAULT_WEB_SEARCH_MODEL = env.openAiWebSearchModel ?? DEFAULT_CHAT_MODEL;
+const DEFAULT_WEB_SEARCH_MODEL = env.openAiWebSearchModel ?? 'gpt-5.4-nano-2026-03-17';
 const DEFAULT_CHAT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL ?? 'gpt-4o-mini-transcribe';
 const DEFAULT_TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL ?? 'eleven_flash_v2_5';
 const DEFAULT_TTS_VOICE_ID = process.env.ELEVENLABS_TTS_VOICE_ID ?? 'JBFqnCBsd6RMkjVDRZzb';
@@ -1198,7 +1198,7 @@ function buildOpenAiInput(input: {
     'After a quiz tool succeeds, briefly tell the user the quiz is ready and invite them to open it.',
     'After a flashcard tool succeeds, briefly tell the user the flashcards are ready and invite them to open them.',
     'After a research tool succeeds, keep the reply short and direct.',
-    'Use this pattern for research replies: "The links for the TOPIC topic are generated below. I got TITLE by SOURCE, TITLE by SOURCE. Tap on the link to navigate to the link."',
+    'For research replies, mention only the paper titles in natural prose. Do not paste URLs, numbered link lists, or phrases like "tap on the link".',
     'You may execute multiple tool calls in the same response loop when needed.',
     'When relevant, use the personal memory context to personalize continuity and study help, but never let it override lecture facts.',
     'If personal memory conflicts with retrieved lecture context, trust the lecture context for subject matter and treat memory as preference context only.',
@@ -1581,65 +1581,156 @@ function buildFlashcardGenerationContexts(retrieval: RetrievedContext): LokiFlas
 
 function buildResearchAttachmentReply(research: AssistantResearchAttachment) {
   const topic = research.topic?.trim() || 'requested';
-  const sources = research.papers
+  const titles = research.papers
     .slice(0, 3)
-    .map((paper) => `${paper.title} by ${paper.source ?? 'an academic source'}`)
+    .map((paper) => `"${paper.title}"`)
     .join(', ');
 
-  return `The links for the ${topic} topic are generated below. I got ${sources}. Tap on the link to navigate to the link.`;
+  return `The paper titles for ${topic} are listed below: ${titles}.`;
+}
+
+function sanitizeResearchReplyText(messageText: string, research: AssistantResearchAttachment | null) {
+  const trimmed = messageText.trim();
+
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  if (!research?.hasResearch || research.papers.length === 0) {
+    return trimmed;
+  }
+
+  const paperTitles = new Set(
+    research.papers
+      .map((paper) => paper.title.trim().toLowerCase())
+      .filter((title) => title.length > 0)
+  );
+
+  const filteredLines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) {
+        return false;
+      }
+
+      if (/https?:\/\/\S+/i.test(line)) {
+        return false;
+      }
+
+      if (/tap on the link|navigate to the link/i.test(line)) {
+        return false;
+      }
+
+      const normalized = line.replace(/^\d+[\)\.\-:]\s*/, '').trim().toLowerCase();
+
+      if (paperTitles.has(normalized)) {
+        return false;
+      }
+
+      return true;
+    });
+
+  const sanitized = filteredLines.join(' ').replace(/\s+/g, ' ').trim();
+  return sanitized || buildResearchAttachmentReply(research);
+}
+
+function isResearchAllowedUrl(value: string) {
+  if (!isValidHttpUrl(value)) {
+    return false;
+  }
+
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+    return RESEARCH_ALLOWED_DOMAINS.some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isUnsupportedWebSearchFiltersError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /parameter ['"]filters['"] not supported/i.test(error.message);
+}
+
+function buildResearchSearchTools(withFilters: boolean) {
+  if (!withFilters) {
+    return [{ type: 'web_search' as const }];
+  }
+
+  return [
+    {
+      type: 'web_search' as const,
+      filters: {
+        allowed_domains: [...RESEARCH_ALLOWED_DOMAINS],
+      },
+    },
+  ];
 }
 
 async function searchResearchPapersWithWebSearch(input: {
   topic: string;
   maxResults: number;
 }): Promise<AssistantResearchAttachment> {
-  const response = (await getOpenAiClient().responses.create({
-    model: DEFAULT_WEB_SEARCH_MODEL,
-    tools: [
-      {
-        type: 'web_search',
-        filters: {
-          allowed_domains: [...RESEARCH_ALLOWED_DOMAINS],
+  const requestInput = [
+    {
+      role: 'system',
+      content: [
+        {
+          type: 'input_text',
+          text: [
+            'You find academic papers and return structured JSON only.',
+            'Prefer Google Scholar style scholarly results and direct paper landing pages or PDFs when available.',
+            'Only include research papers, preprints, or authoritative paper landing pages.',
+            `Return between 1 and ${Math.max(1, Math.min(input.maxResults, MAX_RESEARCH_LINK_COUNT))} papers when possible.`,
+            'Output JSON with this exact shape: {"topic": string, "papers": [{"title": string, "url": string, "source": string|null, "summary": string|null}]}.',
+            'Do not include markdown fences or any prose outside the JSON object.',
+          ].join(' '),
         },
-      },
-    ],
-    tool_choice: 'auto',
-    include: ['web_search_call.action.sources'],
-    input: [
-      {
-        role: 'system',
-        content: [
-          {
-            type: 'input_text',
-            text: [
-              'You find academic papers and return structured JSON only.',
-              'Prefer Google Scholar style scholarly results and direct paper landing pages or PDFs when available.',
-              'Only include research papers, preprints, or authoritative paper landing pages.',
-              `Return between 1 and ${Math.max(1, Math.min(input.maxResults, MAX_RESEARCH_LINK_COUNT))} papers when possible.`,
-              'Output JSON with this exact shape: {"topic": string, "papers": [{"title": string, "url": string, "source": string|null, "summary": string|null}]}.',
-              'Do not include markdown fences or any prose outside the JSON object.',
-            ].join(' '),
-          },
-        ],
-      },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: `Find research papers about: ${input.topic}`,
-          },
-        ],
-      },
-    ] as any,
-  })) as unknown as OpenAiResponsesResponse;
+      ],
+    },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'input_text',
+          text: `Find research papers about: ${input.topic}`,
+        },
+      ],
+    },
+  ] as any;
+
+  const createSearchResponse = async (withFilters: boolean) =>
+    ((await getOpenAiClient().responses.create({
+      model: DEFAULT_WEB_SEARCH_MODEL,
+      tools: buildResearchSearchTools(withFilters),
+      tool_choice: 'auto',
+      include: ['web_search_call.action.sources'],
+      input: requestInput,
+    })) as unknown as OpenAiResponsesResponse);
+
+  let response: OpenAiResponsesResponse;
+
+  try {
+    response = await createSearchResponse(true);
+  } catch (error) {
+    if (!isUnsupportedWebSearchFiltersError(error)) {
+      throw error;
+    }
+
+    response = await createSearchResponse(false);
+  }
 
   const parsedPapers = readResearchPapersFromOutput(extractOutputText(response), input.maxResults);
   const sourcePapers = extractResearchPapersFromSources(response, input.maxResults);
-  const papers = dedupeResearchPapers([...parsedPapers, ...sourcePapers]).slice(
-    0,
-    Math.max(1, Math.min(input.maxResults, MAX_RESEARCH_LINK_COUNT))
-  );
+  const papers = dedupeResearchPapers([...parsedPapers, ...sourcePapers])
+    .filter((paper) => isResearchAllowedUrl(paper.url))
+    .slice(0, Math.max(1, Math.min(input.maxResults, MAX_RESEARCH_LINK_COUNT)));
 
   return {
     hasResearch: papers.length > 0,
@@ -2186,6 +2277,7 @@ async function createAssistantMessageWithCitations(input: {
   research: AssistantResearchAttachment | null;
 }) {
   const db = getDb();
+  const sanitizedMessageText = sanitizeResearchReplyText(input.messageText, input.research);
   const retrievalMetadata = buildRetrievalMetadata(
     input.retrieval,
     input.memories,
@@ -2218,7 +2310,7 @@ async function createAssistantMessageWithCitations(input: {
         ${input.chatSessionId}::uuid,
         ${input.userId}::uuid,
         'assistant',
-        ${input.messageText},
+        ${sanitizedMessageText},
         ${input.modelName},
         ${input.usage.promptTokens},
         ${input.usage.completionTokens},
