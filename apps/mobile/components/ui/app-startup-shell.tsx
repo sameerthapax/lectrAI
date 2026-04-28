@@ -1,7 +1,7 @@
 import { ActivityIndicator, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { useAppTheme } from '../../providers/settings-provider';
-import recordLogo from '../../assets/images/record_logo.png';
+const appLogo = require('../../assets/images/icon.png');
 
 export function AppStartupShell() {
   const theme = useAppTheme();
@@ -30,7 +30,7 @@ export function AppStartupShell() {
         }}
       >
         <Image
-          source={recordLogo}
+          source={appLogo}
           contentFit="contain"
           style={{ width: 104, height: 104 }}
         />
