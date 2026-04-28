@@ -360,6 +360,9 @@ function ConversationMessageBubble({
   const quizAttachment = getQuizAttachment(message);
   const flashcardAttachment = getFlashcardAttachment(message);
   const researchAttachment = getResearchAttachment(message);
+  const visibleMessageText = isAssistant
+    ? sanitizeVisibleResearchMessageText(message.messageText, researchAttachment)
+    : message.messageText;
 
   useEffect(() => {
     enterProgress.setValue(0);
@@ -438,7 +441,7 @@ function ConversationMessageBubble({
             fontWeight: isAssistant ? '500' : '600',
           }}
         >
-          {message.messageText}
+          {visibleMessageText}
         </Text>
 
         {isVoiceTranscriptMessage(message) ? (
@@ -557,6 +560,43 @@ function ConversationMessageBubble({
       </View>
     </Animated.View>
   );
+}
+
+function sanitizeVisibleResearchMessageText(
+  messageText: string,
+  researchAttachment: RemoteLokiResearchAttachment
+) {
+  const trimmed = messageText.trim();
+
+  if (!trimmed || !researchAttachment.hasResearch || researchAttachment.papers.length === 0) {
+    return messageText;
+  }
+
+  const paperTitles = new Set(
+    researchAttachment.papers.map((paper) => paper.title.trim().toLowerCase()).filter(Boolean)
+  );
+
+  const filteredLines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) {
+        return false;
+      }
+
+      if (/https?:\/\/\S+/i.test(line)) {
+        return false;
+      }
+
+      if (/tap on the link|navigate to the link/i.test(line)) {
+        return false;
+      }
+
+      const normalized = line.replace(/^\d+[\)\.\-:]\s*/, '').trim().toLowerCase();
+      return !paperTitles.has(normalized);
+    });
+
+  return filteredLines.join('\n').trim() || messageText;
 }
 
 function isVoiceTranscriptMessage(message: RemoteLokiMessage) {

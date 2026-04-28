@@ -19,6 +19,18 @@ import {
   type ChatMessageRecord,
 } from './chat.service.js';
 
+function isAbortError(error: unknown) {
+  if (error instanceof Error && error.name === 'AbortError') {
+    return true;
+  }
+
+  return (
+    typeof DOMException !== 'undefined' &&
+    error instanceof DOMException &&
+    error.name === 'AbortError'
+  );
+}
+
 function requireAuthUserId(request: Request) {
   const userId = request.authUser?.id;
 
@@ -365,8 +377,7 @@ function isClientAbortError(error: unknown, request: Request, response: Response
     request.destroyed ||
     request.aborted ||
     response.writableEnded ||
-    (error instanceof DOMException && error.name === 'AbortError') ||
-    (error instanceof Error && error.name === 'AbortError');
+    isAbortError(error);
 
   return aborted;
 }

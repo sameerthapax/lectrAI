@@ -37,6 +37,7 @@ type SettingsContextValue = {
 };
 
 const SettingsContext = createContext<SettingsContextValue | null>(null);
+const SETTINGS_LOAD_TIMEOUT_MS = 3000;
 
 export function SettingsProvider({ children }: PropsWithChildren) {
   const auth = useAuth();
@@ -72,7 +73,11 @@ export function SettingsProvider({ children }: PropsWithChildren) {
 
       try {
         setLoading(true);
-        const storedSettings = await getStoredUserSettings(userId);
+        const storedSettings = await withTimeout(
+          getStoredUserSettings(userId),
+          SETTINGS_LOAD_TIMEOUT_MS,
+          'load stored user settings'
+        );
 
         if (cancelled) {
           return;
@@ -266,6 +271,25 @@ export function useSettings() {
   }
 
   return context;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Timed out while trying to ${label}.`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
 }
 
 export function useAppTheme() {

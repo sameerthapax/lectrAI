@@ -36,6 +36,19 @@ type RequestOptions = {
 };
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
+const AUTH_REQUEST_TIMEOUT_MS = 8000;
+
+function isAbortError(error: unknown) {
+  if (error instanceof Error && error.name === 'AbortError') {
+    return true;
+  }
+
+  return (
+    typeof DOMException !== 'undefined' &&
+    error instanceof DOMException &&
+    error.name === 'AbortError'
+  );
+}
 
 function requireApiBaseUrl() {
   if (!API_BASE_URL) {
@@ -60,10 +73,30 @@ async function request<TResponse>(
     headers.set('Authorization', `Bearer ${options.accessToken}`);
   }
 
-  const response = await fetch(`${requireApiBaseUrl()}${path}`, {
-    ...init,
-    headers,
-  });
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    abortController.abort();
+  }, AUTH_REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${requireApiBaseUrl()}${path}`, {
+      ...init,
+      headers,
+      signal: abortController.signal,
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+
+    if (isAbortError(error)) {
+      throw new Error('The request timed out. Please try again.');
+    }
+
+    throw error;
+  }
+
+  clearTimeout(timeout);
 
   if (!response.ok) {
     let message = 'Request failed. Please try again.';
@@ -144,10 +177,30 @@ export async function authorizedBinaryRequest(
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${accessToken}`);
 
-  const response = await fetch(`${requireApiBaseUrl()}${path}`, {
-    ...init,
-    headers,
-  });
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    abortController.abort();
+  }, AUTH_REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${requireApiBaseUrl()}${path}`, {
+      ...init,
+      headers,
+      signal: abortController.signal,
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+
+    if (isAbortError(error)) {
+      throw new Error('The request timed out. Please try again.');
+    }
+
+    throw error;
+  }
+
+  clearTimeout(timeout);
 
   if (!response.ok) {
     let message = 'Request failed. Please try again.';

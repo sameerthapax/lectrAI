@@ -54,6 +54,7 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const REFRESH_SKEW_SECONDS = 60;
+const AUTH_RESTORE_TIMEOUT_MS = 8000;
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [status, setStatus] = useState<AuthStatus>('loading');
@@ -68,8 +69,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     const restoreSession = async () => {
       try {
-        await initializeLocalDatabase();
-        const storedSession = await getStoredAuthSession();
+        await withTimeout(initializeLocalDatabase(), AUTH_RESTORE_TIMEOUT_MS, 'initialize-local-db');
+        const storedSession = await withTimeout(
+          getStoredAuthSession(),
+          AUTH_RESTORE_TIMEOUT_MS,
+          'read-stored-auth-session'
+        );
 
         if (!storedSession) {
           if (mounted) {
@@ -78,7 +83,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
           return;
         }
 
-        const restored = await refreshStoredSession(storedSession);
+        const restored = await withTimeout(
+          refreshStoredSession(storedSession),
+          AUTH_RESTORE_TIMEOUT_MS,
+          'refresh-stored-session'
+        );
 
         if (!mounted) {
           return;
@@ -332,4 +341,23 @@ function toStoredSession(sessionValue: AuthSession): StoredAuthSession {
     expiresIn: sessionValue.expiresIn,
     expiresAt: sessionValue.expiresAt,
   };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Timed out while trying to ${label}.`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
 }
