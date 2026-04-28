@@ -26,6 +26,7 @@ import {
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const DEFAULT_CHAT_MODEL = env.openAiChatModel ?? 'gpt-4.1-mini';
+const DEFAULT_WEB_SEARCH_MODEL = env.openAiWebSearchModel ?? DEFAULT_CHAT_MODEL;
 const DEFAULT_CHAT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL ?? 'gpt-4o-mini-transcribe';
 const DEFAULT_TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL ?? 'eleven_flash_v2_5';
 const DEFAULT_TTS_VOICE_ID = process.env.ELEVENLABS_TTS_VOICE_ID ?? 'JBFqnCBsd6RMkjVDRZzb';
@@ -52,9 +53,22 @@ const TRANSCRIPT_SEARCH_TOOL_NAME = 'search_transcript_chunks';
 const GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME = 'get_full_lecture_transcript';
 const CREATE_QUIZ_TOOL_NAME = 'create_quiz';
 const CREATE_FLASHCARDS_TOOL_NAME = 'create_flashcards';
+const SEARCH_RESEARCH_PAPERS_TOOL_NAME = 'search_research_papers';
 const GET_CURRENT_DATE_AND_TIME_TOOL_NAME = 'get_current_date_and_time';
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const ENABLE_LOKI_ATTACHMENT_DEBUG = true;
+const DEFAULT_RESEARCH_LINK_COUNT = 3;
+const MAX_RESEARCH_LINK_COUNT = 5;
+const RESEARCH_ALLOWED_DOMAINS = [
+  'scholar.google.com',
+  'arxiv.org',
+  'pubmed.ncbi.nlm.nih.gov',
+  'doi.org',
+  'acm.org',
+  'ieeexplore.ieee.org',
+  'openreview.net',
+  'semanticscholar.org',
+] as const;
 
 let openAiClient: OpenAI | null = null;
 let mem0Memory: Memory | null | undefined;
@@ -66,6 +80,7 @@ type ChatMessageRole = 'user' | 'assistant' | 'system';
 type ChatReplyJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 export type ChatReplyJobEventType =
   | 'retrieving_lecture'
+  | 'research_searching'
   | 'quiz_generation_completed'
   | 'flashcards_generation_completed'
   | 'completed'
@@ -75,11 +90,13 @@ type OpenAiResponsesOutputContent = {
   type?: unknown;
   text?: unknown;
   refusal?: unknown;
+  annotations?: unknown;
 };
 
 type OpenAiResponsesOutput = {
   type?: unknown;
   content?: unknown;
+  action?: unknown;
 };
 
 type OpenAiResponsesUsage = {
@@ -269,6 +286,19 @@ type AssistantFlashcardAttachment = {
   flashcardTitle: string | null;
 };
 
+type ResearchPaperLink = {
+  title: string;
+  url: string;
+  source: string | null;
+  summary: string | null;
+};
+
+type AssistantResearchAttachment = {
+  hasResearch: boolean;
+  topic: string | null;
+  papers: ResearchPaperLink[];
+};
+
 export type GeneratedAssistantReply = {
   session: ChatSessionRecord;
   userMessage: ChatMessageRecord;
@@ -277,6 +307,7 @@ export type GeneratedAssistantReply = {
   audio: AssistantAudioPayload | null;
   quiz: AssistantQuizAttachment | null;
   flashcards: AssistantFlashcardAttachment | null;
+  research: AssistantResearchAttachment | null;
 };
 
 export type AssistantAudioPayload = {
@@ -666,6 +697,7 @@ async function completeChatReplyWorkflowForUser(input: {
     messageText: modelResponse.messageText,
     quiz: modelResponse.quiz,
     flashcards: modelResponse.flashcards,
+    research: modelResponse.research,
   });
   const assistantMessage = await createAssistantMessageWithCitations({
     chatSessionId: input.session.id,
@@ -677,6 +709,7 @@ async function completeChatReplyWorkflowForUser(input: {
     memories,
     quiz: modelResponse.quiz,
     flashcards: modelResponse.flashcards,
+    research: modelResponse.research,
   });
 
   const nextSession = {
@@ -707,6 +740,7 @@ async function completeChatReplyWorkflowForUser(input: {
     audio,
     quiz: modelResponse.quiz,
     flashcards: modelResponse.flashcards,
+    research: modelResponse.research,
   };
 }
 
@@ -859,6 +893,7 @@ async function requestTutorResponse(input: {
   })) as unknown as OpenAiResponsesResponse;
   let latestQuiz: StoredQuizRecord | null = null;
   let latestFlashcards: StoredFlashcardSetRecord | null = null;
+  let latestResearch: AssistantResearchAttachment | null = null;
   let latestUsage = readUsage(response.usage);
 
   for (let step = 0; step < MAX_TUTOR_TOOL_STEPS; step += 1) {
@@ -878,6 +913,7 @@ async function requestTutorResponse(input: {
               quizId: latestQuiz.id,
               quizTitle: latestQuiz.title,
             },
+            research: latestResearch,
             flashcards: latestFlashcards
               ? {
                   hasFlashcards: true,
@@ -894,11 +930,23 @@ async function requestTutorResponse(input: {
             modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
             usage: latestUsage,
             quiz: null,
+            research: latestResearch,
             flashcards: {
               hasFlashcards: true,
               flashcardSetId: latestFlashcards.id,
               flashcardTitle: latestFlashcards.title,
             },
+          };
+        }
+
+        if (latestResearch) {
+          return {
+            messageText: buildResearchAttachmentReply(latestResearch),
+            modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+            usage: latestUsage,
+            quiz: null,
+            research: latestResearch,
+            flashcards: null,
           };
         }
 
@@ -916,6 +964,7 @@ async function requestTutorResponse(input: {
               quizTitle: latestQuiz.title,
             }
           : null,
+        research: latestResearch,
         flashcards: latestFlashcards
           ? {
               hasFlashcards: true,
@@ -947,6 +996,7 @@ async function requestTutorResponse(input: {
                   quizTitle: latestQuiz.title,
                 }
               : null,
+            research: latestResearch,
             flashcards: latestFlashcards
               ? {
                   hasFlashcards: true,
@@ -1000,6 +1050,10 @@ async function requestTutorResponse(input: {
         );
       }
 
+      if (result.research) {
+        latestResearch = result.research;
+      }
+
       toolOutputs.push({
         type: 'function_call_output',
         call_id: toolCall.callId,
@@ -1033,6 +1087,7 @@ async function requestTutorResponse(input: {
         quizId: latestQuiz.id,
         quizTitle: latestQuiz.title,
       },
+      research: latestResearch,
       flashcards: latestFlashcards
         ? {
             hasFlashcards: true,
@@ -1055,11 +1110,35 @@ async function requestTutorResponse(input: {
             quizTitle: latestQuiz.title,
           }
         : null,
+      research: latestResearch,
       flashcards: {
         hasFlashcards: true,
         flashcardSetId: latestFlashcards.id,
         flashcardTitle: latestFlashcards.title,
       },
+    };
+  }
+
+  if (!messageText && latestResearch) {
+    return {
+      messageText: buildResearchAttachmentReply(latestResearch),
+      modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+      usage: latestUsage,
+      quiz: latestQuiz
+        ? {
+            hasQuiz: true,
+            quizId: latestQuiz.id,
+            quizTitle: latestQuiz.title,
+          }
+        : null,
+      research: latestResearch,
+      flashcards: latestFlashcards
+        ? {
+            hasFlashcards: true,
+            flashcardSetId: latestFlashcards.id,
+            flashcardTitle: latestFlashcards.title,
+          }
+        : null,
     };
   }
 
@@ -1078,6 +1157,7 @@ async function requestTutorResponse(input: {
           quizTitle: latestQuiz.title,
         }
       : null,
+    research: latestResearch,
     flashcards: latestFlashcards
       ? {
           hasFlashcards: true,
@@ -1114,8 +1194,11 @@ function buildOpenAiInput(input: {
     `When the user asks what course is next, what courses are scheduled today, or any question that depends on the current day or time, call both ${GET_CURRENT_DATE_AND_TIME_TOOL_NAME} and ${LIST_COURSES_TOOL_NAME} before answering.`,
     `When the user asks you to generate a quiz, practice quiz, or practice test, call the ${CREATE_QUIZ_TOOL_NAME} tool instead of pasting the whole quiz into the chat.`,
     `When the user asks you to generate flashcards, study cards, or revision cards, call the ${CREATE_FLASHCARDS_TOOL_NAME} tool instead of pasting the whole set into the chat.`,
+    `When the user asks for research, papers, academic sources, literature, scholarly links, or Google Scholar results on a topic, call the ${SEARCH_RESEARCH_PAPERS_TOOL_NAME} tool.`,
     'After a quiz tool succeeds, briefly tell the user the quiz is ready and invite them to open it.',
     'After a flashcard tool succeeds, briefly tell the user the flashcards are ready and invite them to open them.',
+    'After a research tool succeeds, keep the reply short and direct.',
+    'Use this pattern for research replies: "The links for the TOPIC topic are generated below. I got TITLE by SOURCE, TITLE by SOURCE. Tap on the link to navigate to the link."',
     'You may execute multiple tool calls in the same response loop when needed.',
     'When relevant, use the personal memory context to personalize continuity and study help, but never let it override lecture facts.',
     'If personal memory conflicts with retrieved lecture context, trust the lecture context for subject matter and treat memory as preference context only.',
@@ -1277,6 +1360,22 @@ function buildTutorTools() {
         required: ['cardCount', 'title'],
       },
     },
+    {
+      type: 'function',
+      name: SEARCH_RESEARCH_PAPERS_TOOL_NAME,
+      description:
+        'Search for scholarly papers and research links for the requested topic, preferring Google Scholar style academic results and returning between 1 and 5 links.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          topic: { type: ['string', 'null'] },
+          maxResults: { type: ['integer', 'null'], minimum: 1, maximum: 5 },
+        },
+        required: ['topic', 'maxResults'],
+      },
+    },
   ];
 }
 
@@ -1288,6 +1387,7 @@ async function executeTutorToolCall(
     retrieval: RetrievedContext;
     memories: LokiMemory[];
     currentMessage: string;
+    progressReporter: ChatReplyProgressReporter | null;
   },
   toolCall: TutorFunctionCall
 ) {
@@ -1301,6 +1401,7 @@ async function executeTutorToolCall(
       },
       quiz: null,
       flashcards: null,
+      research: null,
     };
   }
 
@@ -1311,6 +1412,7 @@ async function executeTutorToolCall(
       output: currentDateTime,
       quiz: null,
       flashcards: null,
+      research: null,
     };
   }
 
@@ -1332,6 +1434,7 @@ async function executeTutorToolCall(
       },
       quiz,
       flashcards: null,
+      research: null,
     };
   }
 
@@ -1353,6 +1456,31 @@ async function executeTutorToolCall(
       },
       quiz: null,
       flashcards,
+      research: null,
+    };
+  }
+
+  if (toolCall.name === SEARCH_RESEARCH_PAPERS_TOOL_NAME) {
+    const args = readSearchResearchPapersToolArgs(toolCall.arguments, input.currentMessage);
+    await input.progressReporter?.emit(
+      'research_searching',
+      `I am doing a web search and gathering information on ${args.topic} topic for you.`
+    );
+    const research = await searchResearchPapersWithWebSearch({
+      topic: args.topic,
+      maxResults: args.maxResults ?? DEFAULT_RESEARCH_LINK_COUNT,
+    });
+
+    return {
+      output: {
+        hasResearch: research.hasResearch,
+        topic: research.topic,
+        count: research.papers.length,
+        papers: research.papers,
+      },
+      quiz: null,
+      flashcards: null,
+      research,
     };
   }
 
@@ -1449,6 +1577,75 @@ function buildFlashcardGenerationContexts(retrieval: RetrievedContext): LokiFlas
   }
 
   return Array.from(deduped.values());
+}
+
+function buildResearchAttachmentReply(research: AssistantResearchAttachment) {
+  const topic = research.topic?.trim() || 'requested';
+  const sources = research.papers
+    .slice(0, 3)
+    .map((paper) => `${paper.title} by ${paper.source ?? 'an academic source'}`)
+    .join(', ');
+
+  return `The links for the ${topic} topic are generated below. I got ${sources}. Tap on the link to navigate to the link.`;
+}
+
+async function searchResearchPapersWithWebSearch(input: {
+  topic: string;
+  maxResults: number;
+}): Promise<AssistantResearchAttachment> {
+  const response = (await getOpenAiClient().responses.create({
+    model: DEFAULT_WEB_SEARCH_MODEL,
+    tools: [
+      {
+        type: 'web_search',
+        filters: {
+          allowed_domains: [...RESEARCH_ALLOWED_DOMAINS],
+        },
+      },
+    ],
+    tool_choice: 'auto',
+    include: ['web_search_call.action.sources'],
+    input: [
+      {
+        role: 'system',
+        content: [
+          {
+            type: 'input_text',
+            text: [
+              'You find academic papers and return structured JSON only.',
+              'Prefer Google Scholar style scholarly results and direct paper landing pages or PDFs when available.',
+              'Only include research papers, preprints, or authoritative paper landing pages.',
+              `Return between 1 and ${Math.max(1, Math.min(input.maxResults, MAX_RESEARCH_LINK_COUNT))} papers when possible.`,
+              'Output JSON with this exact shape: {"topic": string, "papers": [{"title": string, "url": string, "source": string|null, "summary": string|null}]}.',
+              'Do not include markdown fences or any prose outside the JSON object.',
+            ].join(' '),
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: `Find research papers about: ${input.topic}`,
+          },
+        ],
+      },
+    ] as any,
+  })) as unknown as OpenAiResponsesResponse;
+
+  const parsedPapers = readResearchPapersFromOutput(extractOutputText(response), input.maxResults);
+  const sourcePapers = extractResearchPapersFromSources(response, input.maxResults);
+  const papers = dedupeResearchPapers([...parsedPapers, ...sourcePapers]).slice(
+    0,
+    Math.max(1, Math.min(input.maxResults, MAX_RESEARCH_LINK_COUNT))
+  );
+
+  return {
+    hasResearch: papers.length > 0,
+    topic: input.topic,
+    papers,
+  };
 }
 
 async function decideRetrievalForUser(
@@ -1986,13 +2183,21 @@ async function createAssistantMessageWithCitations(input: {
   memories: LokiMemory[];
   quiz: AssistantQuizAttachment | null;
   flashcards: AssistantFlashcardAttachment | null;
+  research: AssistantResearchAttachment | null;
 }) {
   const db = getDb();
-  const retrievalMetadata = buildRetrievalMetadata(input.retrieval, input.memories, input.quiz, input.flashcards);
+  const retrievalMetadata = buildRetrievalMetadata(
+    input.retrieval,
+    input.memories,
+    input.quiz,
+    input.flashcards,
+    input.research
+  );
   logLokiAttachmentDebug('create-assistant-message-with-citations-input', {
     chatSessionId: input.chatSessionId,
     quiz: input.quiz,
     flashcards: input.flashcards,
+    research: input.research,
     retrievalMetadata,
   });
 
@@ -2179,7 +2384,8 @@ function buildRetrievalMetadata(
   retrieval: RetrievedContext,
   memories: LokiMemory[],
   quiz: AssistantQuizAttachment | null,
-  flashcards: AssistantFlashcardAttachment | null
+  flashcards: AssistantFlashcardAttachment | null,
+  research: AssistantResearchAttachment | null
 ) {
   return {
     decision: retrieval.decision ?? null,
@@ -2216,6 +2422,7 @@ function buildRetrievalMetadata(
     })),
     quiz: quiz ?? null,
     flashcards: flashcards ?? null,
+    research: research ?? null,
   };
 }
 
@@ -2755,6 +2962,123 @@ function extractFunctionCalls(response: OpenAiResponsesResponse) {
     .filter((item) => item.name.length > 0);
 }
 
+function extractResearchPapersFromSources(response: OpenAiResponsesResponse, maxResults: number): ResearchPaperLink[] {
+  if (!Array.isArray(response.output)) {
+    return [];
+  }
+
+  const papers: ResearchPaperLink[] = [];
+
+  for (const item of response.output as Array<Record<string, unknown>>) {
+    if (item?.type !== 'web_search_call') {
+      continue;
+    }
+
+    const action = readObjectRecord(item.action);
+    const sources = Array.isArray(action?.sources) ? action.sources : [];
+
+    for (const source of sources) {
+      const record = readObjectRecord(source);
+      const title = typeof record?.title === 'string' ? record.title.trim() : '';
+      const url = typeof record?.url === 'string' ? record.url.trim() : '';
+
+      if (!isValidHttpUrl(url) || title.length === 0) {
+        continue;
+      }
+
+      papers.push({
+        title,
+        url,
+        source: inferResearchSourceLabel(url),
+        summary: null,
+      });
+
+      if (papers.length >= maxResults) {
+        return papers;
+      }
+    }
+  }
+
+  return papers;
+}
+
+function readResearchPapersFromOutput(rawOutputText: string | null, maxResults: number): ResearchPaperLink[] {
+  if (!rawOutputText) {
+    return [];
+  }
+
+  const parsed = parsePossiblyFencedJson(rawOutputText);
+  const record = readObjectRecord(parsed);
+  const papers = Array.isArray(record?.papers) ? record.papers : Array.isArray(parsed) ? parsed : [];
+
+  return papers
+    .map(readResearchPaperRecord)
+    .filter((paper): paper is ResearchPaperLink => paper != null)
+    .slice(0, maxResults);
+}
+
+function readResearchPaperRecord(value: unknown): ResearchPaperLink | null {
+  const record = readObjectRecord(value);
+  const title = typeof record?.title === 'string' ? record.title.trim() : '';
+  const url = typeof record?.url === 'string' ? record.url.trim() : '';
+
+  if (!title || !isValidHttpUrl(url)) {
+    return null;
+  }
+
+  return {
+    title,
+    url,
+    source: typeof record?.source === 'string' && record.source.trim().length > 0 ? record.source.trim() : inferResearchSourceLabel(url),
+    summary: typeof record?.summary === 'string' && record.summary.trim().length > 0 ? record.summary.trim() : null,
+  };
+}
+
+function parsePossiblyFencedJson(value: string) {
+  const trimmed = value.trim();
+  const withoutFence =
+    trimmed.startsWith('```') && trimmed.endsWith('```')
+      ? trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+      : trimmed;
+
+  try {
+    return JSON.parse(withoutFence) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function dedupeResearchPapers(papers: ResearchPaperLink[]) {
+  const deduped = new Map<string, ResearchPaperLink>();
+
+  for (const paper of papers) {
+    const key = paper.url.toLowerCase();
+
+    if (!deduped.has(key)) {
+      deduped.set(key, paper);
+    }
+  }
+
+  return Array.from(deduped.values());
+}
+
+function inferResearchSourceLabel(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+function isValidHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function readTranscriptSearchToolArgs(rawArguments: string, fallbackQuery?: string, fallbackScope?: ChatScope | null): TranscriptSearchToolArgs {
   let parsed: unknown;
 
@@ -2875,6 +3199,22 @@ function readCreateFlashcardsToolArgs(rawArguments: string) {
   return {
     cardCount: readOptionalBoundedInteger(record.cardCount, 'cardCount', 4, 12),
     title: readOptionalString(record.title, 'title'),
+  };
+}
+
+function readSearchResearchPapersToolArgs(rawArguments: string, fallbackTopic?: string) {
+  const record = readJsonObject(rawArguments, 'OpenAI tutor returned invalid research tool arguments.');
+  const topic = readOptionalString(record.topic, 'topic') ?? fallbackTopic?.trim() ?? null;
+
+  if (!topic) {
+    throw new HttpError(502, 'OpenAI tutor omitted the research topic.');
+  }
+
+  return {
+    topic,
+    maxResults:
+      readOptionalBoundedInteger(record.maxResults, 'maxResults', 1, MAX_RESEARCH_LINK_COUNT) ??
+      DEFAULT_RESEARCH_LINK_COUNT,
   };
 }
 

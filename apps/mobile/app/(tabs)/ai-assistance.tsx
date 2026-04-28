@@ -475,11 +475,11 @@ export default function AiAssistanceRoute() {
                 return;
               }
 
-              if (event.eventType !== 'retrieving_lecture') {
+              if (event.eventType !== 'retrieving_lecture' && event.eventType !== 'research_searching') {
                 return;
               }
               setAssistantWaiting(true);
-              setAssistantStageLabel('Retrieving');
+              setAssistantStageLabel(event.eventType === 'research_searching' ? 'Searching' : 'Retrieving');
               if (progressGatePromiseRef.current) {
                 return;
               }
