@@ -1,5 +1,5 @@
 import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import LottieView from 'lottie-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
@@ -9,7 +9,6 @@ import nextButtonPressFlashCardSoundFx from '../../../assets/animations/soundfx/
 import poppingAnimationSoundFx from '../../../assets/animations/soundfx/popping-animation-soundfx.mp3';
 import whooshFlashCardSoundFx from '../../../assets/animations/soundfx/whoosh_flash_card.mp3';
 import { getResponsiveStudyLayout } from '../../../components/study/responsive-study-layout';
-import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAuth } from '../../../providers/auth-provider';
 import { useAppTheme, useSettings } from '../../../providers/settings-provider';
 import {
@@ -347,9 +346,6 @@ export default function FlashcardSetDetailRoute() {
   );
 
   return (
-    <>
-      <Stack.Screen options={{ headerShown: false }} />
-
       <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
@@ -362,37 +358,6 @@ export default function FlashcardSetDetailRoute() {
             backgroundColor: theme.colors.screen,
           }}
         >
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 12,
-              paddingTop: 4,
-            }}
-          >
-            <NativeBackButton
-              theme={theme}
-              onPress={() => {
-                void playSound(completionPlayer);
-                router.back();
-              }}
-            />
-
-            <Text
-              numberOfLines={1}
-              style={{
-                flex: 1,
-                color: theme.colors.text,
-                fontSize: 28,
-                lineHeight: 32,
-                fontWeight: '900',
-              }}
-            >
-              Flashcards
-            </Text>
-          </View>
-
           {loading ? (
             <StateCard theme={theme} message="Loading flashcards..." />
           ) : errorMessage ? (
@@ -972,7 +937,6 @@ export default function FlashcardSetDetailRoute() {
           </View>
         ) : null}
       </View>
-    </>
   );
 }
 

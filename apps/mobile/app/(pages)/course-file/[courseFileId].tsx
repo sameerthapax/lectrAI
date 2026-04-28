@@ -1,9 +1,8 @@
 import { File } from 'expo-file-system';
 import { Image } from 'expo-image';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState, type ReactNode } from 'react';
 import { Linking, Pressable, ScrollView, Text, View } from 'react-native';
-import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAppTheme } from '../../../providers/settings-provider';
 import {
   getCourseFile,
@@ -86,24 +85,6 @@ export default function CourseFileDetailRoute() {
           backgroundColor: theme.colors.screen,
         }}
       >
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingTop: 8,
-            paddingBottom: 4,
-            justifyContent: 'center',
-          }}
-        >
-          <View style={{ position: 'absolute', left: 0 }}>
-            <NativeBackButton theme={theme} onPress={() => router.back()} />
-          </View>
-
-          <Text style={{ color: theme.colors.text, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
-            File Review
-          </Text>
-        </View>
-
         <SectionCard theme={theme} title="Document">
           {loading ? (
             <Text style={{ color: theme.colors.text, fontSize: 15, lineHeight: 24 }}>

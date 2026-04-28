@@ -45,10 +45,7 @@ export default function SettingsProfileRoute() {
   };
 
   return (
-    <SettingsScreen
-      title="Profile"
-      subtitle="Edit the profile details stored locally for your LectrAI experience."
-    >
+    <SettingsScreen subtitle="Edit the profile details stored locally for your LectrAI experience.">
       <SectionCard title="Profile Details">
         <ProfileField
           label="Name"

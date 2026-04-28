@@ -90,8 +90,8 @@ export async function postLectureTranscription(request: Request, response: Respo
     lectureId,
     userId,
     lectureStatus: result.lecture.status,
-    transcriptStatus: result.transcript.status,
-    totalSegments: result.transcript.totalSegments,
+    transcriptStatus: result.transcript?.status ?? null,
+    totalSegments: result.transcript?.totalSegments ?? null,
     responsePreview: buildLogPreview(result),
   });
 

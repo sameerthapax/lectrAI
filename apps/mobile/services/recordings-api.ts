@@ -26,6 +26,7 @@ export type RemoteLectureChunkUploadPayload = {
   mimeType: string;
   fileSizeBytes: number;
   audioBase64: string;
+  chunkUploadMode?: 'transcribe' | 'assemble_only';
 };
 
 export type RemoteRecordingSyncResult = {

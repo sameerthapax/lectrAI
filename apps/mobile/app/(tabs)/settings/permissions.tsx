@@ -146,10 +146,7 @@ export default function SettingsPermissionsRoute() {
   };
 
   return (
-    <SettingsScreen
-      title="Permissions"
-      subtitle="Control device permissions and app features used for recording, uploads, and alerts."
-    >
+    <SettingsScreen subtitle="Control device permissions and app features used for recording, uploads, and alerts.">
       <SectionCard
         title="Permission Controls"
       >

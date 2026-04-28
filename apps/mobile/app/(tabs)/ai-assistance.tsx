@@ -43,9 +43,9 @@ import {
 import { logMobileError } from '../../services/error-monitor';
 
 const LokiNativeVoiceVisualizer = require('../../components/ai/loki-native-voice-visualizer').default;
-const HOLD_TO_RECORD_DELAY_MS = 150;
-const TALK_EXPAND_DURATION_MS = 1500;
-const TALK_RESET_DURATION_MS = 220;
+const HOLD_TO_RECORD_DELAY_MS = 90;
+const TALK_EXPAND_DURATION_MS = 240;
+const TALK_RESET_DURATION_MS = 180;
 const TALK_BUTTON_FLEX = 1.2;
 const TYPE_BUTTON_FLEX = 1;
 const TALK_BUTTON_EXPANDED_FLEX = TALK_BUTTON_FLEX + TYPE_BUTTON_FLEX;
@@ -55,6 +55,8 @@ const PROGRESS_MESSAGE_DELAY_MS = 2000;
 const PROGRESS_MESSAGE_MIN_VISIBLE_MS = 2400;
 const PROGRESS_TRANSITION_MS = 380;
 const ENABLE_LOKI_ATTACHMENT_DEBUG = true;
+const TALK_EXPAND_EASING = Easing.bezier(0.22, 1, 0.36, 1);
+const TALK_RESET_EASING = Easing.bezier(0.4, 0, 0.2, 1);
 
 export default function AiAssistanceRoute() {
   const theme = useAppTheme();
@@ -161,8 +163,8 @@ export default function AiAssistanceRoute() {
   useEffect(() => {
     Animated.timing(talkGlowOpacity, {
       toValue: talkHoldActive ? 0.82 : 0,
-      duration: talkHoldActive ? 220 : TALK_RESET_DURATION_MS,
-      easing: Easing.inOut(Easing.ease),
+      duration: talkHoldActive ? 160 : TALK_RESET_DURATION_MS,
+      easing: talkHoldActive ? TALK_EXPAND_EASING : TALK_RESET_EASING,
       useNativeDriver: false,
     }).start();
   }, [talkGlowOpacity, talkHoldActive]);
@@ -196,7 +198,7 @@ export default function AiAssistanceRoute() {
     Animated.timing(talkExpandProgress, {
       toValue: shouldExpandTalkButton ? 1 : 0,
       duration: shouldExpandTalkButton ? TALK_EXPAND_DURATION_MS : TALK_RESET_DURATION_MS,
-      easing: Easing.inOut(Easing.cubic),
+      easing: shouldExpandTalkButton ? TALK_EXPAND_EASING : TALK_RESET_EASING,
       useNativeDriver: false,
     }).start();
   }, [shouldExpandTalkButton, talkExpandProgress]);
@@ -462,8 +464,9 @@ export default function AiAssistanceRoute() {
 
         setActiveSessionId(created.session.id);
         setMessages((current) => {
+          const optimisticUserMessage = current.find((message) => message.id === input.optimisticUserMessageId);
           const withoutPendingUser = current.filter((message) => message.id !== input.optimisticUserMessageId);
-          return [...withoutPendingUser, created.userMessage];
+          return [...withoutPendingUser, mergeCreatedUserMessage(created.userMessage, optimisticUserMessage)];
         });
 
         const completedMetadata = await streamLokiReplyJob(
@@ -475,11 +478,11 @@ export default function AiAssistanceRoute() {
                 return;
               }
 
-              if (event.eventType !== 'retrieving_lecture') {
+              if (event.eventType !== 'retrieving_lecture' && event.eventType !== 'research_searching') {
                 return;
               }
               setAssistantWaiting(true);
-              setAssistantStageLabel('Retrieving');
+              setAssistantStageLabel(event.eventType === 'research_searching' ? 'Searching' : 'Retrieving');
               if (progressGatePromiseRef.current) {
                 return;
               }
@@ -866,7 +869,10 @@ export default function AiAssistanceRoute() {
       <Stack.Screen options={{ title: 'AI Assist' }} />
 
       <ScrollView
+        automaticallyAdjustKeyboardInsets
         contentInsetAdjustmentBehavior="automatic"
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
         style={{ backgroundColor: theme.colors.screen }}
         contentContainerStyle={{
           flexGrow: 1,
@@ -1411,15 +1417,17 @@ function createPendingMessage(
   messageText: string,
   options: { source?: 'typed' | 'voice' } = {}
 ): RemoteLokiMessage {
+  const isVoiceTranscript = role === 'user' && options.source === 'voice';
+
   return {
     id: `pending-${role}-${Date.now()}`,
     role,
     messageText,
-    modelName: role === 'user' && options.source === 'voice' ? 'transcribing' : null,
+    modelName: isVoiceTranscript ? 'transcribing' : null,
     promptTokens: null,
     completionTokens: null,
     totalTokens: null,
-    retrievalMetadata: null,
+    retrievalMetadata: isVoiceTranscript ? { inputSource: 'voice' } : null,
     hasQuiz: false,
     quizId: null,
     quizTitle: null,
@@ -1508,6 +1516,9 @@ function mergeSessionMessagesWithHydratedLocalMessages(
 
     return {
       ...remoteMessage,
+      modelName:
+        remoteMessage.modelName ??
+        (isVoiceTranscriptMessage(currentMessage) && remoteMessage.role === 'user' ? 'transcribing' : null),
       retrievalMetadata: mergeAttachmentDataIntoRetrievalMetadata(
         remoteMessage.retrievalMetadata ?? currentMessage.retrievalMetadata,
         {
@@ -1535,6 +1546,28 @@ function mergeSessionMessagesWithHydratedLocalMessages(
   }
 
   return [...mergedRemoteMessages, ...localOnlyMessages].sort(compareMessagesByCreatedAt);
+}
+
+function mergeCreatedUserMessage(
+  createdUserMessage: RemoteLokiMessage,
+  optimisticUserMessage: RemoteLokiMessage | undefined
+) {
+  if (!optimisticUserMessage || !isVoiceTranscriptMessage(optimisticUserMessage) || createdUserMessage.role !== 'user') {
+    return createdUserMessage;
+  }
+
+  return {
+    ...createdUserMessage,
+    modelName: 'transcribing' as const,
+    retrievalMetadata: {
+      ...(createdUserMessage.retrievalMetadata &&
+      typeof createdUserMessage.retrievalMetadata === 'object' &&
+      !Array.isArray(createdUserMessage.retrievalMetadata)
+        ? (createdUserMessage.retrievalMetadata as Record<string, unknown>)
+        : {}),
+      inputSource: 'voice',
+    },
+  };
 }
 
 function compareMessagesByCreatedAt(left: RemoteLokiMessage, right: RemoteLokiMessage) {
@@ -1593,6 +1626,18 @@ function mergeAttachmentDataIntoRetrievalMetadata(
   }
 
   return metadata;
+}
+
+function isVoiceTranscriptMessage(message: RemoteLokiMessage) {
+  if (message.modelName === 'transcribing') {
+    return true;
+  }
+
+  if (!message.retrievalMetadata || typeof message.retrievalMetadata !== 'object' || Array.isArray(message.retrievalMetadata)) {
+    return false;
+  }
+
+  return (message.retrievalMetadata as Record<string, unknown>).inputSource === 'voice';
 }
 
 function readAttachmentMetadataFromEvents(events: RemoteLokiReplyJobEvent[]) {

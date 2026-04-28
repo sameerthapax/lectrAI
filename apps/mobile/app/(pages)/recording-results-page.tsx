@@ -1,8 +1,7 @@
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from 'react-native';
-import { NativeBackButton } from '../../components/ui/native-back-button';
 import { useAuth } from '../../providers/auth-provider';
 import { useAppTheme } from '../../providers/settings-provider';
 import {
@@ -14,12 +13,16 @@ import {
 } from '../../services/recordings-repository';
 import { logMobileError } from '../../services/error-monitor';
 
+const TRANSCRIPT_PREVIEW_CHAR_COUNT = 900;
+const TRANSCRIPT_PREVIEW_LINE_COUNT = 10;
+
 export default function RecordingResultsRoute() {
   const theme = useAppTheme();
   const auth = useAuth();
   const params = useLocalSearchParams<{ lectureId?: string }>();
   const [summaryExpanded, setSummaryExpanded] = useState(true);
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
+  const [transcriptTextExpanded, setTranscriptTextExpanded] = useState(false);
   const [recording, setRecording] = useState<LocalLectureRecordingRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [audioDownloadLoading, setAudioDownloadLoading] = useState(false);
@@ -73,8 +76,21 @@ export default function RecordingResultsRoute() {
       ? 'Uploaded to API'
       : recording.lastError
         ? 'Saved locally, upload failed'
-        : 'Saved locally, upload pending';
+      : 'Saved locally, upload pending';
   const hasLocalRecordingFile = Boolean(recording?.localUri);
+  const transcriptPending = Boolean(
+    recording &&
+      recording.uploadStatus === 'uploaded' &&
+      recording.syncStatus === 'synced' &&
+      (!recording.transcript ||
+        recording.transcript.status !== 'ready' ||
+        !recording.transcript.fullText ||
+        !hasCanonicalSpeakerLabels(recording.transcript.fullText))
+  );
+  const transcriptFullText = recording?.transcript?.fullText ?? null;
+  const shouldClampTranscript = Boolean(
+    transcriptFullText && transcriptFullText.length > TRANSCRIPT_PREVIEW_CHAR_COUNT
+  );
 
   useEffect(() => {
     void setAudioModeAsync({
@@ -95,13 +111,16 @@ export default function RecordingResultsRoute() {
   }, [player, recording?.localUri]);
 
   useEffect(() => {
+    setTranscriptTextExpanded(false);
+  }, [recording?.lectureId]);
+
+  useEffect(() => {
     const lectureId = recording?.lectureId;
     const user = auth.user;
 
     if (
       loading ||
       !lectureId ||
-      !recording ||
       !user ||
       recording.localUri.length > 0 ||
       !recording.objectPath ||
@@ -161,20 +180,20 @@ export default function RecordingResultsRoute() {
     loading,
     recording?.lectureId,
     recording?.localUri,
+    recording?.objectPath,
     recording?.syncStatus,
     recording?.uploadStatus,
   ]);
 
   useEffect(() => {
     const lectureId = recording?.lectureId;
+    const user = auth.user;
 
     if (
       loading ||
       !lectureId ||
-      !recording ||
-      (recording.transcript?.status === 'ready' && hasCanonicalSpeakerLabels(recording.transcript.fullText)) ||
-      recording.uploadStatus !== 'uploaded' ||
-      recording.syncStatus !== 'synced' ||
+      !user ||
+      !transcriptPending ||
       processingTranscriptLectureIdRef.current === lectureId ||
       transcriptError
     ) {
@@ -189,24 +208,43 @@ export default function RecordingResultsRoute() {
       setTranscriptLoading(true);
 
       try {
-        const accessToken = await auth.getValidAccessToken();
+        while (!cancelled) {
+          const accessToken = await auth.getValidAccessToken();
 
-        if (!accessToken) {
-          throw new Error('Your session expired before transcription could start.');
-        }
+          if (!accessToken) {
+            throw new Error('Your session expired before transcription could start.');
+          }
 
-        const updatedRecording = await processLectureTranscriptionForCache(
-          lectureId,
-          accessToken
-        );
+          try {
+            const updatedRecording = await processLectureTranscriptionForCache(
+              lectureId,
+              accessToken
+            );
 
-        if (!cancelled) {
-          setRecording(updatedRecording);
+            if (cancelled) {
+              return;
+            }
+
+            setRecording(updatedRecording);
+
+            if (
+              updatedRecording?.transcript?.status === 'ready' &&
+              hasCanonicalSpeakerLabels(updatedRecording.transcript.fullText)
+            ) {
+              return;
+            }
+          } catch (error) {
+            if (!isPendingTranscriptError(error)) {
+              throw error;
+            }
+          }
+
+          await wait(3000);
         }
       } catch (error) {
         logMobileError(error, {
           source: 'recording-results.process-transcript',
-          extra: { lectureId },
+          extra: { lectureId, userId: user.id },
         });
         if (!cancelled) {
           setTranscriptError(
@@ -231,11 +269,14 @@ export default function RecordingResultsRoute() {
     };
   }, [
     auth,
+    auth.user,
     loading,
     recording?.lectureId,
     recording?.syncStatus,
     recording?.transcript?.status,
+    recording?.transcript?.fullText,
     recording?.uploadStatus,
+    transcriptPending,
     transcriptError,
   ]);
 
@@ -252,24 +293,6 @@ export default function RecordingResultsRoute() {
           backgroundColor: theme.colors.screen,
         }}
       >
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingTop: 8,
-            paddingBottom: 4,
-            justifyContent: 'center',
-          }}
-        >
-          <View style={{ position: 'absolute', left: 0 }}>
-            <NativeBackButton theme={theme} onPress={() => router.back()} />
-          </View>
-
-          <Text style={{ color: theme.colors.text, fontSize: 30, lineHeight: 36, fontWeight: '900' }}>
-            Lecture Review
-          </Text>
-        </View>
-
         <NotionSection
           theme={theme}
           title="Recording"
@@ -368,7 +391,7 @@ export default function RecordingResultsRoute() {
           expanded={transcriptExpanded}
           onToggle={() => setTranscriptExpanded((current) => !current)}
         >
-          {transcriptLoading ? (
+          {transcriptLoading || (transcriptPending && !transcriptError) ? (
             <TranscriptLoadingState theme={theme} />
           ) : recording?.transcript?.status === 'ready' &&
             recording.transcript.fullText &&
@@ -380,6 +403,7 @@ export default function RecordingResultsRoute() {
                 theme={theme}
               />
               <Text
+                numberOfLines={shouldClampTranscript && !transcriptTextExpanded ? TRANSCRIPT_PREVIEW_LINE_COUNT : undefined}
                 style={{
                   color: theme.colors.text,
                   fontSize: 15,
@@ -387,8 +411,34 @@ export default function RecordingResultsRoute() {
                   fontWeight: '500',
                 }}
               >
-                {recording.transcript.fullText}
+                {transcriptFullText}
               </Text>
+              {shouldClampTranscript ? (
+                <Pressable
+                  onPress={() => setTranscriptTextExpanded((current) => !current)}
+                  style={({ pressed }) => ({
+                    alignSelf: 'flex-start',
+                    minHeight: 38,
+                    borderRadius: 999,
+                    paddingHorizontal: 14,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: pressed ? theme.colors.overlay : theme.colors.cardMuted,
+                    borderWidth: 1,
+                    borderColor: theme.colors.border,
+                  })}
+                >
+                  <Text
+                    style={{
+                      color: theme.colors.text,
+                      fontSize: 13,
+                      fontWeight: '800',
+                    }}
+                  >
+                    {transcriptTextExpanded ? 'Show less' : 'Show more'}
+                  </Text>
+                </Pressable>
+              ) : null}
             </>
           ) : transcriptError ? (
             <>
@@ -533,6 +583,21 @@ function hasCanonicalSpeakerLabels(fullText: string | null) {
   }
 
   return /^(Professor|Student [A-Z]|Unknown Speaker [A-Z]):\s+/m.test(fullText);
+}
+
+function isPendingTranscriptError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  return (
+    message.includes('still uploading or transcribing') ||
+    message.includes('not available for download yet') ||
+    message.includes('no completed chunk transcriptions')
+  );
+}
+
+function wait(durationMs: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
 }
 
 function NotionSection({

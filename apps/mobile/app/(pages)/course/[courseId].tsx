@@ -1,4 +1,4 @@
-import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { getDocumentAsync, type DocumentPickerAsset } from 'expo-document-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -11,7 +11,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { NativeBackButton } from '../../../components/ui/native-back-button';
 import { useAuth } from '../../../providers/auth-provider';
 import { useAppTheme, useSettings } from '../../../providers/settings-provider';
 import {
@@ -27,6 +26,7 @@ import {
 } from '../../../services/course-files-repository';
 import {
   listLectureRecordingsForCourse,
+  saveImportedLectureAudio,
   type LocalLectureRecordingRecord,
 } from '../../../services/recordings-repository';
 
@@ -66,6 +66,11 @@ export default function CourseDetailRoute() {
   const [storedLectures, setStoredLectures] = useState<LocalLectureRecordingRecord[]>([]);
   const [selectedUploadAsset, setSelectedUploadAsset] = useState<DocumentPickerAsset | null>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [showLectureUploadForm, setShowLectureUploadForm] = useState(false);
+  const [selectedLectureUploadAsset, setSelectedLectureUploadAsset] = useState<DocumentPickerAsset | null>(null);
+  const [lectureUploadTitle, setLectureUploadTitle] = useState('');
+  const [lectureUploadBusy, setLectureUploadBusy] = useState(false);
+  const [lectureUploadStatusMessage, setLectureUploadStatusMessage] = useState<string | null>(null);
   const [openLectureActionId, setOpenLectureActionId] = useState<string | null>(null);
   const [uploadDeleteMode, setUploadDeleteMode] = useState(false);
   const suppressNextOutsideTapRef = useRef(false);
@@ -112,6 +117,10 @@ export default function CourseDetailRoute() {
     setDescription('');
     setLinkValue('');
     setSelectedUploadAsset(null);
+    setShowLectureUploadForm(false);
+    setSelectedLectureUploadAsset(null);
+    setLectureUploadTitle('');
+    setLectureUploadStatusMessage(null);
     setOpenLectureActionId(null);
     setUploadDeleteMode(false);
   }, [course]);
@@ -203,6 +212,25 @@ export default function CourseDetailRoute() {
     setSelectedUploadAsset(result.assets[0] ?? null);
   };
 
+  const handleChooseLectureAudio = async () => {
+    const result = await getDocumentAsync({
+      type: 'audio/*',
+      multiple: false,
+      copyToCacheDirectory: true,
+    });
+
+    if (result.canceled) {
+      return;
+    }
+
+    const asset = result.assets[0] ?? null;
+    setSelectedLectureUploadAsset(asset);
+
+    if (asset?.name && !lectureUploadTitle.trim()) {
+      setLectureUploadTitle(buildLectureTitleFromAsset(asset));
+    }
+  };
+
   const handleSaveCourseFile = async () => {
     if (!auth.user || !courseId) {
       return;
@@ -253,14 +281,79 @@ export default function CourseDetailRoute() {
       setUploadBusy(false);
     }
   };
+
+  const handleSaveLectureUpload = async () => {
+    if (!auth.user || !courseId || !course) {
+      return;
+    }
+
+    if (!selectedLectureUploadAsset) {
+      Alert.alert('Choose audio', 'Pick an audio file before importing a lecture.');
+      return;
+    }
+
+    const fileSizeBytes = selectedLectureUploadAsset.size ?? 0;
+    const requiresManualTitle = fileSizeBytes > 100 * 1024 * 1024;
+    const trimmedTitle = lectureUploadTitle.trim();
+
+    if (requiresManualTitle && trimmedTitle.length === 0) {
+      Alert.alert('Lecture title required', 'Add a lecture name before importing audio larger than 100 MB.');
+      return;
+    }
+
+    try {
+      setLectureUploadBusy(true);
+      setLectureUploadStatusMessage(
+        requiresManualTitle ? 'Preparing large lecture import...' : 'Preparing lecture upload...'
+      );
+      const accessToken = await auth.getValidAccessToken();
+      const savedLecture = await saveImportedLectureAudio({
+        user: auth.user,
+        accessToken,
+        courseId,
+        courseName: course.courseName,
+        asset: selectedLectureUploadAsset,
+        lectureTitle: trimmedTitle.length > 0 ? trimmedTitle : undefined,
+        onStatusChange: setLectureUploadStatusMessage,
+      });
+
+      if (savedLecture) {
+        setStoredLectures((current) => [
+          savedLecture,
+          ...current.filter((lecture) => lecture.lectureId !== savedLecture.lectureId),
+        ]);
+      }
+
+      setShowLectureUploadForm(false);
+      setSelectedLectureUploadAsset(null);
+      setLectureUploadTitle('');
+      setLectureUploadStatusMessage(null);
+      setLecturesExpanded(false);
+
+      router.push({
+        pathname: '/recording-results-page',
+        params: {
+          lectureId: savedLecture?.lectureId ?? '',
+        },
+      });
+    } catch (error) {
+      setLectureUploadStatusMessage(null);
+      Alert.alert(
+        'Could not import lecture',
+        error instanceof Error ? error.message : 'Please try again.'
+      );
+    } finally {
+      setLectureUploadBusy(false);
+    }
+  };
   const visibleLectures = storedLectures.slice(0, lecturesExpanded ? 6 : 3);
+  const selectedLectureUploadSizeBytes = selectedLectureUploadAsset?.size ?? 0;
+  const selectedLectureNeedsMultipart = selectedLectureUploadSizeBytes > 100 * 1024 * 1024;
 
   return (
-    <>
-      <Stack.Screen options={{ headerShown: false }} />
-
-      <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.screen }}>
         <ScrollView
+          automaticallyAdjustKeyboardInsets
           onTouchStart={() => {
             if (suppressNextOutsideTapRef.current) {
               suppressNextOutsideTapRef.current = false;
@@ -283,6 +376,8 @@ export default function CourseDetailRoute() {
           }}
           scrollEventThrottle={16}
           contentInsetAdjustmentBehavior="automatic"
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
           style={{ backgroundColor: theme.colors.screen }}
           contentContainerStyle={{
             flexGrow: 1,
@@ -292,31 +387,6 @@ export default function CourseDetailRoute() {
             backgroundColor: theme.colors.screen,
           }}
         >
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 12,
-              paddingTop: 4,
-            }}
-          >
-            <NativeBackButton theme={theme} onPress={() => router.back()} />
-
-            <Text
-              numberOfLines={1}
-              style={{
-                flex: 1,
-                color: theme.colors.text,
-                fontSize: 28,
-                lineHeight: 32,
-                fontWeight: '900',
-              }}
-            >
-              Course
-            </Text>
-          </View>
-
           {loading ? (
             <StateCard
               theme={theme}
@@ -708,8 +778,193 @@ export default function CourseDetailRoute() {
                 theme={theme}
                 title="Stored Lectures"
                 subtitle="Tap a lecture card to open the lecture review page"
+                headerAction={
+                  <Pressable
+                    onPress={() => setShowLectureUploadForm((current) => !current)}
+                    onPressIn={() => {
+                      suppressNextOutsideTapRef.current = true;
+                    }}
+                    style={({ pressed }) => ({
+                      width: 38,
+                      height: 38,
+                      borderRadius: 999,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
+                    })}
+                  >
+                    <Text style={{ color: theme.colors.accentContrast, fontSize: 20, lineHeight: 20, fontWeight: '900' }}>
+                      +
+                    </Text>
+                  </Pressable>
+                }
               >
                 <View style={{ gap: 12 }}>
+                  {showLectureUploadForm ? (
+                    <View
+                      style={{
+                        borderRadius: 22,
+                        borderCurve: 'continuous',
+                        padding: 16,
+                        gap: 12,
+                        backgroundColor: theme.colors.overlay,
+                        borderWidth: 1,
+                        borderColor: theme.colors.border,
+                      }}
+                    >
+                      <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: '900' }}>
+                        Import lecture audio
+                      </Text>
+                      <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 21 }}>
+                        Audio only. Files up to 100 MB upload directly. Larger audio is chunked automatically and uses the same lecture processing flow.
+                      </Text>
+
+                      {selectedLectureNeedsMultipart ? (
+                        <View
+                          style={{
+                            borderRadius: 16,
+                            borderCurve: 'continuous',
+                            padding: 12,
+                            gap: 4,
+                            backgroundColor: theme.colors.accentSoft,
+                          }}
+                        >
+                          <Text style={{ color: theme.colors.accentMuted, fontSize: 13, fontWeight: '900' }}>
+                            Large file handling
+                          </Text>
+                          <Text style={{ color: theme.colors.text, fontSize: 13, lineHeight: 19, fontWeight: '600' }}>
+                            This import will split the audio into upload parts, send them in order, then reassemble the lecture before transcription starts.
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      <FieldBlock theme={theme} label="Audio file">
+                        <View
+                          style={{
+                            borderRadius: 18,
+                            borderCurve: 'continuous',
+                            padding: 16,
+                            gap: 8,
+                            backgroundColor: theme.colors.card,
+                          }}
+                        >
+                          <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '700' }}>
+                            {selectedLectureUploadAsset?.name ?? 'No audio selected'}
+                          </Text>
+                          <Text style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
+                            {selectedLectureUploadAsset
+                              ? `${formatFileSize(selectedLectureUploadSizeBytes)}${selectedLectureNeedsMultipart ? ' • multipart import' : ' • direct upload'}`
+                              : 'Choose a lecture audio file from this device.'}
+                          </Text>
+                          <Pressable
+                            onPress={() => void handleChooseLectureAudio()}
+                            style={({ pressed }) => ({
+                              alignSelf: 'flex-start',
+                              minHeight: 38,
+                              borderRadius: 999,
+                              paddingHorizontal: 14,
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
+                            })}
+                          >
+                            <Text style={{ color: theme.colors.accentContrast, fontSize: 13, fontWeight: '800' }}>
+                              Choose audio
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </FieldBlock>
+
+                      <FieldBlock
+                        theme={theme}
+                        label={selectedLectureNeedsMultipart ? 'Lecture title' : 'Lecture title (optional)'}
+                      >
+                        <TextInput
+                          value={lectureUploadTitle}
+                          onChangeText={setLectureUploadTitle}
+                          placeholder="Week 7 lecture review"
+                          placeholderTextColor={theme.colors.textSubtle}
+                          style={inputStyle(theme)}
+                        />
+                      </FieldBlock>
+
+                      <View
+                        style={{
+                          borderRadius: 18,
+                          borderCurve: 'continuous',
+                          padding: 14,
+                          gap: 6,
+                          backgroundColor: theme.colors.card,
+                        }}
+                      >
+                        <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>
+                          Import summary
+                        </Text>
+                        <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20 }}>
+                          {selectedLectureUploadAsset
+                            ? `${selectedLectureUploadAsset.name} • ${formatFileSize(selectedLectureUploadSizeBytes)}`
+                            : 'No audio file selected'}
+                        </Text>
+                        <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 20 }}>
+                          {selectedLectureNeedsMultipart
+                            ? 'This file will be split into ordered parts, uploaded, then reassembled for lecture transcription.'
+                            : 'This file will upload as a single lecture recording and then enter transcript processing.'}
+                        </Text>
+                        {lectureUploadBusy && lectureUploadStatusMessage ? (
+                          <Text style={{ color: theme.colors.text, fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
+                            {lectureUploadStatusMessage}
+                          </Text>
+                        ) : null}
+                      </View>
+
+                      <View style={{ flexDirection: 'row', gap: 10 }}>
+                        <Pressable
+                          onPress={() => {
+                            if (lectureUploadBusy) {
+                              return;
+                            }
+                            setShowLectureUploadForm(false);
+                            setSelectedLectureUploadAsset(null);
+                            setLectureUploadTitle('');
+                            setLectureUploadStatusMessage(null);
+                          }}
+                          disabled={lectureUploadBusy}
+                          style={({ pressed }) => ({
+                            flex: 1,
+                            minHeight: 52,
+                            borderRadius: 18,
+                            borderCurve: 'continuous',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: pressed ? theme.colors.neutralBorder : theme.colors.card,
+                          })}
+                        >
+                          <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>
+                            Cancel
+                          </Text>
+                        </Pressable>
+
+                        <Pressable
+                          onPress={() => void handleSaveLectureUpload()}
+                          disabled={lectureUploadBusy}
+                          style={({ pressed }) => ({
+                            flex: 1,
+                            minHeight: 52,
+                            borderRadius: 18,
+                            borderCurve: 'continuous',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: pressed ? theme.colors.accentMuted : theme.colors.accent,
+                          })}
+                        >
+                          <Text style={{ color: theme.colors.accentContrast, fontSize: 15, fontWeight: '900' }}>
+                            {lectureUploadBusy ? 'Uploading...' : 'Import Lecture'}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : null}
+
                   {visibleLectures.length === 0 ? (
                     <View
                       style={{
@@ -724,7 +979,7 @@ export default function CourseDetailRoute() {
                         No stored lectures yet
                       </Text>
                       <Text style={{ color: theme.colors.textMuted, fontSize: 14, lineHeight: 21 }}>
-                        Record a lecture for this course and it will appear here with its local file status.
+                        Record a lecture or import lecture audio for this course and it will appear here with its processing status.
                       </Text>
                     </View>
                   ) : null}
@@ -753,7 +1008,9 @@ export default function CourseDetailRoute() {
                           borderCurve: 'continuous',
                           padding: 15,
                           gap: 6,
-                          backgroundColor: pressed ? theme.colors.card : '#242a33',
+                          backgroundColor: pressed ? theme.colors.overlay : theme.colors.card,
+                          borderWidth: 1,
+                          borderColor: theme.colors.border,
                           boxShadow: '0 12px 24px rgba(15, 23, 42, 0.08)',
                         })}
                       >
@@ -808,7 +1065,6 @@ export default function CourseDetailRoute() {
           ) : null}
         </ScrollView>
       </View>
-    </>
   );
 }
 
@@ -885,6 +1141,25 @@ function formatCourseFileTypeLabel(file: LocalCourseFileRecord) {
 
   return '.FILE';
 }
+
+function buildLectureTitleFromAsset(asset: DocumentPickerAsset) {
+  const filename = asset.name ?? 'Imported lecture';
+  const withoutExtension = filename.replace(/\.[^.]+$/, '').trim();
+  return withoutExtension.length > 0 ? withoutExtension : 'Imported lecture';
+}
+
+function formatFileSize(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return 'Unknown size';
+  }
+
+  if (sizeBytes >= 1024 * 1024 * 1024) {
+    return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function SectionCard({
   theme,
   title,

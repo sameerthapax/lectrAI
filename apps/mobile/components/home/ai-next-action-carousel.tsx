@@ -16,6 +16,7 @@ import relaxAnimation from '../../assets/animations/relax.json';
 import { useAppTheme } from '../../providers/settings-provider';
 
 type AiNextActionCarouselProps = {
+  hasIncompleteQuickQuiz?: boolean;
   width: number;
 };
 
@@ -53,12 +54,23 @@ const AI_NEXT_ACTION_CARDS: AiNextActionCard[] = [
   },
 ];
 
-export function AiNextActionCarousel({ width }: AiNextActionCarouselProps) {
+const QUICK_QUIZ_CARD_ID = 'quick-quiz';
+const NON_QUIZ_CARD_IDS = AI_NEXT_ACTION_CARDS
+  .filter((card) => card.id !== QUICK_QUIZ_CARD_ID)
+  .map((card) => card.id);
+
+export function AiNextActionCarousel({
+  hasIncompleteQuickQuiz = false,
+  width,
+}: AiNextActionCarouselProps) {
   const theme = useAppTheme();
   const isFocused = useIsFocused();
   const flatListRef = useRef<FlatList<AiNextActionCard>>(null);
   const [didMountList, setDidMountList] = useState(false);
-  const [selectedActionId, setSelectedActionId] = useState(AI_NEXT_ACTION_CARDS[0]?.id ?? '');
+  const [randomNonQuizActionId] = useState(() => pickRandomNonQuizActionId());
+  const [selectedActionId, setSelectedActionId] = useState(() =>
+    hasIncompleteQuickQuiz ? QUICK_QUIZ_CARD_ID : randomNonQuizActionId
+  );
   const hasMultipleCards = AI_NEXT_ACTION_CARDS.length > 1;
   const cardWidth = Math.max(140, Math.min(172, width * 0.94));
   const sideInset = Math.max(0, (width - cardWidth) / 2);
@@ -71,6 +83,10 @@ export function AiNextActionCarousel({ width }: AiNextActionCarouselProps) {
     AI_NEXT_ACTION_CARDS.findIndex((card) => card.id === selectedActionId)
   );
   const initialIndex = hasMultipleCards ? logicalIndex + 1 : 0;
+
+  useEffect(() => {
+    setSelectedActionId(hasIncompleteQuickQuiz ? QUICK_QUIZ_CARD_ID : randomNonQuizActionId);
+  }, [hasIncompleteQuickQuiz, randomNonQuizActionId]);
 
   useEffect(() => {
     if (!didMountList || !hasMultipleCards) {
@@ -312,4 +328,13 @@ function buildInfiniteCards(cards: AiNextActionCard[]) {
   }
 
   return [lastCard, ...cards, firstCard];
+}
+
+function pickRandomNonQuizActionId() {
+  if (NON_QUIZ_CARD_IDS.length === 0) {
+    return AI_NEXT_ACTION_CARDS[0]?.id ?? '';
+  }
+
+  const randomIndex = Math.floor(Math.random() * NON_QUIZ_CARD_IDS.length);
+  return NON_QUIZ_CARD_IDS[randomIndex] ?? NON_QUIZ_CARD_IDS[0];
 }

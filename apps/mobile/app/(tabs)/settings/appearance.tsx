@@ -38,10 +38,7 @@ export default function SettingsAppearanceRoute() {
   }
 
   return (
-    <SettingsScreen
-      title="Appearance"
-      subtitle="Choose whether LectrAI follows your phone appearance or stays fixed in one mode."
-    >
+    <SettingsScreen subtitle="Choose whether LectrAI follows your phone appearance or stays fixed in one mode.">
       <SectionCard
         title="Theme"
         description={`Current appearance: ${theme.resolvedMode === 'dark' ? 'Dark' : 'Light'}.`}

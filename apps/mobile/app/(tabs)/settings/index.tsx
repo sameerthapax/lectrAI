@@ -58,20 +58,10 @@ export default function SettingsHomeRoute() {
     >
       <View
         style={{
-          paddingTop: 2,
           paddingHorizontal: 2,
           gap: 14,
         }}
       >
-        <View
-          style={{
-          }}
-        >
-          <Text style={{ color: theme.colors.text, fontSize: 30, fontWeight: '800' }}>
-            Settings
-          </Text>
-        </View>
-
         <SettingsLinkCard
           title="Appearance"
           description={

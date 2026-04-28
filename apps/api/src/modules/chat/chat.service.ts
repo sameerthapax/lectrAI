@@ -26,6 +26,7 @@ import {
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const DEFAULT_CHAT_MODEL = env.openAiChatModel ?? 'gpt-4.1-mini';
+const DEFAULT_WEB_SEARCH_MODEL = env.openAiWebSearchModel ?? DEFAULT_CHAT_MODEL;
 const DEFAULT_CHAT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL ?? 'gpt-4o-mini-transcribe';
 const DEFAULT_TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL ?? 'eleven_flash_v2_5';
 const DEFAULT_TTS_VOICE_ID = process.env.ELEVENLABS_TTS_VOICE_ID ?? 'JBFqnCBsd6RMkjVDRZzb';
@@ -49,11 +50,25 @@ const LIST_COURSES_TOOL_NAME = 'list_courses_catalog';
 const LIST_RECENT_LECTURES_TOOL_NAME = 'list_recent_course_lectures';
 const LIST_RECENT_FILES_TOOL_NAME = 'list_recent_course_files';
 const TRANSCRIPT_SEARCH_TOOL_NAME = 'search_transcript_chunks';
+const GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME = 'get_full_lecture_transcript';
 const CREATE_QUIZ_TOOL_NAME = 'create_quiz';
 const CREATE_FLASHCARDS_TOOL_NAME = 'create_flashcards';
+const SEARCH_RESEARCH_PAPERS_TOOL_NAME = 'search_research_papers';
 const GET_CURRENT_DATE_AND_TIME_TOOL_NAME = 'get_current_date_and_time';
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const ENABLE_LOKI_ATTACHMENT_DEBUG = true;
+const DEFAULT_RESEARCH_LINK_COUNT = 3;
+const MAX_RESEARCH_LINK_COUNT = 5;
+const RESEARCH_ALLOWED_DOMAINS = [
+  'scholar.google.com',
+  'arxiv.org',
+  'pubmed.ncbi.nlm.nih.gov',
+  'doi.org',
+  'acm.org',
+  'ieeexplore.ieee.org',
+  'openreview.net',
+  'semanticscholar.org',
+] as const;
 
 let openAiClient: OpenAI | null = null;
 let mem0Memory: Memory | null | undefined;
@@ -65,6 +80,7 @@ type ChatMessageRole = 'user' | 'assistant' | 'system';
 type ChatReplyJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 export type ChatReplyJobEventType =
   | 'retrieving_lecture'
+  | 'research_searching'
   | 'quiz_generation_completed'
   | 'flashcards_generation_completed'
   | 'completed'
@@ -74,11 +90,13 @@ type OpenAiResponsesOutputContent = {
   type?: unknown;
   text?: unknown;
   refusal?: unknown;
+  annotations?: unknown;
 };
 
 type OpenAiResponsesOutput = {
   type?: unknown;
   content?: unknown;
+  action?: unknown;
 };
 
 type OpenAiResponsesUsage = {
@@ -96,7 +114,10 @@ type OpenAiResponsesResponse = {
 
 type RetrievalDecisionMetadata = {
   requiresAdditionalScope: boolean;
-  functionName: typeof TRANSCRIPT_SEARCH_TOOL_NAME | null;
+  functionName:
+    | typeof TRANSCRIPT_SEARCH_TOOL_NAME
+    | typeof GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+    | null;
   functionArguments: TranscriptSearchToolArgs | null;
   selectedScope: ChatScope;
 };
@@ -119,6 +140,10 @@ type RecentCourseLecturesToolArgs = {
 type RecentCourseFilesToolArgs = {
   courseId: string;
   limit?: number;
+};
+
+type FullLectureTranscriptToolArgs = {
+  lectureId: string;
 };
 
 type PlannerScopeItem =
@@ -226,8 +251,21 @@ export type ChatTranscriptionRequest = {
 
 export type RetrievedContext = {
   chunks: TranscriptChunkSearchResult[];
+  fullLectureTranscript: FullLectureTranscriptContext | null;
   scopeItems?: PlannerScopeItem[];
   decision?: RetrievalDecisionMetadata;
+};
+
+type FullLectureTranscriptContext = {
+  lectureId: string;
+  courseId: string;
+  lectureTitle: string;
+  courseName: string;
+  recordedAt: string | null;
+  transcriptId: string;
+  transcriptStatus: string;
+  totalSegments: number | null;
+  fullText: string;
 };
 
 type LokiMemory = {
@@ -248,6 +286,19 @@ type AssistantFlashcardAttachment = {
   flashcardTitle: string | null;
 };
 
+type ResearchPaperLink = {
+  title: string;
+  url: string;
+  source: string | null;
+  summary: string | null;
+};
+
+type AssistantResearchAttachment = {
+  hasResearch: boolean;
+  topic: string | null;
+  papers: ResearchPaperLink[];
+};
+
 export type GeneratedAssistantReply = {
   session: ChatSessionRecord;
   userMessage: ChatMessageRecord;
@@ -256,6 +307,7 @@ export type GeneratedAssistantReply = {
   audio: AssistantAudioPayload | null;
   quiz: AssistantQuizAttachment | null;
   flashcards: AssistantFlashcardAttachment | null;
+  research: AssistantResearchAttachment | null;
 };
 
 export type AssistantAudioPayload = {
@@ -645,6 +697,7 @@ async function completeChatReplyWorkflowForUser(input: {
     messageText: modelResponse.messageText,
     quiz: modelResponse.quiz,
     flashcards: modelResponse.flashcards,
+    research: modelResponse.research,
   });
   const assistantMessage = await createAssistantMessageWithCitations({
     chatSessionId: input.session.id,
@@ -656,6 +709,7 @@ async function completeChatReplyWorkflowForUser(input: {
     memories,
     quiz: modelResponse.quiz,
     flashcards: modelResponse.flashcards,
+    research: modelResponse.research,
   });
 
   const nextSession = {
@@ -686,6 +740,7 @@ async function completeChatReplyWorkflowForUser(input: {
     audio,
     quiz: modelResponse.quiz,
     flashcards: modelResponse.flashcards,
+    research: modelResponse.research,
   };
 }
 
@@ -838,6 +893,7 @@ async function requestTutorResponse(input: {
   })) as unknown as OpenAiResponsesResponse;
   let latestQuiz: StoredQuizRecord | null = null;
   let latestFlashcards: StoredFlashcardSetRecord | null = null;
+  let latestResearch: AssistantResearchAttachment | null = null;
   let latestUsage = readUsage(response.usage);
 
   for (let step = 0; step < MAX_TUTOR_TOOL_STEPS; step += 1) {
@@ -857,6 +913,7 @@ async function requestTutorResponse(input: {
               quizId: latestQuiz.id,
               quizTitle: latestQuiz.title,
             },
+            research: latestResearch,
             flashcards: latestFlashcards
               ? {
                   hasFlashcards: true,
@@ -873,11 +930,23 @@ async function requestTutorResponse(input: {
             modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
             usage: latestUsage,
             quiz: null,
+            research: latestResearch,
             flashcards: {
               hasFlashcards: true,
               flashcardSetId: latestFlashcards.id,
               flashcardTitle: latestFlashcards.title,
             },
+          };
+        }
+
+        if (latestResearch) {
+          return {
+            messageText: buildResearchAttachmentReply(latestResearch),
+            modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+            usage: latestUsage,
+            quiz: null,
+            research: latestResearch,
+            flashcards: null,
           };
         }
 
@@ -895,6 +964,7 @@ async function requestTutorResponse(input: {
               quizTitle: latestQuiz.title,
             }
           : null,
+        research: latestResearch,
         flashcards: latestFlashcards
           ? {
               hasFlashcards: true,
@@ -926,6 +996,7 @@ async function requestTutorResponse(input: {
                   quizTitle: latestQuiz.title,
                 }
               : null,
+            research: latestResearch,
             flashcards: latestFlashcards
               ? {
                   hasFlashcards: true,
@@ -979,6 +1050,10 @@ async function requestTutorResponse(input: {
         );
       }
 
+      if (result.research) {
+        latestResearch = result.research;
+      }
+
       toolOutputs.push({
         type: 'function_call_output',
         call_id: toolCall.callId,
@@ -1012,6 +1087,7 @@ async function requestTutorResponse(input: {
         quizId: latestQuiz.id,
         quizTitle: latestQuiz.title,
       },
+      research: latestResearch,
       flashcards: latestFlashcards
         ? {
             hasFlashcards: true,
@@ -1034,11 +1110,35 @@ async function requestTutorResponse(input: {
             quizTitle: latestQuiz.title,
           }
         : null,
+      research: latestResearch,
       flashcards: {
         hasFlashcards: true,
         flashcardSetId: latestFlashcards.id,
         flashcardTitle: latestFlashcards.title,
       },
+    };
+  }
+
+  if (!messageText && latestResearch) {
+    return {
+      messageText: buildResearchAttachmentReply(latestResearch),
+      modelName: typeof response.model === 'string' ? response.model : DEFAULT_CHAT_MODEL,
+      usage: latestUsage,
+      quiz: latestQuiz
+        ? {
+            hasQuiz: true,
+            quizId: latestQuiz.id,
+            quizTitle: latestQuiz.title,
+          }
+        : null,
+      research: latestResearch,
+      flashcards: latestFlashcards
+        ? {
+            hasFlashcards: true,
+            flashcardSetId: latestFlashcards.id,
+            flashcardTitle: latestFlashcards.title,
+          }
+        : null,
     };
   }
 
@@ -1057,6 +1157,7 @@ async function requestTutorResponse(input: {
           quizTitle: latestQuiz.title,
         }
       : null,
+    research: latestResearch,
     flashcards: latestFlashcards
       ? {
           hasFlashcards: true,
@@ -1093,8 +1194,11 @@ function buildOpenAiInput(input: {
     `When the user asks what course is next, what courses are scheduled today, or any question that depends on the current day or time, call both ${GET_CURRENT_DATE_AND_TIME_TOOL_NAME} and ${LIST_COURSES_TOOL_NAME} before answering.`,
     `When the user asks you to generate a quiz, practice quiz, or practice test, call the ${CREATE_QUIZ_TOOL_NAME} tool instead of pasting the whole quiz into the chat.`,
     `When the user asks you to generate flashcards, study cards, or revision cards, call the ${CREATE_FLASHCARDS_TOOL_NAME} tool instead of pasting the whole set into the chat.`,
+    `When the user asks for research, papers, academic sources, literature, scholarly links, or Google Scholar results on a topic, call the ${SEARCH_RESEARCH_PAPERS_TOOL_NAME} tool.`,
     'After a quiz tool succeeds, briefly tell the user the quiz is ready and invite them to open it.',
     'After a flashcard tool succeeds, briefly tell the user the flashcards are ready and invite them to open them.',
+    'After a research tool succeeds, keep the reply short and direct.',
+    'Use this pattern for research replies: "The links for the TOPIC topic are generated below. I got TITLE by SOURCE, TITLE by SOURCE. Tap on the link to navigate to the link."',
     'You may execute multiple tool calls in the same response loop when needed.',
     'When relevant, use the personal memory context to personalize continuity and study help, but never let it override lecture facts.',
     'If personal memory conflicts with retrieved lecture context, trust the lecture context for subject matter and treat memory as preference context only.',
@@ -1131,6 +1235,22 @@ function buildOpenAiInput(input: {
           .map((item, index) => `Scope ${index + 1}: [${item.type}] ${item.title} - ${item.detail}`)
           .join('\n')
       : 'No extra course, lecture, or file scope metadata was collected for this turn.';
+  const fullLectureTranscriptContext = input.retrieval.fullLectureTranscript
+    ? [
+        `Lecture: ${input.retrieval.fullLectureTranscript.lectureTitle}`,
+        `Course: ${input.retrieval.fullLectureTranscript.courseName}`,
+        input.retrieval.fullLectureTranscript.recordedAt
+          ? `Recorded at: ${input.retrieval.fullLectureTranscript.recordedAt}`
+          : null,
+        input.retrieval.fullLectureTranscript.totalSegments != null
+          ? `Raw transcript segments: ${input.retrieval.fullLectureTranscript.totalSegments}`
+          : null,
+        'Raw lecture transcript:',
+        input.retrieval.fullLectureTranscript.fullText,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : 'No full lecture transcript was injected for this turn.';
   const personalMemoryContext =
     input.memories.length > 0
       ? input.memories
@@ -1156,6 +1276,7 @@ function buildOpenAiInput(input: {
             `Detected intent: ${messageIntent}.`,
             `Personal memory context:\n${personalMemoryContext}`,
             `Retrieved scope metadata:\n${scopeContext}`,
+            `Full lecture transcript context:\n${fullLectureTranscriptContext}`,
             `Retrieved lecture context:\n${retrievedContext}`,
             `Current student message: ${input.currentMessage}`,
           ].join('\n\n'),
@@ -1239,6 +1360,22 @@ function buildTutorTools() {
         required: ['cardCount', 'title'],
       },
     },
+    {
+      type: 'function',
+      name: SEARCH_RESEARCH_PAPERS_TOOL_NAME,
+      description:
+        'Search for scholarly papers and research links for the requested topic, preferring Google Scholar style academic results and returning between 1 and 5 links.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          topic: { type: ['string', 'null'] },
+          maxResults: { type: ['integer', 'null'], minimum: 1, maximum: 5 },
+        },
+        required: ['topic', 'maxResults'],
+      },
+    },
   ];
 }
 
@@ -1250,6 +1387,7 @@ async function executeTutorToolCall(
     retrieval: RetrievedContext;
     memories: LokiMemory[];
     currentMessage: string;
+    progressReporter: ChatReplyProgressReporter | null;
   },
   toolCall: TutorFunctionCall
 ) {
@@ -1263,6 +1401,7 @@ async function executeTutorToolCall(
       },
       quiz: null,
       flashcards: null,
+      research: null,
     };
   }
 
@@ -1273,6 +1412,7 @@ async function executeTutorToolCall(
       output: currentDateTime,
       quiz: null,
       flashcards: null,
+      research: null,
     };
   }
 
@@ -1294,6 +1434,7 @@ async function executeTutorToolCall(
       },
       quiz,
       flashcards: null,
+      research: null,
     };
   }
 
@@ -1315,6 +1456,31 @@ async function executeTutorToolCall(
       },
       quiz: null,
       flashcards,
+      research: null,
+    };
+  }
+
+  if (toolCall.name === SEARCH_RESEARCH_PAPERS_TOOL_NAME) {
+    const args = readSearchResearchPapersToolArgs(toolCall.arguments, input.currentMessage);
+    await input.progressReporter?.emit(
+      'research_searching',
+      `I am doing a web search and gathering information on ${args.topic} topic for you.`
+    );
+    const research = await searchResearchPapersWithWebSearch({
+      topic: args.topic,
+      maxResults: args.maxResults ?? DEFAULT_RESEARCH_LINK_COUNT,
+    });
+
+    return {
+      output: {
+        hasResearch: research.hasResearch,
+        topic: research.topic,
+        count: research.papers.length,
+        papers: research.papers,
+      },
+      quiz: null,
+      flashcards: null,
+      research,
     };
   }
 
@@ -1347,6 +1513,20 @@ function mapRetrievalChunkToFlashcardSourceContext(entry: TranscriptChunkSearchR
 
 function buildFlashcardGenerationContexts(retrieval: RetrievedContext): LokiFlashcardSourceContext[] {
   const transcriptContexts = retrieval.chunks.map(mapRetrievalChunkToFlashcardSourceContext);
+  const fullLectureTranscriptContexts = retrieval.fullLectureTranscript
+    ? [
+        {
+          sourceType: 'transcript' as const,
+          sourceId: retrieval.fullLectureTranscript.transcriptId,
+          lectureId: retrieval.fullLectureTranscript.lectureId,
+          lectureTitle: retrieval.fullLectureTranscript.lectureTitle,
+          courseId: retrieval.fullLectureTranscript.courseId,
+          courseName: retrieval.fullLectureTranscript.courseName,
+          similarity: 1,
+          content: retrieval.fullLectureTranscript.fullText,
+        },
+      ]
+    : [];
   const scopeContexts = (retrieval.scopeItems ?? []).map((item): LokiFlashcardSourceContext => {
     if (item.type === 'file') {
       return {
@@ -1388,7 +1568,7 @@ function buildFlashcardGenerationContexts(retrieval: RetrievedContext): LokiFlas
 
   const deduped = new Map<string, LokiFlashcardSourceContext>();
 
-  for (const context of [...transcriptContexts, ...scopeContexts]) {
+  for (const context of [...fullLectureTranscriptContexts, ...transcriptContexts, ...scopeContexts]) {
     const key = `${context.sourceType}:${context.sourceId}`;
 
     if (!deduped.has(key)) {
@@ -1397,6 +1577,75 @@ function buildFlashcardGenerationContexts(retrieval: RetrievedContext): LokiFlas
   }
 
   return Array.from(deduped.values());
+}
+
+function buildResearchAttachmentReply(research: AssistantResearchAttachment) {
+  const topic = research.topic?.trim() || 'requested';
+  const sources = research.papers
+    .slice(0, 3)
+    .map((paper) => `${paper.title} by ${paper.source ?? 'an academic source'}`)
+    .join(', ');
+
+  return `The links for the ${topic} topic are generated below. I got ${sources}. Tap on the link to navigate to the link.`;
+}
+
+async function searchResearchPapersWithWebSearch(input: {
+  topic: string;
+  maxResults: number;
+}): Promise<AssistantResearchAttachment> {
+  const response = (await getOpenAiClient().responses.create({
+    model: DEFAULT_WEB_SEARCH_MODEL,
+    tools: [
+      {
+        type: 'web_search',
+        filters: {
+          allowed_domains: [...RESEARCH_ALLOWED_DOMAINS],
+        },
+      },
+    ],
+    tool_choice: 'auto',
+    include: ['web_search_call.action.sources'],
+    input: [
+      {
+        role: 'system',
+        content: [
+          {
+            type: 'input_text',
+            text: [
+              'You find academic papers and return structured JSON only.',
+              'Prefer Google Scholar style scholarly results and direct paper landing pages or PDFs when available.',
+              'Only include research papers, preprints, or authoritative paper landing pages.',
+              `Return between 1 and ${Math.max(1, Math.min(input.maxResults, MAX_RESEARCH_LINK_COUNT))} papers when possible.`,
+              'Output JSON with this exact shape: {"topic": string, "papers": [{"title": string, "url": string, "source": string|null, "summary": string|null}]}.',
+              'Do not include markdown fences or any prose outside the JSON object.',
+            ].join(' '),
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: `Find research papers about: ${input.topic}`,
+          },
+        ],
+      },
+    ] as any,
+  })) as unknown as OpenAiResponsesResponse;
+
+  const parsedPapers = readResearchPapersFromOutput(extractOutputText(response), input.maxResults);
+  const sourcePapers = extractResearchPapersFromSources(response, input.maxResults);
+  const papers = dedupeResearchPapers([...parsedPapers, ...sourcePapers]).slice(
+    0,
+    Math.max(1, Math.min(input.maxResults, MAX_RESEARCH_LINK_COUNT))
+  );
+
+  return {
+    hasResearch: papers.length > 0,
+    topic: input.topic,
+    papers,
+  };
 }
 
 async function decideRetrievalForUser(
@@ -1513,6 +1762,64 @@ async function getLectureScopeForUser(userId: string, lectureId: string) {
   return {
     lectureId: lecture.lecture_id,
     courseId: lecture.course_id,
+  };
+}
+
+async function getFullLectureTranscriptForUser(userId: string, lectureId: string): Promise<FullLectureTranscriptContext> {
+  const db = getDb();
+  const rows = await db<
+    {
+      lecture_id: string;
+      course_id: string;
+      lecture_title: string;
+      course_name: string;
+      recorded_at: string | null;
+      transcript_id: string | null;
+      transcript_status: string | null;
+      transcript_total_segments: number | null;
+      transcript_full_text: string | null;
+    }[]
+  >`
+    select
+      l.id::text as lecture_id,
+      l.course_id::text as course_id,
+      l.title as lecture_title,
+      c.course_name,
+      l.recorded_at::text as recorded_at,
+      t.id::text as transcript_id,
+      t.status as transcript_status,
+      t.total_segments as transcript_total_segments,
+      t.full_text as transcript_full_text
+    from public.lectures l
+    inner join public.courses c
+      on c.id = l.course_id
+    left join public.transcripts t
+      on t.lecture_id = l.id
+    where l.id = ${lectureId}::uuid
+      and c.owner_user_id = ${userId}::uuid
+    limit 1
+  `;
+
+  const lecture = rows[0];
+
+  if (!lecture) {
+    throw new HttpError(404, 'Lecture not found.');
+  }
+
+  if (!lecture.transcript_id || !lecture.transcript_full_text || lecture.transcript_full_text.trim().length === 0) {
+    throw new HttpError(409, 'The raw lecture transcript is not available yet.');
+  }
+
+  return {
+    lectureId: lecture.lecture_id,
+    courseId: lecture.course_id,
+    lectureTitle: lecture.lecture_title,
+    courseName: lecture.course_name,
+    recordedAt: lecture.recorded_at,
+    transcriptId: lecture.transcript_id,
+    transcriptStatus: lecture.transcript_status ?? 'ready',
+    totalSegments: lecture.transcript_total_segments,
+    fullText: lecture.transcript_full_text,
   };
 }
 
@@ -1876,13 +2183,21 @@ async function createAssistantMessageWithCitations(input: {
   memories: LokiMemory[];
   quiz: AssistantQuizAttachment | null;
   flashcards: AssistantFlashcardAttachment | null;
+  research: AssistantResearchAttachment | null;
 }) {
   const db = getDb();
-  const retrievalMetadata = buildRetrievalMetadata(input.retrieval, input.memories, input.quiz, input.flashcards);
+  const retrievalMetadata = buildRetrievalMetadata(
+    input.retrieval,
+    input.memories,
+    input.quiz,
+    input.flashcards,
+    input.research
+  );
   logLokiAttachmentDebug('create-assistant-message-with-citations-input', {
     chatSessionId: input.chatSessionId,
     quiz: input.quiz,
     flashcards: input.flashcards,
+    research: input.research,
     retrievalMetadata,
   });
 
@@ -2069,11 +2384,24 @@ function buildRetrievalMetadata(
   retrieval: RetrievedContext,
   memories: LokiMemory[],
   quiz: AssistantQuizAttachment | null,
-  flashcards: AssistantFlashcardAttachment | null
+  flashcards: AssistantFlashcardAttachment | null,
+  research: AssistantResearchAttachment | null
 ) {
   return {
     decision: retrieval.decision ?? null,
     scopeItems: retrieval.scopeItems ?? [],
+    fullLectureTranscript: retrieval.fullLectureTranscript
+      ? {
+          lectureId: retrieval.fullLectureTranscript.lectureId,
+          courseId: retrieval.fullLectureTranscript.courseId,
+          lectureTitle: retrieval.fullLectureTranscript.lectureTitle,
+          courseName: retrieval.fullLectureTranscript.courseName,
+          recordedAt: retrieval.fullLectureTranscript.recordedAt,
+          transcriptId: retrieval.fullLectureTranscript.transcriptId,
+          transcriptStatus: retrieval.fullLectureTranscript.transcriptStatus,
+          totalSegments: retrieval.fullLectureTranscript.totalSegments,
+        }
+      : null,
     memories: memories.map((memory) => ({
       id: memory.id,
       text: memory.text,
@@ -2094,6 +2422,7 @@ function buildRetrievalMetadata(
     })),
     quiz: quiz ?? null,
     flashcards: flashcards ?? null,
+    research: research ?? null,
   };
 }
 
@@ -2126,6 +2455,7 @@ async function runDynamicRetrievalPlannerForUser(
   })) as unknown as OpenAiResponsesResponse;
   let collectedScopeItems: PlannerScopeItem[] = [];
   let latestChunks: TranscriptChunkSearchResult[] = [];
+  let fullLectureTranscript: FullLectureTranscriptContext | null = null;
   let lastToolName: string | null = null;
   let lastToolArgs: Record<string, unknown> | null = null;
 
@@ -2139,10 +2469,17 @@ async function runDynamicRetrievalPlannerForUser(
         scope: selectedScope,
         retrieval: {
           chunks: latestChunks,
+          fullLectureTranscript,
           scopeItems: collectedScopeItems,
           decision: {
-            requiresAdditionalScope: latestChunks.length > 0 || collectedScopeItems.length > 0,
-            functionName: lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME ? TRANSCRIPT_SEARCH_TOOL_NAME : null,
+            requiresAdditionalScope:
+              latestChunks.length > 0 || collectedScopeItems.length > 0 || fullLectureTranscript != null,
+            functionName:
+              lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME
+                ? TRANSCRIPT_SEARCH_TOOL_NAME
+                : lastToolName === GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+                  ? GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+                  : null,
             functionArguments: lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME
               ? readTranscriptSearchToolArgs(JSON.stringify(lastToolArgs ?? {}))
               : null,
@@ -2161,6 +2498,10 @@ async function runDynamicRetrievalPlannerForUser(
 
       if (result.retrievedChunks.length > 0) {
         latestChunks = result.retrievedChunks;
+      }
+
+      if (result.fullLectureTranscript) {
+        fullLectureTranscript = result.fullLectureTranscript;
       }
 
       if (result.scopeItems.length > 0) {
@@ -2193,10 +2534,17 @@ async function runDynamicRetrievalPlannerForUser(
     scope: selectedScope,
     retrieval: {
       chunks: latestChunks,
+      fullLectureTranscript,
       scopeItems: collectedScopeItems,
       decision: {
-        requiresAdditionalScope: latestChunks.length > 0 || collectedScopeItems.length > 0,
-        functionName: lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME ? TRANSCRIPT_SEARCH_TOOL_NAME : null,
+        requiresAdditionalScope:
+          latestChunks.length > 0 || collectedScopeItems.length > 0 || fullLectureTranscript != null,
+        functionName:
+          lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME
+            ? TRANSCRIPT_SEARCH_TOOL_NAME
+            : lastToolName === GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+              ? GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
+              : null,
         functionArguments:
           lastToolName === TRANSCRIPT_SEARCH_TOOL_NAME ? readTranscriptSearchToolArgs(JSON.stringify(lastToolArgs ?? {})) : null,
         selectedScope,
@@ -2240,6 +2588,8 @@ function buildPlannerIntro(message: string, courses: CourseRecord[]) {
             `If the user asks to list their courses, count their courses, or identify which courses they have, call ${LIST_COURSES_TOOL_NAME}.`,
             `If the user asks what course is next, what courses are scheduled today, or any question that depends on the current day or time, call ${GET_CURRENT_DATE_AND_TIME_TOOL_NAME} and ${LIST_COURSES_TOOL_NAME} before deciding whether transcript search is needed.`,
             'Only call transcript search when the answer should rely on lecture transcript content.',
+            `When the user asks for a summary of one lecture, a recap of one lecture, or a list of what was covered in one specific lecture, call ${GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME} instead of only chunk search.`,
+            `Use ${GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME} only for one specific lecture when the whole raw lecture transcript is needed as scope.`,
             'When transcript search is useful, choose topK dynamically using these defaults: around 20 for summaries or recaps, around 10 for quiz or practice-question generation, and around 5 for targeted factual questions.',
             'If the user asks about recent materials or uploaded materials, you may use lecture or file listing tools even before transcript search.',
             'If the user asks for the latest lecture, recent lectures, today\'s lecture, this week\'s lectures, or a summary across recent lectures, call list_recent_course_lectures first for the relevant course before transcript search.',
@@ -2345,6 +2695,21 @@ function buildRetrievalPlannerTools() {
         required: ['query', 'scopeType', 'topK', 'courseId', 'lectureId', 'recordedOnOrAfter', 'recordedOnOrBefore'],
       },
     },
+    {
+      type: 'function',
+      name: GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME,
+      description:
+        'Return the full raw transcript for one specific lecture when Loki needs the entire lecture rather than only top matching chunks.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          lectureId: { type: 'string' },
+        },
+        required: ['lectureId'],
+      },
+    },
   ];
 }
 
@@ -2360,6 +2725,7 @@ async function executePlannerToolCall(
       output: { count: courses.length, courses: courses.map(mapCourseForPlanner) },
       scopeItems: courses.map(mapCourseToScopeItem),
       retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: null,
       serializedArguments: {},
     };
   }
@@ -2371,6 +2737,7 @@ async function executePlannerToolCall(
       output: currentDateTime,
       scopeItems: [] as PlannerScopeItem[],
       retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: null,
       serializedArguments: {},
     };
   }
@@ -2383,6 +2750,7 @@ async function executePlannerToolCall(
       output: { lectures: limited.map(mapLectureForPlanner) },
       scopeItems: limited.map(mapLectureToScopeItem),
       retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: null,
       serializedArguments: args as Record<string, unknown>,
     };
   }
@@ -2395,6 +2763,7 @@ async function executePlannerToolCall(
       output: { files: limited.map(mapCourseFileForPlanner) },
       scopeItems: limited.map(mapCourseFileToScopeItem),
       retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: null,
       serializedArguments: args as Record<string, unknown>,
     };
   }
@@ -2418,6 +2787,42 @@ async function executePlannerToolCall(
       },
       scopeItems: [] as PlannerScopeItem[],
       retrievedChunks: retrieval.chunks,
+      fullLectureTranscript: null,
+      serializedArguments: args as Record<string, unknown>,
+    };
+  }
+
+  if (toolCall.name === GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME) {
+    const args = readFullLectureTranscriptToolArgs(toolCall.arguments, sessionScopeHint);
+    const transcript = await getFullLectureTranscriptForUser(userId, args.lectureId);
+    return {
+      output: {
+        lectureId: transcript.lectureId,
+        courseId: transcript.courseId,
+        lectureTitle: transcript.lectureTitle,
+        courseName: transcript.courseName,
+        recordedAt: transcript.recordedAt,
+        transcriptId: transcript.transcriptId,
+        transcriptStatus: transcript.transcriptStatus,
+        totalSegments: transcript.totalSegments,
+      },
+      scopeItems: [
+        {
+          type: 'lecture' as const,
+          id: transcript.lectureId,
+          courseId: transcript.courseId,
+          title: transcript.lectureTitle,
+          detail: [
+            transcript.recordedAt ? `Recorded: ${toIsoDateOnly(transcript.recordedAt)}` : null,
+            transcript.totalSegments != null ? `Raw transcript segments: ${transcript.totalSegments}` : null,
+            'Full raw transcript injected',
+          ]
+            .filter(Boolean)
+            .join(' | '),
+        },
+      ],
+      retrievedChunks: [] as TranscriptChunkSearchResult[],
+      fullLectureTranscript: transcript,
       serializedArguments: args as Record<string, unknown>,
     };
   }
@@ -2442,12 +2847,18 @@ async function executeTranscriptSearchTool(
     recordedOnOrBefore: toolArgs.recordedOnOrBefore,
   });
 
-  return { chunks };
+  return {
+    chunks,
+    fullLectureTranscript: null,
+  };
 }
 
 function deriveDynamicScopeFromResults(chunks: TranscriptChunkSearchResult[], scopeItems: PlannerScopeItem[]): ChatScope {
   if (chunks.length > 0) {
-    return deriveScopeFromRetrieval({ chunks }, { courseId: null, lectureId: null, sessionType: 'exam_review' });
+    return deriveScopeFromRetrieval(
+      { chunks, fullLectureTranscript: null },
+      { courseId: null, lectureId: null, sessionType: 'exam_review' }
+    );
   }
 
   const lectureScopeItem = scopeItems.find((item) => item.type === 'lecture');
@@ -2497,8 +2908,10 @@ function buildSingleProgressMessage(message: string, scope: ChatScope) {
 
 function shouldEmitRetrievalProgress(retrieval: RetrievedContext) {
   return (
+    retrieval.fullLectureTranscript != null ||
     retrieval.chunks.length > 0 ||
-    retrieval.decision?.functionName === TRANSCRIPT_SEARCH_TOOL_NAME
+    retrieval.decision?.functionName === TRANSCRIPT_SEARCH_TOOL_NAME ||
+    retrieval.decision?.functionName === GET_FULL_LECTURE_TRANSCRIPT_TOOL_NAME
   );
 }
 
@@ -2547,6 +2960,123 @@ function extractFunctionCalls(response: OpenAiResponsesResponse) {
       callId: typeof item.call_id === 'string' ? item.call_id : '',
     }))
     .filter((item) => item.name.length > 0);
+}
+
+function extractResearchPapersFromSources(response: OpenAiResponsesResponse, maxResults: number): ResearchPaperLink[] {
+  if (!Array.isArray(response.output)) {
+    return [];
+  }
+
+  const papers: ResearchPaperLink[] = [];
+
+  for (const item of response.output as Array<Record<string, unknown>>) {
+    if (item?.type !== 'web_search_call') {
+      continue;
+    }
+
+    const action = readObjectRecord(item.action);
+    const sources = Array.isArray(action?.sources) ? action.sources : [];
+
+    for (const source of sources) {
+      const record = readObjectRecord(source);
+      const title = typeof record?.title === 'string' ? record.title.trim() : '';
+      const url = typeof record?.url === 'string' ? record.url.trim() : '';
+
+      if (!isValidHttpUrl(url) || title.length === 0) {
+        continue;
+      }
+
+      papers.push({
+        title,
+        url,
+        source: inferResearchSourceLabel(url),
+        summary: null,
+      });
+
+      if (papers.length >= maxResults) {
+        return papers;
+      }
+    }
+  }
+
+  return papers;
+}
+
+function readResearchPapersFromOutput(rawOutputText: string | null, maxResults: number): ResearchPaperLink[] {
+  if (!rawOutputText) {
+    return [];
+  }
+
+  const parsed = parsePossiblyFencedJson(rawOutputText);
+  const record = readObjectRecord(parsed);
+  const papers = Array.isArray(record?.papers) ? record.papers : Array.isArray(parsed) ? parsed : [];
+
+  return papers
+    .map(readResearchPaperRecord)
+    .filter((paper): paper is ResearchPaperLink => paper != null)
+    .slice(0, maxResults);
+}
+
+function readResearchPaperRecord(value: unknown): ResearchPaperLink | null {
+  const record = readObjectRecord(value);
+  const title = typeof record?.title === 'string' ? record.title.trim() : '';
+  const url = typeof record?.url === 'string' ? record.url.trim() : '';
+
+  if (!title || !isValidHttpUrl(url)) {
+    return null;
+  }
+
+  return {
+    title,
+    url,
+    source: typeof record?.source === 'string' && record.source.trim().length > 0 ? record.source.trim() : inferResearchSourceLabel(url),
+    summary: typeof record?.summary === 'string' && record.summary.trim().length > 0 ? record.summary.trim() : null,
+  };
+}
+
+function parsePossiblyFencedJson(value: string) {
+  const trimmed = value.trim();
+  const withoutFence =
+    trimmed.startsWith('```') && trimmed.endsWith('```')
+      ? trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+      : trimmed;
+
+  try {
+    return JSON.parse(withoutFence) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function dedupeResearchPapers(papers: ResearchPaperLink[]) {
+  const deduped = new Map<string, ResearchPaperLink>();
+
+  for (const paper of papers) {
+    const key = paper.url.toLowerCase();
+
+    if (!deduped.has(key)) {
+      deduped.set(key, paper);
+    }
+  }
+
+  return Array.from(deduped.values());
+}
+
+function inferResearchSourceLabel(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+function isValidHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function readTranscriptSearchToolArgs(rawArguments: string, fallbackQuery?: string, fallbackScope?: ChatScope | null): TranscriptSearchToolArgs {
@@ -2641,6 +3171,19 @@ function readRecentCourseFilesToolArgs(rawArguments: string): RecentCourseFilesT
   };
 }
 
+function readFullLectureTranscriptToolArgs(rawArguments: string, fallbackScope?: ChatScope | null): FullLectureTranscriptToolArgs {
+  const record = readJsonObject(rawArguments, 'OpenAI retrieval planner returned invalid full transcript tool arguments.');
+  const lectureId = readOptionalUuid(record.lectureId, 'lectureId') ?? fallbackScope?.lectureId ?? null;
+
+  if (!lectureId) {
+    throw new HttpError(502, 'OpenAI retrieval planner omitted lectureId for a full lecture transcript request.');
+  }
+
+  return {
+    lectureId,
+  };
+}
+
 function readCreateQuizToolArgs(rawArguments: string) {
   const record = readJsonObject(rawArguments, 'OpenAI tutor returned invalid quiz tool arguments.');
 
@@ -2656,6 +3199,22 @@ function readCreateFlashcardsToolArgs(rawArguments: string) {
   return {
     cardCount: readOptionalBoundedInteger(record.cardCount, 'cardCount', 4, 12),
     title: readOptionalString(record.title, 'title'),
+  };
+}
+
+function readSearchResearchPapersToolArgs(rawArguments: string, fallbackTopic?: string) {
+  const record = readJsonObject(rawArguments, 'OpenAI tutor returned invalid research tool arguments.');
+  const topic = readOptionalString(record.topic, 'topic') ?? fallbackTopic?.trim() ?? null;
+
+  if (!topic) {
+    throw new HttpError(502, 'OpenAI tutor omitted the research topic.');
+  }
+
+  return {
+    topic,
+    maxResults:
+      readOptionalBoundedInteger(record.maxResults, 'maxResults', 1, MAX_RESEARCH_LINK_COUNT) ??
+      DEFAULT_RESEARCH_LINK_COUNT,
   };
 }
 
@@ -2914,11 +3473,22 @@ function readOptionalIsoDate(value: unknown, fieldName: string) {
     return null;
   }
 
-  if (typeof value !== 'string' || !ISO_DATE_REGEX.test(value)) {
+  if (typeof value !== 'string') {
     throw new HttpError(400, `${fieldName} must be an ISO date in YYYY-MM-DD format.`);
   }
 
-  return value;
+  const trimmed = value.trim();
+  const directMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})(?:$|T|\s)/);
+
+  if (directMatch?.[1] && ISO_DATE_REGEX.test(directMatch[1])) {
+    return directMatch[1];
+  }
+
+  if (!ISO_DATE_REGEX.test(trimmed)) {
+    throw new HttpError(400, `${fieldName} must be an ISO date in YYYY-MM-DD format.`);
+  }
+
+  return trimmed;
 }
 
 function toIsoDateOnly(value: unknown) {
