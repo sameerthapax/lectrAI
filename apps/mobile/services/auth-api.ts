@@ -38,6 +38,18 @@ type RequestOptions = {
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 const AUTH_REQUEST_TIMEOUT_MS = 8000;
 
+function isAbortError(error: unknown) {
+  if (error instanceof Error && error.name === 'AbortError') {
+    return true;
+  }
+
+  return (
+    typeof DOMException !== 'undefined' &&
+    error instanceof DOMException &&
+    error.name === 'AbortError'
+  );
+}
+
 function requireApiBaseUrl() {
   if (!API_BASE_URL) {
     throw new Error('Set EXPO_PUBLIC_API_BASE_URL to enable backend auth calls.');
@@ -77,7 +89,7 @@ async function request<TResponse>(
   } catch (error) {
     clearTimeout(timeout);
 
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (isAbortError(error)) {
       throw new Error('The request timed out. Please try again.');
     }
 
@@ -181,7 +193,7 @@ export async function authorizedBinaryRequest(
   } catch (error) {
     clearTimeout(timeout);
 
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (isAbortError(error)) {
       throw new Error('The request timed out. Please try again.');
     }
 
