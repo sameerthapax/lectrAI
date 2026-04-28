@@ -7,6 +7,8 @@ import type { AppTheme } from '../../services/app-theme';
 import type { RemoteLokiMessage, RemoteLokiResearchAttachment, RemoteLokiResearchPaper } from '../../services/ai-chat-api';
 
 const ENABLE_LOKI_ATTACHMENT_DEBUG = true;
+const MESSAGE_POP_DURATION_MS = 280;
+const MESSAGE_POP_EASING = Easing.bezier(0.22, 1, 0.36, 1);
 
 type LokiConversationPanelProps = {
   theme: AppTheme;
@@ -354,9 +356,33 @@ function ConversationMessageBubble({
   researchCardHint,
 }: ConversationMessageBubbleProps) {
   const isAssistant = message.role === 'assistant';
+  const enterProgress = useRef(new Animated.Value(0)).current;
   const quizAttachment = getQuizAttachment(message);
   const flashcardAttachment = getFlashcardAttachment(message);
   const researchAttachment = getResearchAttachment(message);
+
+  useEffect(() => {
+    enterProgress.setValue(0);
+    Animated.timing(enterProgress, {
+      toValue: 1,
+      duration: MESSAGE_POP_DURATION_MS,
+      easing: MESSAGE_POP_EASING,
+      useNativeDriver: true,
+    }).start();
+  }, [enterProgress, message.id]);
+
+  const bubbleOpacity = enterProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
+  });
+  const bubbleTranslateY = enterProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [18, 0],
+  });
+  const bubbleScale = enterProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.94, 1],
+  });
 
   if (ENABLE_LOKI_ATTACHMENT_DEBUG && isAssistant) {
     const looksLikeGeneratedMaterialReply =
@@ -388,142 +414,161 @@ function ConversationMessageBubble({
   }
 
   return (
-    <View
+    <Animated.View
       style={{
         alignSelf: isAssistant ? 'stretch' : 'flex-end',
-        borderRadius: 18,
-        padding: 12,
-        gap: 8,
-        backgroundColor: isAssistant ? assistantBubble : userBubble,
+        opacity: bubbleOpacity,
+        transform: [{ translateY: bubbleTranslateY }, { scale: bubbleScale }],
       }}
     >
-      <Text
-        selectable
+      <View
         style={{
-          color: theme.colors.text,
-          fontSize: 14,
-          lineHeight: 20,
-          fontWeight: isAssistant ? '500' : '600',
+          borderRadius: 18,
+          padding: 12,
+          gap: 8,
+          backgroundColor: isAssistant ? assistantBubble : userBubble,
         }}
       >
-        {message.messageText}
-      </Text>
-
-      {message.modelName === 'transcribing' ? (
-        <Text selectable style={{ color: theme.colors.textMuted, fontSize: 11.5, fontWeight: '700' }}>
-          Voice transcript
-        </Text>
-      ) : message.modelName === 'progress' ? (
-        <Text selectable style={{ color: theme.colors.textMuted, fontSize: 11.5, fontWeight: '700' }}>
-          Loki progress
-        </Text>
-      ) : null}
-
-      {getUniqueLectureCitations(message.citations).length > 0 ? (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {getUniqueLectureCitations(message.citations).map((citation) => (
-            <View
-              key={citation.id}
-              style={{
-                borderRadius: 999,
-                paddingHorizontal: 10,
-                paddingVertical: 6,
-                backgroundColor: citationChip,
-              }}
-            >
-              <Text selectable style={{ color: theme.colors.textMuted, fontSize: 11.5, fontWeight: '700' }}>
-                {citation.lectureTitle}
-              </Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-
-      {message.role === 'assistant' && quizAttachment.hasQuiz && quizAttachment.quizId ? (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() =>
-            router.push({
-              pathname: '/quiz/[quizId]',
-              params: { quizId: quizAttachment.quizId },
-            })
-          }
-          style={({ pressed }) => ({
-            borderRadius: 16,
-            padding: 12,
-            gap: 6,
-            backgroundColor: quizCardBackground,
-            opacity: pressed ? 0.9 : 1,
-          })}
+        <Text
+          selectable
+          style={{
+            color: theme.colors.text,
+            fontSize: 14,
+            lineHeight: 20,
+            fontWeight: isAssistant ? '500' : '600',
+          }}
         >
-          <Text selectable style={{ color: quizCardLabel, fontSize: 11.5, fontWeight: '800', letterSpacing: 0.3 }}>
-            QUIZ GENERATED
-          </Text>
-          <Text selectable style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
-            {quizAttachment.quizTitle?.trim() || 'Generated quiz'}
-          </Text>
-          <Text selectable style={{ color: quizCardHint, fontSize: 12.5, lineHeight: 18, fontWeight: '700' }}>
-            Navigate to quiz
-          </Text>
-        </Pressable>
-      ) : null}
+          {message.messageText}
+        </Text>
 
-      {message.role === 'assistant' && flashcardAttachment.hasFlashcards && flashcardAttachment.flashcardSetId ? (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() =>
-            router.push({
-              pathname: '/flashcards/[flashcardSetId]',
-              params: { flashcardSetId: flashcardAttachment.flashcardSetId },
-            })
-          }
-          style={({ pressed }) => ({
-            borderRadius: 16,
-            padding: 12,
-            gap: 6,
-            backgroundColor: flashcardCardBackground,
-            opacity: pressed ? 0.9 : 1,
-          })}
-        >
-          <Text
-            selectable
-            style={{ color: flashcardCardLabel, fontSize: 11.5, fontWeight: '800', letterSpacing: 0.3 }}
+        {isVoiceTranscriptMessage(message) ? (
+          <Text selectable style={{ color: theme.colors.textMuted, fontSize: 11.5, fontWeight: '700' }}>
+            Voice transcript
+          </Text>
+        ) : message.modelName === 'progress' ? (
+          <Text selectable style={{ color: theme.colors.textMuted, fontSize: 11.5, fontWeight: '700' }}>
+            Loki progress
+          </Text>
+        ) : null}
+
+        {getUniqueLectureCitations(message.citations).length > 0 ? (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {getUniqueLectureCitations(message.citations).map((citation) => (
+              <View
+                key={citation.id}
+                style={{
+                  borderRadius: 999,
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  backgroundColor: citationChip,
+                }}
+              >
+                <Text selectable style={{ color: theme.colors.textMuted, fontSize: 11.5, fontWeight: '700' }}>
+                  {citation.lectureTitle}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {message.role === 'assistant' && quizAttachment.hasQuiz && quizAttachment.quizId ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() =>
+              router.push({
+                pathname: '/quiz/[quizId]',
+                params: { quizId: quizAttachment.quizId },
+              })
+            }
+            style={({ pressed }) => ({
+              borderRadius: 16,
+              padding: 12,
+              gap: 6,
+              backgroundColor: quizCardBackground,
+              opacity: pressed ? 0.9 : 1,
+            })}
           >
-            FLASHCARDS GENERATED
-          </Text>
-          <Text selectable style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
-            {flashcardAttachment.flashcardTitle?.trim() || 'Generated flashcards'}
-          </Text>
-          <Text selectable style={{ color: flashcardCardHint, fontSize: 12.5, lineHeight: 18, fontWeight: '700' }}>
-            Navigate to flashcards
-          </Text>
-        </Pressable>
-      ) : null}
+            <Text selectable style={{ color: quizCardLabel, fontSize: 11.5, fontWeight: '800', letterSpacing: 0.3 }}>
+              QUIZ GENERATED
+            </Text>
+            <Text selectable style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
+              {quizAttachment.quizTitle?.trim() || 'Generated quiz'}
+            </Text>
+            <Text selectable style={{ color: quizCardHint, fontSize: 12.5, lineHeight: 18, fontWeight: '700' }}>
+              Navigate to quiz
+            </Text>
+          </Pressable>
+        ) : null}
 
-      {message.role === 'assistant' && researchAttachment.hasResearch ? (
-        <View style={{ gap: 8 }}>
-          {researchAttachment.papers.map((paper, index) => (
-            <Pressable
-              key={`${paper.url}-${index}`}
-              accessibilityRole="button"
-              onPress={() => void Linking.openURL(paper.url)}
-              style={({ pressed }) => ({
-                borderRadius: 16,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                backgroundColor: researchCardBackground,
-                opacity: pressed ? 0.9 : 1,
-              })}
+        {message.role === 'assistant' && flashcardAttachment.hasFlashcards && flashcardAttachment.flashcardSetId ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() =>
+              router.push({
+                pathname: '/flashcards/[flashcardSetId]',
+                params: { flashcardSetId: flashcardAttachment.flashcardSetId },
+              })
+            }
+            style={({ pressed }) => ({
+              borderRadius: 16,
+              padding: 12,
+              gap: 6,
+              backgroundColor: flashcardCardBackground,
+              opacity: pressed ? 0.9 : 1,
+            })}
+          >
+            <Text
+              selectable
+              style={{ color: flashcardCardLabel, fontSize: 11.5, fontWeight: '800', letterSpacing: 0.3 }}
             >
-              <Text selectable style={{ color: researchCardLabel, fontSize: 13, lineHeight: 18, fontWeight: '800' }}>
-                {paper.title}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
-    </View>
+              FLASHCARDS GENERATED
+            </Text>
+            <Text selectable style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
+              {flashcardAttachment.flashcardTitle?.trim() || 'Generated flashcards'}
+            </Text>
+            <Text selectable style={{ color: flashcardCardHint, fontSize: 12.5, lineHeight: 18, fontWeight: '700' }}>
+              Navigate to flashcards
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {message.role === 'assistant' && researchAttachment.hasResearch ? (
+          <View style={{ gap: 8 }}>
+            {researchAttachment.papers.map((paper, index) => (
+              <Pressable
+                key={`${paper.url}-${index}`}
+                accessibilityRole="button"
+                onPress={() => void Linking.openURL(paper.url)}
+                style={({ pressed }) => ({
+                  borderRadius: 16,
+                  paddingHorizontal: 12,
+                  paddingVertical: 10,
+                  backgroundColor: researchCardBackground,
+                  opacity: pressed ? 0.9 : 1,
+                })}
+              >
+                <Text selectable style={{ color: researchCardLabel, fontSize: 13, lineHeight: 18, fontWeight: '800' }}>
+                  {paper.title}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    </Animated.View>
   );
+}
+
+function isVoiceTranscriptMessage(message: RemoteLokiMessage) {
+  if (message.modelName === 'transcribing') {
+    return true;
+  }
+
+  if (!message.retrievalMetadata || typeof message.retrievalMetadata !== 'object' || Array.isArray(message.retrievalMetadata)) {
+    return false;
+  }
+
+  return (message.retrievalMetadata as Record<string, unknown>).inputSource === 'voice';
 }
 
 function getResearchAttachment(message: RemoteLokiMessage): RemoteLokiResearchAttachment {
