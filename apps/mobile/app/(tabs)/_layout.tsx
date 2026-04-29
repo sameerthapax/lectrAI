@@ -1,5 +1,6 @@
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { useAppTheme } from '../../providers/settings-provider';
+import { triggerSoftNavigationHaptic } from '../../services/haptics';
 
 export default function TabsLayout() {
   const theme = useAppTheme();
@@ -12,7 +13,14 @@ export default function TabsLayout() {
       labelStyle={{ default: { color: theme.colors.textMuted }, selected: { color: theme.colors.accent } }}
       tintColor={theme.colors.accent}
     >
-      <NativeTabs.Trigger name="home">
+      <NativeTabs.Trigger
+        name="home"
+        listeners={{
+          tabPress: () => {
+            triggerSoftNavigationHaptic();
+          },
+        }}
+      >
         <NativeTabs.Trigger.Icon
           sf={{ default: 'house', selected: 'house.fill' }}
           md="home"
@@ -20,7 +28,14 @@ export default function TabsLayout() {
         <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
 
-      <NativeTabs.Trigger name="courses">
+      <NativeTabs.Trigger
+        name="courses"
+        listeners={{
+          tabPress: () => {
+            triggerSoftNavigationHaptic();
+          },
+        }}
+      >
         <NativeTabs.Trigger.Icon
           sf={{ default: 'books.vertical', selected: 'books.vertical.fill' }}
           md="school"
@@ -28,7 +43,14 @@ export default function TabsLayout() {
         <NativeTabs.Trigger.Label>Courses</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
 
-      <NativeTabs.Trigger name="ai-assistance">
+      <NativeTabs.Trigger
+        name="ai-assistance"
+        listeners={{
+          tabPress: () => {
+            triggerSoftNavigationHaptic();
+          },
+        }}
+      >
         <NativeTabs.Trigger.Icon
           sf={{ default: 'sparkles.rectangle.stack', selected: 'sparkles.rectangle.stack.fill' }}
           md="auto_awesome"
@@ -36,7 +58,14 @@ export default function TabsLayout() {
         <NativeTabs.Trigger.Label>AI Assist</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
 
-      <NativeTabs.Trigger name="settings">
+      <NativeTabs.Trigger
+        name="settings"
+        listeners={{
+          tabPress: () => {
+            triggerSoftNavigationHaptic();
+          },
+        }}
+      >
         <NativeTabs.Trigger.Icon
           sf={{ default: 'gearshape', selected: 'gearshape.fill' }}
           md="settings"

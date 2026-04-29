@@ -157,6 +157,13 @@ export type LectureAudioDownload = {
   fileSizeBytes: number | null;
 };
 
+export type LectureAudioDownloadUrl = {
+  signedUrl: string;
+  mimeType: string;
+  filename: string;
+  fileSizeBytes: number | null;
+};
+
 export function parseLectureRecordingInput(payload: unknown): LectureRecordingInput {
   const record = readObject(payload);
 
@@ -2179,6 +2186,79 @@ export async function getLectureAudioForUser(
 
   return {
     audioBytes,
+    mimeType: lecture.mime_type ?? 'audio/mp4',
+    filename: lecture.original_filename ?? 'lecture-recording.m4a',
+    fileSizeBytes: lecture.file_size_bytes,
+  };
+}
+
+export async function getLectureAudioDownloadUrlForUser(
+  userId: string,
+  lectureId: string
+): Promise<LectureAudioDownloadUrl> {
+  const db = getDb();
+  const lectureRows = await db<
+    {
+      course_id: string;
+      audio_file_id: string | null;
+      bucket_name: string | null;
+      object_path: string | null;
+      original_filename: string | null;
+      mime_type: string | null;
+      file_size_bytes: number | null;
+    }[]
+  >`
+    select
+      l.course_id,
+      af.id as audio_file_id,
+      af.bucket_name,
+      af.object_path,
+      af.original_filename,
+      af.mime_type,
+      af.file_size_bytes
+    from public.lectures l
+    left join lateral (
+      select id, bucket_name, object_path, original_filename, mime_type, file_size_bytes
+      from public.audio_files
+      where lecture_id = l.id
+      order by is_primary desc, uploaded_at desc nulls last, created_at desc nulls last
+      limit 1
+    ) af on true
+    where l.id = ${lectureId}::uuid
+    limit 1
+  `;
+
+  const lecture = lectureRows[0];
+
+  if (!lecture) {
+    throw new HttpError(404, 'Lecture not found.');
+  }
+
+  await assertUserCanViewCourse(userId, lecture.course_id);
+
+  if (!lecture.audio_file_id || !lecture.bucket_name || !lecture.object_path) {
+    throw new HttpError(409, 'Lecture audio is not available for download yet.');
+  }
+
+  const supabase = getSupabaseAdminClient();
+  const signedUrlResult = await supabase.storage.from(lecture.bucket_name).createSignedUrl(
+    lecture.object_path,
+    60 * 30,
+    {
+      download: lecture.original_filename ?? 'lecture-recording.m4a',
+    }
+  );
+
+  if (signedUrlResult.error || !signedUrlResult.data?.signedUrl) {
+    throw new HttpError(
+      502,
+      'Failed to create lecture audio download URL.',
+      signedUrlResult.error?.message
+    );
+  }
+
+  return {
+    signedUrl: signedUrlResult.data.signedUrl,
     mimeType: lecture.mime_type ?? 'audio/mp4',
     filename: lecture.original_filename ?? 'lecture-recording.m4a',
     fileSizeBytes: lecture.file_size_bytes,

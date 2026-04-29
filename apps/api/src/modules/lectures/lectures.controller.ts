@@ -4,6 +4,7 @@ import {
   createLectureChunkForUser,
   createLectureRecordingForUser,
   getLectureAudioForUser,
+  getLectureAudioDownloadUrlForUser,
   listLectureRecordingsForUser,
   parseLectureChunkUploadInput,
   parseLectureRecordingInput,
@@ -65,6 +66,18 @@ export async function getLectureAudio(request: Request, response: Response) {
     `attachment; filename="${sanitizeHeaderFilename(audio.filename)}"`
   );
   response.status(200).send(audio.audioBytes);
+}
+
+export async function getLectureAudioDownloadUrl(request: Request, response: Response) {
+  const lectureId = request.params.lectureId;
+
+  if (!lectureId) {
+    response.status(400).json({ error: 'lectureId is required.' });
+    return;
+  }
+
+  const audio = await getLectureAudioDownloadUrlForUser(requireAuthUserId(request), lectureId);
+  response.status(200).json(audio);
 }
 
 export async function postLectureTranscription(request: Request, response: Response) {

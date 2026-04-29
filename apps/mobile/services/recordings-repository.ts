@@ -7,6 +7,7 @@ import { NO_CLASS_COURSE_ID } from './courses-repository';
 import { initializeLocalDatabase, runSerializedLocalWrite } from './local-db';
 import {
   downloadLectureAudio,
+  fetchLectureRecordings,
   processLectureTranscription,
   uploadLectureChunk,
   uploadLectureRecording,
@@ -413,6 +414,22 @@ export async function processLectureTranscriptionForCache(lectureId: string, acc
     });
   });
 
+  return getLectureRecording(lectureId);
+}
+
+export async function refreshLectureRecordingFromApiForCache(
+  user: AuthUser,
+  lectureId: string,
+  accessToken: string
+) {
+  const remoteRecordings = await fetchLectureRecordings(accessToken);
+  const remoteRecording = remoteRecordings.find((recording) => recording.lecture.id === lectureId);
+
+  if (!remoteRecording) {
+    return getLectureRecording(lectureId);
+  }
+
+  await upsertRemoteLectureRecordings(user, [remoteRecording]);
   return getLectureRecording(lectureId);
 }
 

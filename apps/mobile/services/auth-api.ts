@@ -33,6 +33,7 @@ type LogoutResponse = {
 
 type RequestOptions = {
   accessToken?: string;
+  timeoutMs?: number;
 };
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
@@ -76,7 +77,7 @@ async function request<TResponse>(
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
     abortController.abort();
-  }, AUTH_REQUEST_TIMEOUT_MS);
+  }, options?.timeoutMs ?? AUTH_REQUEST_TIMEOUT_MS);
 
   let response: Response;
 
@@ -164,15 +165,17 @@ export function logoutAuthSession(
 export async function authorizedRequest<TResponse>(
   path: string,
   init: RequestInit,
-  accessToken: string
+  accessToken: string,
+  options?: Omit<RequestOptions, 'accessToken'>
 ) {
-  return request<TResponse>(path, init, { accessToken });
+  return request<TResponse>(path, init, { accessToken, timeoutMs: options?.timeoutMs });
 }
 
 export async function authorizedBinaryRequest(
   path: string,
   init: RequestInit,
-  accessToken: string
+  accessToken: string,
+  options?: Omit<RequestOptions, 'accessToken'>
 ) {
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${accessToken}`);
@@ -180,7 +183,7 @@ export async function authorizedBinaryRequest(
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
     abortController.abort();
-  }, AUTH_REQUEST_TIMEOUT_MS);
+  }, options?.timeoutMs ?? AUTH_REQUEST_TIMEOUT_MS);
 
   let response: Response;
 
@@ -213,6 +216,45 @@ export async function authorizedBinaryRequest(
     }
 
     throw new Error(message);
+  }
+
+  return {
+    bytes: new Uint8Array(await response.arrayBuffer()),
+    contentType: response.headers.get('Content-Type'),
+    contentDisposition: response.headers.get('Content-Disposition'),
+  };
+}
+
+export async function binaryRequestFromUrl(
+  url: string,
+  options?: Omit<RequestOptions, 'accessToken'>
+) {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    abortController.abort();
+  }, options?.timeoutMs ?? AUTH_REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      signal: abortController.signal,
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+
+    if (isAbortError(error)) {
+      throw new Error('The request timed out. Please try again.');
+    }
+
+    throw error;
+  }
+
+  clearTimeout(timeout);
+
+  if (!response.ok) {
+    throw new Error('Request failed. Please try again.');
   }
 
   return {
