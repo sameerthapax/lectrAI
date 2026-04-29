@@ -17,6 +17,7 @@ import {
   type RemoteStoredQuizBundle,
   type RemoteStoredQuizRecord,
 } from '../../../services/quick-quiz-api';
+import { triggerCompletionHaptic } from '../../../services/haptics';
 
 type QuizAnswerState = {
   questionId: string;
@@ -226,6 +227,7 @@ export default function QuizDetailRoute() {
     setErrorMessage(null);
 
     try {
+      triggerCompletionHaptic();
       if (settingsState.settings?.permissions.soundFx) {
         void completionPlayer
           .seekTo(0)

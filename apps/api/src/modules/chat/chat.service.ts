@@ -3,6 +3,12 @@ import { dirname, resolve } from 'node:path';
 import { getDb } from '@lectrai/db';
 import { Memory } from 'mem0ai/oss';
 import OpenAI from 'openai';
+import type {
+  EasyInputMessage,
+  ResponseCreateParamsNonStreaming,
+  ResponseInput,
+  Tool,
+} from 'openai/resources/responses/responses';
 import { env } from '../../config/env.js';
 import { HttpError } from '../../lib/http-error.js';
 import { publishChatReplyJobSignal } from './chat-reply-jobs-broker.js';
@@ -885,12 +891,15 @@ async function requestTutorResponse(input: {
   currentMessage: string;
   progressReporter: ChatReplyProgressReporter | null;
 }) {
-  let response = (await getOpenAiClient().responses.create({
+  const initialTutorRequest: ResponseCreateParamsNonStreaming = {
     model: DEFAULT_CHAT_MODEL,
-    input: buildOpenAiInput(input) as any,
-    tools: buildTutorTools() as any,
+    input: buildOpenAiInput(input),
+    tools: buildTutorTools(),
     tool_choice: 'auto',
-  })) as unknown as OpenAiResponsesResponse;
+  };
+  let response = (await getOpenAiClient().responses.create(
+    initialTutorRequest
+  )) as unknown as OpenAiResponsesResponse;
   let latestQuiz: StoredQuizRecord | null = null;
   let latestFlashcards: StoredFlashcardSetRecord | null = null;
   let latestResearch: AssistantResearchAttachment | null = null;
@@ -975,7 +984,7 @@ async function requestTutorResponse(input: {
       };
     }
 
-    const toolOutputs: Array<Record<string, unknown>> = [];
+    const toolOutputs: ResponseInput = [];
 
     for (const toolCall of toolCalls) {
       let result;
@@ -1065,13 +1074,16 @@ async function requestTutorResponse(input: {
       throw new HttpError(502, 'OpenAI tutor response did not include a response id.');
     }
 
-    response = (await getOpenAiClient().responses.create({
+    const followupTutorRequest: ResponseCreateParamsNonStreaming = {
       model: DEFAULT_CHAT_MODEL,
       previous_response_id: response.id,
-      input: toolOutputs as any,
-      tools: buildTutorTools() as any,
+      input: toolOutputs,
+      tools: buildTutorTools(),
       tool_choice: 'auto',
-    })) as unknown as OpenAiResponsesResponse;
+    };
+    response = (await getOpenAiClient().responses.create(
+      followupTutorRequest
+    )) as unknown as OpenAiResponsesResponse;
     latestUsage = readUsage(response.usage);
   }
 
@@ -1178,7 +1190,7 @@ function buildOpenAiInput(input: {
   retrieval: RetrievedContext;
   memories: LokiMemory[];
   currentMessage: string;
-}) {
+}): ResponseInput {
   const messageIntent = classifyMessageIntent(input.currentMessage);
   const systemPrompt = [
     'You are Loki, a conversational AI tutor for LectrAI.',
@@ -1286,21 +1298,18 @@ function buildOpenAiInput(input: {
   ];
 }
 
-function buildOpenAiHistoryMessage(message: { role: ChatMessageRole; messageText: string }) {
-  if (message.role === 'assistant') {
-    return {
-      role: 'assistant' as const,
-      content: [{ type: 'output_text' as const, text: message.messageText }],
-    };
-  }
-
+function buildOpenAiHistoryMessage(message: {
+  role: ChatMessageRole;
+  messageText: string;
+}): EasyInputMessage {
   return {
+    type: 'message',
     role: message.role,
-    content: [{ type: 'input_text' as const, text: message.messageText }],
+    content: message.messageText,
   };
 }
 
-function buildTutorTools() {
+function buildTutorTools(): Tool[] {
   return [
     {
       type: 'function',
@@ -1622,7 +1631,7 @@ function sanitizeResearchReplyText(messageText: string, research: AssistantResea
         return false;
       }
 
-      const normalized = line.replace(/^\d+[\)\.\-:]\s*/, '').trim().toLowerCase();
+      const normalized = line.replace(/^\d+[).-:]\s*/, '').trim().toLowerCase();
 
       if (paperTitles.has(normalized)) {
         return false;
@@ -1658,7 +1667,7 @@ function isUnsupportedWebSearchFiltersError(error: unknown) {
   return /parameter ['"]filters['"] not supported/i.test(error.message);
 }
 
-function buildResearchSearchTools(withFilters: boolean) {
+function buildResearchSearchTools(withFilters: boolean): Tool[] {
   if (!withFilters) {
     return [{ type: 'web_search' as const }];
   }
@@ -1677,7 +1686,7 @@ async function searchResearchPapersWithWebSearch(input: {
   topic: string;
   maxResults: number;
 }): Promise<AssistantResearchAttachment> {
-  const requestInput = [
+  const requestInput: ResponseInput = [
     {
       role: 'system',
       content: [
@@ -1703,7 +1712,7 @@ async function searchResearchPapersWithWebSearch(input: {
         },
       ],
     },
-  ] as any;
+  ];
 
   const createSearchResponse = async (withFilters: boolean) =>
     ((await getOpenAiClient().responses.create({
@@ -2539,12 +2548,15 @@ async function runDynamicRetrievalPlannerForUser(
 ): Promise<{ scope: ChatScope; retrieval: RetrievedContext }> {
   const courses = await listCoursesForUser(userId);
   const plannerIntro = buildPlannerIntro(message, courses);
-  let response = (await getOpenAiClient().responses.create({
+  const initialPlannerRequest: ResponseCreateParamsNonStreaming = {
     model: DEFAULT_CHAT_MODEL,
-    input: plannerIntro as any,
-    tools: buildRetrievalPlannerTools() as any,
+    input: plannerIntro,
+    tools: buildRetrievalPlannerTools(),
     tool_choice: 'auto',
-  })) as unknown as OpenAiResponsesResponse;
+  };
+  let response = (await getOpenAiClient().responses.create(
+    initialPlannerRequest
+  )) as unknown as OpenAiResponsesResponse;
   let collectedScopeItems: PlannerScopeItem[] = [];
   let latestChunks: TranscriptChunkSearchResult[] = [];
   let fullLectureTranscript: FullLectureTranscriptContext | null = null;
@@ -2581,7 +2593,7 @@ async function runDynamicRetrievalPlannerForUser(
       };
     }
 
-    const toolOutputs: Array<Record<string, unknown>> = [];
+    const toolOutputs: ResponseInput = [];
 
     for (const toolCall of toolCalls) {
       const result = await executePlannerToolCall(userId, toolCall, message, sessionScopeHint);
@@ -2611,13 +2623,16 @@ async function runDynamicRetrievalPlannerForUser(
       throw new HttpError(502, 'OpenAI retrieval planner response did not include a response id.');
     }
 
-    response = (await getOpenAiClient().responses.create({
+    const followupPlannerRequest: ResponseCreateParamsNonStreaming = {
       model: DEFAULT_CHAT_MODEL,
       previous_response_id: response.id,
-      input: toolOutputs as any,
-      tools: buildRetrievalPlannerTools() as any,
+      input: toolOutputs,
+      tools: buildRetrievalPlannerTools(),
       tool_choice: 'auto',
-    })) as unknown as OpenAiResponsesResponse;
+    };
+    response = (await getOpenAiClient().responses.create(
+      followupPlannerRequest
+    )) as unknown as OpenAiResponsesResponse;
   }
 
   const selectedScope = deriveDynamicScopeFromResults(latestChunks, collectedScopeItems);
@@ -2645,7 +2660,7 @@ async function runDynamicRetrievalPlannerForUser(
   };
 }
 
-function buildPlannerIntro(message: string, courses: CourseRecord[]) {
+function buildPlannerIntro(message: string, courses: CourseRecord[]): ResponseInput {
   const messageIntent = classifyMessageIntent(message);
   const courseCatalog =
     courses.length > 0
@@ -2709,7 +2724,7 @@ function buildPlannerIntro(message: string, courses: CourseRecord[]) {
   ];
 }
 
-function buildRetrievalPlannerTools() {
+function buildRetrievalPlannerTools(): Tool[] {
   return [
     {
       type: 'function',

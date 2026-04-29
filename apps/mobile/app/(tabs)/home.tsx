@@ -62,6 +62,10 @@ import {
 } from '../../services/quick-quiz-repository';
 import { saveRecordedLecture } from '../../services/recordings-repository';
 import { logMobileError } from '../../services/error-monitor';
+import {
+  triggerCompletionHaptic,
+  triggerRecordPressHaptic,
+} from '../../services/haptics';
 
 const DIGIT_HEIGHT = 28;
 const DIGIT_WIDTH = 16;
@@ -448,6 +452,7 @@ export default function HomeRoute() {
     try {
       setQuickQuizSubmittingQuestionId(quickQuizQuestion.id);
       setQuickQuizFinishCelebrationVisible(true);
+      triggerCompletionHaptic();
       if (settingsState.settings?.permissions.soundFx) {
         void quickQuizCompletionPlayer
           .seekTo(0)
@@ -689,6 +694,7 @@ export default function HomeRoute() {
   const startRecording = async () => {
     try {
       setRecordingBusy(true);
+      triggerRecordPressHaptic();
 
       if (!selectedCourse || selectedCourseId === NO_CLASS_COURSE_ID) {
         Alert.alert(

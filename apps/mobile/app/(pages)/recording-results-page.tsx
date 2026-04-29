@@ -9,6 +9,7 @@ import {
   getLatestLectureRecording,
   getLectureRecording,
   processLectureTranscriptionForCache,
+  refreshLectureRecordingFromApiForCache,
   type LocalLectureRecordingRecord,
 } from '../../services/recordings-repository';
 import { logMobileError } from '../../services/error-monitor';
@@ -28,6 +29,7 @@ export default function RecordingResultsRoute() {
   const [audioDownloadLoading, setAudioDownloadLoading] = useState(false);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [transcriptNotice, setTranscriptNotice] = useState<string | null>(null);
   const downloadingAudioLectureIdRef = useRef<string | null>(null);
   const processingTranscriptLectureIdRef = useRef<string | null>(null);
   const player = useAudioPlayer(recording?.localUri ?? null, { updateInterval: 250 });
@@ -185,6 +187,73 @@ export default function RecordingResultsRoute() {
     recording?.uploadStatus,
   ]);
 
+  const handlePlayRecording = useCallback(async () => {
+    if (!recording) {
+      return;
+    }
+
+    if (!hasLocalRecordingFile) {
+      if (
+        !auth.user ||
+        !recording.objectPath ||
+        recording.uploadStatus !== 'uploaded' ||
+        recording.syncStatus !== 'synced' ||
+        audioDownloadLoading
+      ) {
+        return;
+      }
+
+      setAudioDownloadLoading(true);
+
+      try {
+        const accessToken = await auth.getValidAccessToken();
+
+        if (!accessToken) {
+          throw new Error('Your session expired. Please sign in again.');
+        }
+
+        const updatedRecording = await ensureLectureAudioDownloadedForCache(
+          auth.user,
+          recording.lectureId,
+          accessToken
+        );
+
+        if (!updatedRecording?.localUri) {
+          throw new Error('Recording download is still unavailable. Please try again.');
+        }
+
+        setRecording(updatedRecording);
+      } catch (error) {
+        logMobileError(error, {
+          source: 'recording-results.download-audio-on-demand',
+          extra: { lectureId: recording.lectureId, userId: auth.user?.id ?? null },
+        });
+        Alert.alert(
+          'Could not download recording',
+          error instanceof Error ? error.message : 'Please try again.'
+        );
+      } finally {
+        setAudioDownloadLoading(false);
+      }
+
+      return;
+    }
+
+    if (playerStatus.playing) {
+      player.pause();
+      return;
+    }
+
+    player.play();
+  }, [
+    audioDownloadLoading,
+    auth,
+    hasLocalRecordingFile,
+    player,
+    playerStatus.playing,
+    recording,
+  ]);
+
   useEffect(() => {
     const lectureId = recording?.lectureId;
     const user = auth.user;
@@ -205,7 +274,9 @@ export default function RecordingResultsRoute() {
     const processTranscript = async () => {
       processingTranscriptLectureIdRef.current = lectureId;
       setTranscriptError(null);
+      setTranscriptNotice(null);
       setTranscriptLoading(true);
+      let pollBackendStatusOnly = false;
 
       try {
         while (!cancelled) {
@@ -213,6 +284,34 @@ export default function RecordingResultsRoute() {
 
           if (!accessToken) {
             throw new Error('Your session expired before transcription could start.');
+          }
+
+          if (pollBackendStatusOnly) {
+            const refreshedRecording = await refreshLectureRecordingFromApiForCache(
+              user,
+              lectureId,
+              accessToken
+            );
+
+            if (cancelled) {
+              return;
+            }
+
+            setRecording(refreshedRecording);
+
+            if (
+              refreshedRecording?.transcript?.status === 'ready' &&
+              hasCanonicalSpeakerLabels(refreshedRecording.transcript.fullText)
+            ) {
+              setTranscriptNotice(null);
+              return;
+            }
+
+            setTranscriptNotice(
+              'Your file is still being processed in the backend. Large recordings can take several minutes. The transcript will appear here as soon as processing finishes.'
+            );
+            await wait(15000);
+            continue;
           }
 
           try {
@@ -231,9 +330,30 @@ export default function RecordingResultsRoute() {
               updatedRecording?.transcript?.status === 'ready' &&
               hasCanonicalSpeakerLabels(updatedRecording.transcript.fullText)
             ) {
+              setTranscriptNotice(null);
               return;
             }
           } catch (error) {
+            if (isBackendProcessingTimeoutError(error)) {
+              const refreshedRecording = await refreshLectureRecordingFromApiForCache(
+                user,
+                lectureId,
+                accessToken
+              );
+
+              if (cancelled) {
+                return;
+              }
+
+              setRecording(refreshedRecording);
+              setTranscriptNotice(
+                'Your file is still being processed in the backend. Large recordings can take several minutes. The transcript will appear here as soon as processing finishes.'
+              );
+              pollBackendStatusOnly = true;
+              await wait(15000);
+              continue;
+            }
+
             if (!isPendingTranscriptError(error)) {
               throw error;
             }
@@ -335,18 +455,9 @@ export default function RecordingResultsRoute() {
                 </Text>
               ) : null}
               <Pressable
-                disabled={!hasLocalRecordingFile}
+                disabled={audioDownloadLoading}
                 onPress={() => {
-                  if (!hasLocalRecordingFile) {
-                    return;
-                  }
-
-                  if (playerStatus.playing) {
-                    player.pause();
-                    return;
-                  }
-
-                  player.play();
+                  void handlePlayRecording();
                 }}
                 style={({ pressed }) => ({
                   minHeight: 52,
@@ -357,14 +468,14 @@ export default function RecordingResultsRoute() {
                   backgroundColor: theme.colors.overlay,
                   borderWidth: 1,
                   borderColor: theme.colors.border,
-                  opacity: !hasLocalRecordingFile ? 0.55 : pressed ? 0.9 : 1,
+                  opacity: audioDownloadLoading ? 0.72 : pressed ? 0.9 : 1,
                 })}
               >
                 <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '900' }}>
                   {audioDownloadLoading
                     ? 'Downloading recording...'
                     : !hasLocalRecordingFile
-                    ? 'Recording file is not stored on this device'
+                    ? 'Download Recording'
                     : playerStatus.playing
                     ? `Pause ${formatDuration(Math.round(playerStatus.currentTime))}`
                     : 'Play Recording'}
@@ -392,7 +503,7 @@ export default function RecordingResultsRoute() {
           onToggle={() => setTranscriptExpanded((current) => !current)}
         >
           {transcriptLoading || (transcriptPending && !transcriptError) ? (
-            <TranscriptLoadingState theme={theme} />
+            <TranscriptLoadingState theme={theme} notice={transcriptNotice} />
           ) : recording?.transcript?.status === 'ready' &&
             recording.transcript.fullText &&
             hasCanonicalSpeakerLabels(recording.transcript.fullText) ? (
@@ -513,7 +624,13 @@ export default function RecordingResultsRoute() {
   );
 }
 
-function TranscriptLoadingState({ theme }: { theme: ReturnType<typeof useAppTheme> }) {
+function TranscriptLoadingState({
+  theme,
+  notice,
+}: {
+  theme: ReturnType<typeof useAppTheme>;
+  notice?: string | null;
+}) {
   return (
     <View
       style={{
@@ -530,7 +647,7 @@ function TranscriptLoadingState({ theme }: { theme: ReturnType<typeof useAppThem
     >
       <ActivityIndicator size="large" color={theme.colors.accent} />
       <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: '900' }}>
-        Processing transcript
+        {notice ? 'Processing in backend' : 'Processing transcript'}
       </Text>
       <Text
         style={{
@@ -542,7 +659,7 @@ function TranscriptLoadingState({ theme }: { theme: ReturnType<typeof useAppThem
           textAlign: 'center',
         }}
       >
-        Separating speakers and building the transcript paragraphs.
+        {notice ?? 'Separating speakers and building the transcript paragraphs.'}
       </Text>
     </View>
   );
@@ -592,6 +709,11 @@ function isPendingTranscriptError(error: unknown) {
     message.includes('not available for download yet') ||
     message.includes('no completed chunk transcriptions')
   );
+}
+
+function isBackendProcessingTimeoutError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  return message.includes('request timed out');
 }
 
 function wait(durationMs: number) {

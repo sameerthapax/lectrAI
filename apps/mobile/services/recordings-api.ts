@@ -1,4 +1,7 @@
-import { authorizedBinaryRequest, authorizedRequest } from './auth-api';
+import { authorizedRequest, binaryRequestFromUrl } from './auth-api';
+
+const LECTURE_TRANSCRIPTION_REQUEST_TIMEOUT_MS = 120_000;
+const LECTURE_AUDIO_DOWNLOAD_TIMEOUT_MS = 180_000;
 
 export type RemoteRecordingSyncPayload = {
   lectureId: string;
@@ -143,6 +146,13 @@ export type RemoteLectureRecordingRecord = {
   transcript: RemoteLectureTranscript | null;
 };
 
+type RemoteLectureAudioDownloadUrlResponse = {
+  signedUrl: string;
+  mimeType: string;
+  filename: string;
+  fileSizeBytes: number | null;
+};
+
 export function uploadLectureRecording(
   payload: RemoteRecordingSyncPayload,
   accessToken: string
@@ -197,16 +207,22 @@ export async function processLectureTranscription(lectureId: string, accessToken
     {
       method: 'POST',
     },
-    accessToken
+    accessToken,
+    { timeoutMs: LECTURE_TRANSCRIPTION_REQUEST_TIMEOUT_MS }
   );
 }
 
 export function downloadLectureAudio(lectureId: string, accessToken: string) {
-  return authorizedBinaryRequest(
-    `/lectures/${encodeURIComponent(lectureId)}/audio`,
+  return authorizedRequest<RemoteLectureAudioDownloadUrlResponse>(
+    `/lectures/${encodeURIComponent(lectureId)}/audio-url`,
     {
       method: 'GET',
     },
-    accessToken
+    accessToken,
+    { timeoutMs: LECTURE_AUDIO_DOWNLOAD_TIMEOUT_MS }
+  ).then((audio) =>
+    binaryRequestFromUrl(audio.signedUrl, {
+      timeoutMs: LECTURE_AUDIO_DOWNLOAD_TIMEOUT_MS,
+    })
   );
 }
