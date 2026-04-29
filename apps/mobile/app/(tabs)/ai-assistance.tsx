@@ -41,6 +41,10 @@ import {
   transcribeLokiAudio,
 } from '../../services/ai-chat-api';
 import { logMobileError } from '../../services/error-monitor';
+import {
+  triggerTalkHoldReleaseHaptic,
+  triggerTalkHoldStartHaptic,
+} from '../../services/haptics';
 
 const LokiNativeVoiceVisualizer = require('../../components/ai/loki-native-voice-visualizer').default;
 const HOLD_TO_RECORD_DELAY_MS = 90;
@@ -771,6 +775,7 @@ export default function AiAssistanceRoute() {
       return;
     }
 
+    triggerTalkHoldStartHaptic();
     setTalkHoldActive(true);
     setVoiceRecordingActive(false);
 
@@ -785,6 +790,7 @@ export default function AiAssistanceRoute() {
   }, [assistantReplyInFlight, startVoiceRecording, talkHoldActive, voiceBusy]);
 
   const handleTalkPressOut = useCallback(() => {
+    triggerTalkHoldReleaseHaptic();
     void (async () => {
       const recordingUri = await resetVoiceHoldState();
 
@@ -1032,7 +1038,9 @@ export default function AiAssistanceRoute() {
                 ? 'Unmute Loki audio'
                 : 'Mute Loki audio'
             }
-            onPress={() => setAudioMuted((current) => !current)}
+            onPress={() => {
+              setAudioMuted((current) => !current);
+            }}
             style={({ pressed }) => ({
               position: 'absolute',
               top: 14,

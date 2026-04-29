@@ -187,6 +187,73 @@ export default function RecordingResultsRoute() {
     recording?.uploadStatus,
   ]);
 
+  const handlePlayRecording = useCallback(async () => {
+    if (!recording) {
+      return;
+    }
+
+    if (!hasLocalRecordingFile) {
+      if (
+        !auth.user ||
+        !recording.objectPath ||
+        recording.uploadStatus !== 'uploaded' ||
+        recording.syncStatus !== 'synced' ||
+        audioDownloadLoading
+      ) {
+        return;
+      }
+
+      setAudioDownloadLoading(true);
+
+      try {
+        const accessToken = await auth.getValidAccessToken();
+
+        if (!accessToken) {
+          throw new Error('Your session expired. Please sign in again.');
+        }
+
+        const updatedRecording = await ensureLectureAudioDownloadedForCache(
+          auth.user,
+          recording.lectureId,
+          accessToken
+        );
+
+        if (!updatedRecording?.localUri) {
+          throw new Error('Recording download is still unavailable. Please try again.');
+        }
+
+        setRecording(updatedRecording);
+      } catch (error) {
+        logMobileError(error, {
+          source: 'recording-results.download-audio-on-demand',
+          extra: { lectureId: recording.lectureId, userId: auth.user?.id ?? null },
+        });
+        Alert.alert(
+          'Could not download recording',
+          error instanceof Error ? error.message : 'Please try again.'
+        );
+      } finally {
+        setAudioDownloadLoading(false);
+      }
+
+      return;
+    }
+
+    if (playerStatus.playing) {
+      player.pause();
+      return;
+    }
+
+    player.play();
+  }, [
+    audioDownloadLoading,
+    auth,
+    hasLocalRecordingFile,
+    player,
+    playerStatus.playing,
+    recording,
+  ]);
+
   useEffect(() => {
     const lectureId = recording?.lectureId;
     const user = auth.user;
@@ -390,16 +457,7 @@ export default function RecordingResultsRoute() {
               <Pressable
                 disabled={!hasLocalRecordingFile}
                 onPress={() => {
-                  if (!hasLocalRecordingFile) {
-                    return;
-                  }
-
-                  if (playerStatus.playing) {
-                    player.pause();
-                    return;
-                  }
-
-                  player.play();
+                  void handlePlayRecording();
                 }}
                 style={({ pressed }) => ({
                   minHeight: 52,
@@ -410,14 +468,14 @@ export default function RecordingResultsRoute() {
                   backgroundColor: theme.colors.overlay,
                   borderWidth: 1,
                   borderColor: theme.colors.border,
-                  opacity: !hasLocalRecordingFile ? 0.55 : pressed ? 0.9 : 1,
+                  opacity: audioDownloadLoading ? 0.72 : pressed ? 0.9 : 1,
                 })}
               >
                 <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '900' }}>
                   {audioDownloadLoading
                     ? 'Downloading recording...'
                     : !hasLocalRecordingFile
-                    ? 'Recording file is not stored on this device'
+                    ? 'Download Recording'
                     : playerStatus.playing
                     ? `Pause ${formatDuration(Math.round(playerStatus.currentTime))}`
                     : 'Play Recording'}

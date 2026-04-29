@@ -20,6 +20,7 @@ import {
   upsertFlashcardSet,
   type LocalFlashcardSetRecord,
 } from '../../../services/flashcards-repository';
+import { triggerCompletionHaptic } from '../../../services/haptics';
 
 const CARD_SHIFT = 34;
 type ScreenFlashcardSet = RemoteStoredFlashcardSetRecord | LocalFlashcardSetRecord;
@@ -322,6 +323,7 @@ export default function FlashcardSetDetailRoute() {
       return;
     }
 
+    triggerCompletionHaptic();
     void playSound(completionPlayer);
     setShowCompletionOverlay(true);
   };

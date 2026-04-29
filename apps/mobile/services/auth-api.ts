@@ -174,7 +174,8 @@ export async function authorizedRequest<TResponse>(
 export async function authorizedBinaryRequest(
   path: string,
   init: RequestInit,
-  accessToken: string
+  accessToken: string,
+  options?: Omit<RequestOptions, 'accessToken'>
 ) {
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${accessToken}`);
@@ -182,7 +183,7 @@ export async function authorizedBinaryRequest(
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
     abortController.abort();
-  }, AUTH_REQUEST_TIMEOUT_MS);
+  }, options?.timeoutMs ?? AUTH_REQUEST_TIMEOUT_MS);
 
   let response: Response;
 
