@@ -455,7 +455,7 @@ export default function RecordingResultsRoute() {
                 </Text>
               ) : null}
               <Pressable
-                disabled={!hasLocalRecordingFile}
+                disabled={audioDownloadLoading}
                 onPress={() => {
                   void handlePlayRecording();
                 }}
