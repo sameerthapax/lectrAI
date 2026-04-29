@@ -33,6 +33,7 @@ type LogoutResponse = {
 
 type RequestOptions = {
   accessToken?: string;
+  timeoutMs?: number;
 };
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
@@ -76,7 +77,7 @@ async function request<TResponse>(
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
     abortController.abort();
-  }, AUTH_REQUEST_TIMEOUT_MS);
+  }, options?.timeoutMs ?? AUTH_REQUEST_TIMEOUT_MS);
 
   let response: Response;
 
@@ -164,9 +165,10 @@ export function logoutAuthSession(
 export async function authorizedRequest<TResponse>(
   path: string,
   init: RequestInit,
-  accessToken: string
+  accessToken: string,
+  options?: Omit<RequestOptions, 'accessToken'>
 ) {
-  return request<TResponse>(path, init, { accessToken });
+  return request<TResponse>(path, init, { accessToken, timeoutMs: options?.timeoutMs });
 }
 
 export async function authorizedBinaryRequest(

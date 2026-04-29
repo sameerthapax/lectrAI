@@ -1,5 +1,7 @@
 import { authorizedBinaryRequest, authorizedRequest } from './auth-api';
 
+const LECTURE_TRANSCRIPTION_REQUEST_TIMEOUT_MS = 120_000;
+
 export type RemoteRecordingSyncPayload = {
   lectureId: string;
   audioFileId: string;
@@ -197,7 +199,8 @@ export async function processLectureTranscription(lectureId: string, accessToken
     {
       method: 'POST',
     },
-    accessToken
+    accessToken,
+    { timeoutMs: LECTURE_TRANSCRIPTION_REQUEST_TIMEOUT_MS }
   );
 }
 
