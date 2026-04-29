@@ -224,3 +224,42 @@ export async function authorizedBinaryRequest(
     contentDisposition: response.headers.get('Content-Disposition'),
   };
 }
+
+export async function binaryRequestFromUrl(
+  url: string,
+  options?: Omit<RequestOptions, 'accessToken'>
+) {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    abortController.abort();
+  }, options?.timeoutMs ?? AUTH_REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      signal: abortController.signal,
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+
+    if (isAbortError(error)) {
+      throw new Error('The request timed out. Please try again.');
+    }
+
+    throw error;
+  }
+
+  clearTimeout(timeout);
+
+  if (!response.ok) {
+    throw new Error('Request failed. Please try again.');
+  }
+
+  return {
+    bytes: new Uint8Array(await response.arrayBuffer()),
+    contentType: response.headers.get('Content-Type'),
+    contentDisposition: response.headers.get('Content-Disposition'),
+  };
+}
